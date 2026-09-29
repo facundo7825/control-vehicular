@@ -8,6 +8,9 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // Los timestamp NOT NULL llevan useCurrent(): sin default explícito, MariaDB < 10.10 y MySQL con
+        // explicit_defaults_for_timestamp=OFF rechazan la tabla o le agregan ON UPDATE CURRENT_TIMESTAMP
+        // a la primera columna (p. ej. turnos.inicio cambiaría al cerrar el turno).
         Schema::create('usuarios', function (Blueprint $t) {
             $t->id();
             $t->string('id_externo')->unique();
@@ -41,7 +44,7 @@ return new class extends Migration
             $t->id();
             $t->foreignId('chofer_id')->constrained('usuarios');
             $t->foreignId('vehiculo_id')->constrained('vehiculos');
-            $t->timestamp('inicio');
+            $t->timestamp('inicio')->useCurrent();
             $t->timestamp('fin')->nullable();
             $t->string('origen')->default('manual');
             $t->timestamps();
@@ -55,7 +58,7 @@ return new class extends Migration
             $t->decimal('lng', 10, 7);
             $t->float('rumbo')->nullable();
             $t->float('velocidad')->nullable();
-            $t->timestamp('actualizado_en');
+            $t->timestamp('actualizado_en')->useCurrent();
         });
 
         Schema::create('viajes', function (Blueprint $t) {
@@ -93,8 +96,8 @@ return new class extends Migration
             $t->foreignId('viaje_id')->constrained('viajes');
             $t->foreignId('chofer_id')->constrained('usuarios');
             $t->string('resultado')->default('pendiente');
-            $t->timestamp('ofrecido_en');
-            $t->timestamp('vence_en');
+            $t->timestamp('ofrecido_en')->useCurrent();
+            $t->timestamp('vence_en')->useCurrent();
             $t->timestamp('respondido_en')->nullable();
             $t->string('motivo')->nullable(); // motivo si el chofer canceló tras aceptar
             $t->timestamps();
@@ -106,7 +109,7 @@ return new class extends Migration
             $t->foreignId('viaje_id')->constrained('viajes');
             $t->decimal('lat', 10, 7);
             $t->decimal('lng', 10, 7);
-            $t->timestamp('registrado_en');
+            $t->timestamp('registrado_en')->useCurrent();
         });
 
         Schema::create('parametros', function (Blueprint $t) {
