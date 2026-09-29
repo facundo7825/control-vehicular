@@ -3,12 +3,16 @@
 namespace App\Servicios;
 
 use App\Enums\EstadoViaje as E;
+use App\Events\EstadoChoferActualizado;
+use App\Events\ViajeActualizado;
 use App\Excepciones\TransicionInvalida;
 use App\Models\Viaje;
 
 /** Única puerta para cambiar el estado de un viaje (spec 5.1). */
 class MaquinaEstadosViaje
 {
+    public function __construct(private CalculadorEstadoChofer $estados) {}
+
     private const PERMITIDAS = [
         'buscando' => [E::Ofrecido, E::Aceptado, E::SinChofer, E::Cancelado],
         'ofrecido' => [E::Buscando, E::Aceptado, E::SinChofer, E::Cancelado],
@@ -41,6 +45,8 @@ class MaquinaEstadosViaje
             throw new TransicionInvalida("El viaje no puede pasar de {$viaje->estado->value} a {$hacia->value}.");
         }
 
+        $choferAnterior = $viaje->chofer_id;
+
         $viaje->fill($atributos);
         $viaje->estado = $hacia;
         if ($marca = self::MARCAS[$hacia->value] ?? null) {
@@ -48,6 +54,17 @@ class MaquinaEstadosViaje
         }
         $viaje->save();
 
+        ViajeActualizado::dispatch($viaje, $choferAnterior !== $viaje->chofer_id ? $choferAnterior : null);
+        foreach (array_unique(array_filter([$choferAnterior, $viaje->chofer_id])) as $choferId) {
+            $this->emitirEstadoChofer($choferId);
+        }
+
         return true;
+    }
+
+    private function emitirEstadoChofer(int $choferId): void
+    {
+        $chofer = \App\Models\Usuario::find($choferId);
+        EstadoChoferActualizado::dispatch($choferId, $this->estados->estado($chofer)->value);
     }
 }

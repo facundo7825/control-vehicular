@@ -15,13 +15,15 @@ use Illuminate\Support\Facades\DB;
 
 class ServicioTurnos
 {
+    public function __construct(private CalculadorEstadoChofer $estados) {}
+
     public function iniciar(Usuario $chofer, int $vehiculoId, OrigenTurno $origen = OrigenTurno::Manual): Turno
     {
         if (! $chofer->esChofer()) {
             throw new AccionNoPermitida('Solo los choferes pueden iniciar turno.');
         }
 
-        return DB::transaction(function () use ($chofer, $vehiculoId, $origen) {
+        $turno = DB::transaction(function () use ($chofer, $vehiculoId, $origen) {
             Usuario::whereKey($chofer->id)->lockForUpdate()->first();
             $vehiculo = Vehiculo::whereKey($vehiculoId)->lockForUpdate()->first();
 
@@ -42,6 +44,10 @@ class ServicioTurnos
                 'origen' => $origen,
             ]);
         });
+
+        \App\Events\EstadoChoferActualizado::dispatch($chofer->id, $this->estados->estado($chofer)->value);
+
+        return $turno;
     }
 
     public function finalizar(Usuario $chofer): Turno
@@ -56,6 +62,8 @@ class ServicioTurnos
         $turno->update(['fin' => now()]);
         // Privacidad: fuera de turno no se conserva la ubicación.
         UbicacionChofer::where('chofer_id', $chofer->id)->delete();
+
+        \App\Events\EstadoChoferActualizado::dispatch($chofer->id, \App\Enums\EstadoChofer::FueraDeTurno->value);
 
         return $turno;
     }

@@ -34,6 +34,14 @@ class ServicioUbicacion
                 'velocidad' => $ultimo['velocidad'] ?? null,
                 'actualizado_en' => $ultimo['momento'],
             ]);
+            \App\Events\UbicacionChoferActualizada::dispatch(
+                $chofer->id,
+                (float) $ultimo['lat'],
+                (float) $ultimo['lng'],
+                isset($ultimo['rumbo']) ? (float) $ultimo['rumbo'] : null,
+                $ultimo['momento']->toIso8601String(),
+                Viaje::activosDeChofer($chofer->id)->value('id'),
+            );
         }
 
         $enCurso = Viaje::where('chofer_id', $chofer->id)->where('estado', EstadoViaje::EnCurso)->first();

@@ -159,6 +159,7 @@ class Despachador
         }
 
         VencerOferta::dispatch($oferta->id)->delay($oferta->vence_en);
+        \App\Events\OfertaCreada::dispatch($oferta);
 
         return true;
     }
