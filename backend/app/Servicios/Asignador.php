@@ -20,6 +20,7 @@ class Asignador
         private CalculadorEstadoChofer $estados,
         private MaquinaEstadosViaje $maquina,
         private DisponibilidadReservas $disponibilidad,
+        private AvisosReserva $avisosReserva,
     ) {}
 
     /**
@@ -108,6 +109,12 @@ class Asignador
         });
 
         $viaje->refresh();
+
+        if ($asignado) {
+            // Solo tras una asignación exitosa. Dentro de ServicioReservas::crear, la transacción externa
+            // confirma enseguida después de esto, así que los jobs nunca quedan huérfanos.
+            $this->avisosReserva->programar($viaje);
+        }
 
         return $asignado;
     }

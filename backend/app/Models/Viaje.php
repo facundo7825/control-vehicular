@@ -79,4 +79,13 @@ class Viaje extends Model
     {
         return $this->programado_para ? HoraLocal::formatear($this->programado_para) : null;
     }
+
+    /** ¿Sigue siendo una reserva aceptada de ese chofer para ese momento? La usan los jobs diferidos. */
+    public function sigueReservadaPara(int $choferId, int $programadoPara): bool
+    {
+        return $this->tipo === TipoViaje::Reserva
+            && $this->estado === EstadoViaje::Aceptado
+            && $this->chofer_id === $choferId
+            && $this->programado_para?->getTimestamp() === $programadoPara;
+    }
 }
