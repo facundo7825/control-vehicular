@@ -139,3 +139,12 @@ it('sin dato de Google estima la duración por defecto', function () {
         ->assertJsonPath('duracion_estimada_min', 60)
         ->assertJsonPath('choferes', []);
 });
+
+it('interpreta una hora sin offset como hora de Buenos Aires, no UTC', function () {
+    Usuario::factory()->chofer()->create();
+
+    $this->actingAs(Usuario::factory()->create())
+        ->postJson('/api/reservas', datosReserva(['programado_para' => '2026-10-02T12:00:00']))
+        ->assertCreated()
+        ->assertJsonPath('programado_para', '2026-10-02T15:00:00+00:00');
+});

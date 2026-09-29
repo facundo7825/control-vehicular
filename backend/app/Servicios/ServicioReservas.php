@@ -10,6 +10,7 @@ use App\Excepciones\ReglaNegocio;
 use App\Models\CargoPrioritario;
 use App\Models\Usuario;
 use App\Models\Viaje;
+use App\Support\HoraLocal;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -31,8 +32,8 @@ class ServicioReservas
      */
     public function franja(array $datos): array
     {
-        // Eloquent guarda el Carbon sin convertirlo: hay que pasarlo a la zona de la app antes de usarlo.
-        $inicio = Carbon::parse($datos['programado_para'])->setTimezone(config('app.timezone'));
+        // Eloquent guarda el Carbon sin convertirlo: se pasa a la zona de la app (y una hora sin offset es local).
+        $inicio = HoraLocal::interpretar($datos['programado_para']);
 
         $anticipacion = $this->parametros->entero('anticipacion_minima_reserva_min');
         if ($inicio->lt(now()->addMinutes($anticipacion))) {
