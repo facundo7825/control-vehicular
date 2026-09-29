@@ -45,5 +45,23 @@ function reservaBuscando(array $attrs = []): App\Models\Viaje
     ]);
 }
 
+/** Reemplaza ServicioMapas por uno cuya duración de ruta es siempre $segundos (null = Google sin dato). */
+function fijarDuracionRuta(?int $segundos): void
+{
+    app()->instance(App\Mapas\ServicioMapas::class, new class($segundos) implements App\Mapas\ServicioMapas {
+        public function __construct(private ?int $segundos) {}
+
+        public function duracionesHacia(array $origenes, float $lat, float $lng): array
+        {
+            return array_map(fn () => null, $origenes);
+        }
+
+        public function duracionRuta(float $oLat, float $oLng, float $dLat, float $dLng): ?int
+        {
+            return $this->segundos;
+        }
+    });
+}
+
 // Carreras entre procesos contra MySQL/MariaDB; se corren aparte: ./vendor/bin/pest tests/Concurrencia
 pest()->extend(Tests\TestCase::class)->in('Concurrencia');
