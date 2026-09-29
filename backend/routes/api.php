@@ -10,6 +10,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/configuracion', \App\Http\Controllers\ConfiguracionController::class);
     Route::get('/choferes', \App\Http\Controllers\MapaController::class);
     Route::get('/viajes/actual', [\App\Http\Controllers\ViajeController::class, 'actual']);
+    Route::post('/push/token', \App\Http\Controllers\PushController::class);
     Route::post('/viajes/{viaje}/cancelar', [\App\Http\Controllers\ViajeController::class, 'cancelar']);
 
     Route::middleware('rol:solicitante,admin')->group(function () {

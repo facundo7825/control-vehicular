@@ -28,6 +28,11 @@ class AppServiceProvider extends ServiceProvider
             'google' => new \App\Mapas\GoogleMaps((string) config('vehiculos.mapas.google_api_key')),
             default => new \App\Mapas\ServicioMapasFalso(),
         });
+
+        $this->app->bind(\App\Notificaciones\Notificador::class, fn ($app) => match (config('vehiculos.notificaciones.driver')) {
+            'fcm' => new \App\Notificaciones\NotificadorFcm($app->make(\Kreait\Firebase\Contract\Messaging::class)),
+            default => new \App\Notificaciones\NotificadorRegistro(),
+        });
     }
 
     /**
