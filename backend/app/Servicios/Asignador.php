@@ -111,8 +111,8 @@ class Asignador
         $viaje->refresh();
 
         if ($asignado) {
-            // Solo tras una asignación exitosa. Dentro de ServicioReservas::crear, la transacción externa
-            // confirma enseguida después de esto, así que los jobs nunca quedan huérfanos.
+            // Solo tras una asignación exitosa. Los jobs se encolan recién al confirmar la transacción
+            // externa (afterCommit), así que un rollback en ServicioReservas::crear no deja huérfanos.
             $this->avisosReserva->programar($viaje);
         }
 

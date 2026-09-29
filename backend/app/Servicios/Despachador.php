@@ -101,7 +101,7 @@ class Despachador
             return false;
         }
 
-        VencerOferta::dispatch($oferta->id)->delay($oferta->vence_en);
+        VencerOferta::dispatch($oferta->id)->delay($oferta->vence_en)->afterCommit();
         \App\Events\OfertaCreada::dispatch($oferta);
 
         return true;
@@ -219,7 +219,7 @@ class Despachador
             return false;
         }
 
-        VencerOferta::dispatch($oferta->id)->delay($oferta->vence_en);
+        VencerOferta::dispatch($oferta->id)->delay($oferta->vence_en)->afterCommit();
         \App\Events\OfertaCreada::dispatch($oferta);
 
         return true;

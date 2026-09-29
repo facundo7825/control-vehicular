@@ -19,14 +19,15 @@ class AvisosReserva
         foreach (['recordatorio_reserva_1_min', 'recordatorio_reserva_2_min'] as $clave) {
             $momento = $inicio->copy()->subMinutes($this->parametros->entero($clave));
             if ($momento->isFuture()) {
-                RecordarReserva::dispatch($viaje->id, $viaje->chofer_id, $marca)->delay($momento);
+                RecordarReserva::dispatch($viaje->id, $viaje->chofer_id, $marca)->delay($momento)->afterCommit();
             }
         }
 
         // Si la reserva se tomó con menos anticipación que la alerta, se verifica en el acto.
         if ($inicio->isFuture()) {
             AlertarReservaSinTurno::dispatch($viaje->id, $viaje->chofer_id, $marca)
-                ->delay($inicio->copy()->subMinutes($this->parametros->entero('alerta_sin_turno_min')));
+                ->delay($inicio->copy()->subMinutes($this->parametros->entero('alerta_sin_turno_min')))
+                ->afterCommit();
         }
     }
 }
