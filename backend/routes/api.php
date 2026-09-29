@@ -1,8 +1,10 @@
 <?php
 
-use Illuminate\Http\Request;
+use App\Http\Controllers\AuthController;
 use Illuminate\Support\Facades\Route;
 
-Route::get('/user', function (Request $request) {
-    return $request->user();
-})->middleware('auth:sanctum');
+Route::post('/auth/intercambio', [AuthController::class, 'intercambio']);
+
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/yo', [AuthController::class, 'yo']);
+});
