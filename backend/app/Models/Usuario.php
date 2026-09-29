@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\EstadoViaje;
 use App\Enums\RolUsuario;
 use Filament\Models\Contracts\FilamentUser;
 use Filament\Models\Contracts\HasName;
@@ -46,6 +47,23 @@ class Usuario extends Authenticatable implements FilamentUser, HasName
     public function esChofer(): bool
     {
         return $this->rol === RolUsuario::Chofer;
+    }
+
+    /** Turno abierto o viajes asignados: no se le puede quitar el rol de chofer ni desactivarlo. */
+    public function tieneTrabajoDeChofer(): bool
+    {
+        return $this->turnoAbierto()->exists()
+            || Viaje::where('chofer_id', $this->id)->whereIn('estado', EstadoViaje::conChofer())->exists();
+    }
+
+    protected static function booted(): void
+    {
+        // Desactivar corta el acceso ya: se revocan los tokens de la app (el middleware 'activo' cubre el resto).
+        static::updated(function (Usuario $u) {
+            if ($u->wasChanged('activo') && ! $u->activo) {
+                $u->tokens()->delete();
+            }
+        });
     }
 
     public function esAdmin(): bool

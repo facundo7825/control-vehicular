@@ -33,6 +33,13 @@ class CrearAdmin extends Command
             return self::FAILURE;
         }
 
+        // Misma regla que el panel: un chofer con turno o viajes no deja de ser chofer.
+        if ($usuario?->esChofer() && $usuario->tieneTrabajoDeChofer()) {
+            $this->error("{$usuario->nombre} tiene un turno abierto o viajes asignados: cerrá su turno y reasigná sus viajes antes de hacerlo admin.");
+
+            return self::FAILURE;
+        }
+
         $password = $this->option('password') ?? $this->pedirPassword();
         if ($password === null) {
             return self::FAILURE;

@@ -57,3 +57,19 @@ it('devuelve el usuario autenticado en /yo', function () {
 
     $this->withToken($token)->getJson('/api/yo')->assertOk()->assertJsonPath('nombre', 'Luis');
 });
+
+it('un usuario desactivado pierde el acceso a la API aunque tenga token', function () {
+    $token = $this->postJson('/api/auth/intercambio', ['token_externo' => 'sim|6|Eva|Empleado'])->json('token');
+    $usuario = Usuario::firstWhere('id_externo', '6');
+
+    $usuario->update(['activo' => false]);
+
+    expect($usuario->tokens()->count())->toBe(0);
+    $this->withToken($token)->getJson('/api/yo')->assertUnauthorized();
+});
+
+it('rechaza con 403 a un usuario inactivo que conserva la sesión', function () {
+    $usuario = Usuario::factory()->create(['activo' => false]);
+
+    $this->actingAs($usuario)->getJson('/api/yo')->assertForbidden();
+});

@@ -2,11 +2,9 @@
 
 namespace App\Filament\Resources\Usuarios\Pages;
 
-use App\Enums\EstadoViaje;
 use App\Enums\RolUsuario;
 use App\Filament\Resources\Usuarios\UsuarioResource;
 use App\Models\Usuario;
-use App\Models\Viaje;
 use Filament\Facades\Filament;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\EditRecord;
@@ -30,7 +28,7 @@ class EditUsuario extends EditRecord
         $rol = $data['rol'] instanceof RolUsuario ? $data['rol'] : RolUsuario::from($data['rol']);
         $dejaDeManejar = $usuario->esChofer() && ($rol !== RolUsuario::Chofer || ! $data['activo']);
 
-        if ($dejaDeManejar && $this->tieneTrabajoPendiente($usuario)) {
+        if ($dejaDeManejar && $usuario->tieneTrabajoDeChofer()) {
             Notification::make()
                 ->danger()
                 ->title('El chofer tiene un turno abierto o viajes asignados.')
@@ -41,11 +39,5 @@ class EditUsuario extends EditRecord
         }
 
         return $data;
-    }
-
-    private function tieneTrabajoPendiente(Usuario $chofer): bool
-    {
-        return $chofer->turnoAbierto()->exists()
-            || Viaje::where('chofer_id', $chofer->id)->whereIn('estado', EstadoViaje::conChofer())->exists();
     }
 }

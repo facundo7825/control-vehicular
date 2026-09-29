@@ -107,3 +107,12 @@ it('rechaza contraseñas cortas, emails usados por otro y ids externos inexisten
     'email de otro' => [['email' => 'ocupado@pj.gob.ar', '--id-externo' => '777', '--password' => 'secreta123']],
     'id externo inexistente' => [['email' => 'b@pj.gob.ar', '--id-externo' => 'no-existe', '--password' => 'secreta123']],
 ]);
+
+it('no promueve a admin a un chofer con turno abierto', function () {
+    $chofer = choferEnTurno();
+
+    $this->artisan('vehiculos:crear-admin', ['email' => 'jefe@pj.gob.ar', '--id-externo' => $chofer->id_externo, '--password' => 'secreta123'])
+        ->assertFailed();
+
+    expect($chofer->fresh()->rol)->toBe(RolUsuario::Chofer);
+});
