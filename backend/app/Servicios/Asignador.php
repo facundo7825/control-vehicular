@@ -69,7 +69,7 @@ class Asignador
                 'chofer_id' => $chofer->id,
                 'vehiculo_id' => $chofer->turnoAbierto()->value('vehiculo_id'),
             ]);
-        });
+        }, attempts: 3);
 
         $viaje->refresh();
 
@@ -106,7 +106,7 @@ class Asignador
             }
 
             return $this->maquina->transicionar($bloqueado, EstadoViaje::Aceptado, ['chofer_id' => $c->id]);
-        });
+        }, attempts: 3);
 
         $viaje->refresh();
 

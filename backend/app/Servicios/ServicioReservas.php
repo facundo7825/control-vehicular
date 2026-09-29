@@ -106,7 +106,7 @@ class ServicioReservas
             throw new ReglaNegocio($modo === ModoViaje::Especifico
                 ? 'El chofer elegido no está disponible en ese horario.'
                 : 'No hay choferes disponibles en ese horario.');
-        });
+        }, attempts: 3);
 
         return $viaje->refresh()->load(['chofer', 'vehiculo', 'solicitante']);
     }

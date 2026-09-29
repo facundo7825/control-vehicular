@@ -95,7 +95,7 @@ class Despachador
                 'ofrecido_en' => now(),
                 'vence_en' => $this->venceOfertaReserva($v->programado_para),
             ]);
-        });
+        }, attempts: 3);
 
         if (! $oferta) {
             return false;
@@ -125,7 +125,7 @@ class Despachador
             $o->update(['resultado' => $nuevo, 'respondido_en' => now()]);
 
             return $nuevo;
-        });
+        }, attempts: 3);
 
         if ($resultado === null) {
             throw new ReglaNegocio('La oferta ya no está vigente.');
@@ -165,7 +165,7 @@ class Despachador
             $o->update(['resultado' => ResultadoOferta::Expirada, 'respondido_en' => now()]);
 
             return true;
-        });
+        }, attempts: 3);
 
         if ($vencida) {
             $this->seguirBuscando($oferta->viaje);
@@ -213,7 +213,7 @@ class Despachador
                 'ofrecido_en' => now(),
                 'vence_en' => now()->addSeconds($this->parametros->entero('oferta_segundos')),
             ]);
-        });
+        }, attempts: 3);
 
         if (! $oferta) {
             return false;

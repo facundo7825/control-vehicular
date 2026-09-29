@@ -64,7 +64,7 @@ class ServicioViaje
                 'motivo' => $datos['motivo'] ?? null,
                 'estado' => EstadoViaje::Buscando,
             ]);
-        });
+        }, attempts: 3);
 
         $chofer
             ? $this->despachador->pedirA($viaje, $chofer)
@@ -125,7 +125,7 @@ class ServicioViaje
             }
 
             $this->maquina->transicionar($viaje, EstadoViaje::EnCamino, ['vehiculo_id' => $vehiculoId]);
-        });
+        }, attempts: 3);
     }
 
     public function cancelarPorSolicitante(Viaje $viaje, Usuario $solicitante, ?string $motivo): Viaje
@@ -143,7 +143,7 @@ class ServicioViaje
             OfertaViaje::where('viaje_id', $viaje->id)
                 ->where('resultado', ResultadoOferta::Pendiente)
                 ->update(['resultado' => ResultadoOferta::Expirada, 'respondido_en' => now()]);
-        });
+        }, attempts: 3);
 
         return $viaje->load(['chofer', 'vehiculo', 'solicitante']);
     }
@@ -193,7 +193,7 @@ class ServicioViaje
                 'vehiculo_id' => null,
                 'modo' => ModoViaje::MasCercano,
             ]);
-        });
+        }, attempts: 3);
 
         if ($viaje->tipo === TipoViaje::Inmediato) {
             $this->despachador->despachar($viaje);

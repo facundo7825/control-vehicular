@@ -73,7 +73,7 @@ class MaquinaEstadosViaje
             $this->guardar($viaje, $hacia, $atributos);
 
             return true;
-        });
+        }, attempts: 3);
     }
 
     private function guardar(Viaje $viaje, E $hacia, array $atributos): void

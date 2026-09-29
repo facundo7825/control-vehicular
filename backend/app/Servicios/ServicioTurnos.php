@@ -43,7 +43,7 @@ class ServicioTurnos
                 'inicio' => now(),
                 'origen' => $origen,
             ]);
-        });
+        }, attempts: 3);
 
         \App\Events\EstadoChoferActualizado::dispatch($chofer->id, $this->estados->estado($chofer)->value);
 
@@ -68,7 +68,7 @@ class ServicioTurnos
             UbicacionChofer::where('chofer_id', $chofer->id)->delete();
 
             return $turno;
-        });
+        }, attempts: 3);
 
         \App\Events\EstadoChoferActualizado::dispatch($chofer->id, \App\Enums\EstadoChofer::FueraDeTurno->value);
 
