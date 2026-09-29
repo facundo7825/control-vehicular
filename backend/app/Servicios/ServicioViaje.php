@@ -14,6 +14,7 @@ use App\Models\CargoPrioritario;
 use App\Models\OfertaViaje;
 use App\Models\Usuario;
 use App\Models\Viaje;
+use App\Support\HoraLocal;
 use Illuminate\Support\Facades\DB;
 
 class ServicioViaje
@@ -22,6 +23,7 @@ class ServicioViaje
         private Despachador $despachador,
         private CalculadorEstadoChofer $estados,
         private MaquinaEstadosViaje $maquina,
+        private Parametros $parametros,
     ) {}
 
     public function pedir(Usuario $solicitante, array $datos): Viaje
@@ -82,9 +84,48 @@ class ServicioViaje
             throw new ReglaNegocio('Estado no válido para el chofer.');
         }
 
-        $this->maquina->transicionar($viaje, $hacia);
+        if ($hacia === EstadoViaje::EnCamino && $viaje->tipo === TipoViaje::Reserva) {
+            $this->salirHaciaReserva($viaje, $chofer);
+        } else {
+            $this->maquina->transicionar($viaje, $hacia);
+        }
 
         return $viaje->load(['chofer', 'vehiculo', 'solicitante']);
+    }
+
+    /** Spec 5.4 paso 7: la reserva arranca como un viaje normal, pero no antes de tiempo, sin turno ni con otro viaje. */
+    private function salirHaciaReserva(Viaje $viaje, Usuario $chofer): void
+    {
+        DB::transaction(function () use ($viaje, $chofer) {
+            // Mismo orden de bloqueo que Asignador (viaje, luego chofer): mientras sale, no se le asigna un inmediato.
+            $actual = Viaje::whereKey($viaje->id)->lockForUpdate()->firstOrFail();
+            Usuario::whereKey($chofer->id)->lockForUpdate()->first();
+            $viaje->setRawAttributes($actual->getAttributes(), true);
+
+            if ($viaje->chofer_id !== $chofer->id) {
+                throw new AccionNoPermitida('Este viaje no es tuyo.');
+            }
+            if ($viaje->estado !== EstadoViaje::Aceptado) {
+                // Repetido (ya salió): no-op. Cancelada o terminada: la máquina lo rechaza.
+                $this->maquina->transicionar($viaje, EstadoViaje::EnCamino);
+
+                return;
+            }
+
+            $desde = $viaje->programado_para->copy()->subMinutes($this->parametros->entero('bloqueo_antes_reserva_min'));
+            if (now()->lt($desde)) {
+                throw new ReglaNegocio('Podés salir hacia esta reserva a partir de las '.HoraLocal::formatear($desde, 'H:i').'.');
+            }
+
+            $vehiculoId = $chofer->turnoAbierto()->value('vehiculo_id')
+                ?? throw new ReglaNegocio('Iniciá tu turno para comenzar la reserva.');
+
+            if (Viaje::activosDeChofer($chofer->id)->whereKeyNot($viaje->id)->exists()) {
+                throw new ReglaNegocio('Terminá tu viaje actual antes de comenzar la reserva.');
+            }
+
+            $this->maquina->transicionar($viaje, EstadoViaje::EnCamino, ['vehiculo_id' => $vehiculoId]);
+        });
     }
 
     public function cancelarPorSolicitante(Viaje $viaje, Usuario $solicitante, ?string $motivo): Viaje
@@ -122,6 +163,9 @@ class ServicioViaje
             if (! in_array($viaje->estado, [EstadoViaje::Aceptado, EstadoViaje::EnCamino, EstadoViaje::Llego], true)) {
                 throw new ReglaNegocio('El viaje ya no se puede cancelar.');
             }
+            if ($viaje->tipo === TipoViaje::Reserva && $viaje->estado !== EstadoViaje::Aceptado) {
+                throw new ReglaNegocio('La reserva ya comenzó; no se puede cancelar.');
+            }
 
             // Queda registrado como rechazo: el despachador no volverá a ofrecérselo.
             OfertaViaje::create([
@@ -134,13 +178,26 @@ class ServicioViaje
                 'motivo' => $motivo,
             ]);
 
+            if ($viaje->tipo === TipoViaje::Reserva) {
+                // Spec 5.6: la reserva no se reasigna sola; se avisa al solicitante para que elija otro chofer.
+                $this->maquina->transicionar($viaje, EstadoViaje::SinChofer, [
+                    'chofer_id' => null,
+                    'vehiculo_id' => null,
+                ]);
+
+                return;
+            }
+
             $this->maquina->transicionar($viaje, EstadoViaje::Buscando, [
                 'chofer_id' => null,
                 'vehiculo_id' => null,
                 'modo' => ModoViaje::MasCercano,
             ]);
         });
-        $this->despachador->despachar($viaje);
+
+        if ($viaje->tipo === TipoViaje::Inmediato) {
+            $this->despachador->despachar($viaje);
+        }
 
         return $viaje->refresh()->load(['chofer', 'vehiculo', 'solicitante']);
     }

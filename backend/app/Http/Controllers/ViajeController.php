@@ -44,14 +44,19 @@ class ViajeController extends Controller
 
         if ($usuario->esChofer()) {
             $viaje = Viaje::activosDeChofer($usuario->id)->first();
+            // Las solicitudes de reserva no son urgentes: van en la agenda, no en la pantalla de oferta.
             $oferta = OfertaViaje::where('chofer_id', $usuario->id)
                 ->where('resultado', ResultadoOferta::Pendiente)
                 ->where('vence_en', '>', now())
+                ->whereHas('viaje', fn ($q) => $q->where('tipo', TipoViaje::Inmediato))
                 ->first();
         } else {
+            // Inmediatos en progreso, o reservas que ya comenzaron (el chofer salió).
             $viaje = Viaje::where('solicitante_id', $usuario->id)
-                ->where('tipo', TipoViaje::Inmediato)
-                ->whereIn('estado', EstadoViaje::enProgreso())
+                ->where(fn ($q) => $q
+                    ->where(fn ($i) => $i->where('tipo', TipoViaje::Inmediato)->whereIn('estado', EstadoViaje::enProgreso()))
+                    ->orWhere(fn ($r) => $r->where('tipo', TipoViaje::Reserva)
+                        ->whereIn('estado', [EstadoViaje::EnCamino, EstadoViaje::Llego, EstadoViaje::EnCurso])))
                 ->latest('id')
                 ->first();
         }
