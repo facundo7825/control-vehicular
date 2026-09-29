@@ -15,6 +15,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::middleware('rol:solicitante,admin')->group(function () {
         Route::post('/viajes', [\App\Http\Controllers\ViajeController::class, 'store']);
+        Route::get('/reservas/disponibles', [\App\Http\Controllers\ReservaController::class, 'disponibles']);
+        Route::post('/reservas', [\App\Http\Controllers\ReservaController::class, 'store']);
     });
 
     Route::middleware('rol:chofer')->group(function () {
