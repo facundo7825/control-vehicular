@@ -19,6 +19,12 @@ use Illuminate\Support\Facades\DB;
 /** Busca chofer para viajes inmediatos (spec 5.2 y 5.3) y ofrece reservas a futuro (spec 5.4). */
 class Despachador
 {
+    /**
+     * Estados desde los que el despachador puede marcar sin_chofer o volver a buscar. Si mientras
+     * recorre candidatos el admin reasignó el viaje (aceptado), no hay que deshacerlo.
+     */
+    private const SIN_ASIGNAR = [EstadoViaje::Buscando, EstadoViaje::Ofrecido];
+
     /** La oferta de una reserva vence, como tarde, esta cantidad de minutos antes del viaje (spec 5.4). */
     private const LIMITE_OFERTA_RESERVA_ANTES_MIN = 60;
 
@@ -51,7 +57,7 @@ class Despachador
         }
 
         // Si lo cancelaron mientras se recorrían los candidatos, no hay nada que marcar.
-        $this->maquina->intentar($viaje, EstadoViaje::SinChofer);
+        $this->maquina->intentar($viaje, EstadoViaje::SinChofer, desde: self::SIN_ASIGNAR);
     }
 
     public function pedirA(Viaje $viaje, Usuario $chofer): void
@@ -61,7 +67,7 @@ class Despachador
             : $this->ofrecer($viaje, $chofer);
 
         if (! $listo) {
-            $this->maquina->intentar($viaje, EstadoViaje::SinChofer);
+            $this->maquina->intentar($viaje, EstadoViaje::SinChofer, desde: self::SIN_ASIGNAR);
         }
     }
 
@@ -182,12 +188,12 @@ class Despachador
         // Chofer específico y reservas no se reofrecen: el solicitante elige otro (spec 5.3 y 5.4).
         // Una reserva nunca se despacha como inmediato.
         if ($viaje->modo === ModoViaje::Especifico || $viaje->tipo === TipoViaje::Reserva) {
-            $this->maquina->intentar($viaje, EstadoViaje::SinChofer);
+            $this->maquina->intentar($viaje, EstadoViaje::SinChofer, desde: self::SIN_ASIGNAR);
 
             return;
         }
 
-        if ($this->maquina->intentar($viaje, EstadoViaje::Buscando)) {
+        if ($this->maquina->intentar($viaje, EstadoViaje::Buscando, desde: [EstadoViaje::Ofrecido])) {
             $this->despachar($viaje);
         }
     }

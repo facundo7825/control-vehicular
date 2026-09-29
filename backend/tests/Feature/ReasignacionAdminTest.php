@@ -194,3 +194,31 @@ it('con datos viejos del chofer no le asigna un segundo viaje activo', function 
         ->toThrow(ReglaNegocio::class, 'El chofer elegido no está libre.');
     expect(Viaje::activosDeChofer($chofer->id)->pluck('id')->all())->toBe([$obligatorio->id]);
 });
+
+it('si el admin reasigna mientras el despachador busca, el despachador no lo deja sin chofer', function () {
+    $viaje = Viaje::factory()->create(['estado' => EstadoViaje::Buscando]);
+    $copiaDelDespachador = Viaje::find($viaje->id);
+    $elegido = choferEnTurno();
+    $ocupado = choferEnTurno(-34.9, -58.9);
+    inmediatoDe($ocupado, EstadoViaje::EnCamino);
+
+    app(ServicioViaje::class)->reasignarPorAdmin(Viaje::find($viaje->id), $elegido);
+    app(Despachador::class)->pedirA($copiaDelDespachador, $ocupado);
+
+    expect($viaje->fresh()->estado)->toBe(EstadoViaje::Aceptado)
+        ->and($viaje->fresh()->chofer_id)->toBe($elegido->id);
+});
+
+it('una reserva inminente o vencida solo se reasigna a un chofer libre ahora', function () {
+    $reserva = reservaBuscando(['estado' => EstadoViaje::SinChofer, 'programado_para' => now()->subHours(2)]);
+    $enViaje = choferEnTurno();
+    inmediatoDe($enViaje, EstadoViaje::EnCurso);
+
+    expect(fn () => app(ServicioViaje::class)->reasignarPorAdmin(Viaje::find($reserva->id), $enViaje))
+        ->toThrow(ReglaNegocio::class, 'no está libre ahora');
+    expect($reserva->fresh()->estado)->toBe(EstadoViaje::SinChofer);
+
+    $libre = choferEnTurno(-34.7, -58.7);
+    app(ServicioViaje::class)->reasignarPorAdmin(Viaje::find($reserva->id), $libre);
+    expect($reserva->fresh()->chofer_id)->toBe($libre->id);
+});

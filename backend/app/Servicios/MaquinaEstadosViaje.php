@@ -57,9 +57,12 @@ class MaquinaEstadosViaje
     }
 
     /** Como transicionar, pero devuelve false (sin lanzar) si el estado actual ya no lo permite. */
-    public function intentar(Viaje $viaje, E $hacia, array $atributos = []): bool
+    /**
+     * @param  array<int, E>|null  $desde  si se indica, solo transiciona si el estado actual (bloqueado) está en la lista
+     */
+    public function intentar(Viaje $viaje, E $hacia, array $atributos = [], ?array $desde = null): bool
     {
-        return $this->aplicar($viaje, $hacia, $atributos, estricto: false);
+        return $this->aplicar($viaje, $hacia, $atributos, estricto: false, desde: $desde);
     }
 
     /** Transición pedida por un administrador: suma las de SOLO_ADMIN y avisa con los textos del panel. */
@@ -89,10 +92,14 @@ class MaquinaEstadosViaje
         }, attempts: 3);
     }
 
-    private function aplicar(Viaje $viaje, E $hacia, array $atributos, bool $estricto, bool $comoAdmin = false): bool
+    private function aplicar(Viaje $viaje, E $hacia, array $atributos, bool $estricto, bool $comoAdmin = false, ?array $desde = null): bool
     {
-        return DB::transaction(function () use ($viaje, $hacia, $atributos, $estricto, $comoAdmin) {
+        return DB::transaction(function () use ($viaje, $hacia, $atributos, $estricto, $comoAdmin, $desde) {
             $this->sincronizarConFilaBloqueada($viaje);
+
+            if ($desde !== null && ! in_array($viaje->estado, $desde, true)) {
+                return false;
+            }
 
             if ($viaje->estado === $hacia) {
                 return false;

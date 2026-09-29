@@ -237,6 +237,13 @@ class ServicioViaje
                 if (! $libre) {
                     throw new ReglaNegocio('El chofer tiene otra reserva en ese horario.');
                 }
+                // Una reserva inminente o ya vencida se atiende ya: el chofer tiene que estar libre ahora,
+                // si no quedaría con dos viajes activos a la vez.
+                $inminente = $viaje->programado_para
+                    ->lte(now()->addMinutes($this->parametros->entero('bloqueo_antes_reserva_min')));
+                if ($inminente && $this->estados->estado($c) !== EstadoChofer::Libre) {
+                    throw new ReglaNegocio('La reserva empieza pronto y el chofer elegido no está libre ahora.');
+                }
                 $vehiculoId = null; // se toma del turno al salir (en_camino), como en toda reserva
             } else {
                 if ($this->estados->estado($c) !== EstadoChofer::Libre) {
