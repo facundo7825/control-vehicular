@@ -13,12 +13,19 @@ class ViajeActualizado implements ShouldBroadcastNow, ShouldDispatchAfterCommit
 {
     use Dispatchable;
 
-    public function __construct(public Viaje $viaje, public ?int $choferAnteriorId = null) {}
+    /** @param  array<int, int>  $choferesConOferta  choferes que tenían una oferta pendiente del viaje */
+    public function __construct(
+        public Viaje $viaje,
+        public ?int $choferAnteriorId = null,
+        public array $choferesConOferta = [],
+    ) {}
 
     /** @return array<int, PrivateChannel> */
     public function broadcastOn(): array
     {
-        $choferes = array_unique(array_filter([$this->viaje->chofer_id, $this->choferAnteriorId]));
+        $choferes = array_unique(array_filter([
+            $this->viaje->chofer_id, $this->choferAnteriorId, ...$this->choferesConOferta,
+        ]));
 
         return [
             new PrivateChannel("viaje.{$this->viaje->id}"),

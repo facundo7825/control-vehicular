@@ -41,7 +41,8 @@ class Despachador
             }
         }
 
-        $this->maquina->transicionar($viaje->refresh(), EstadoViaje::SinChofer);
+        // Si lo cancelaron mientras se recorrían los candidatos, no hay nada que marcar.
+        $this->maquina->intentar($viaje, EstadoViaje::SinChofer);
     }
 
     public function pedirA(Viaje $viaje, Usuario $chofer): void
@@ -51,7 +52,7 @@ class Despachador
             : $this->ofrecer($viaje, $chofer);
 
         if (! $listo) {
-            $this->maquina->transicionar($viaje->refresh(), EstadoViaje::SinChofer);
+            $this->maquina->intentar($viaje, EstadoViaje::SinChofer);
         }
     }
 
@@ -122,13 +123,14 @@ class Despachador
         }
 
         if ($viaje->modo === ModoViaje::Especifico) {
-            $this->maquina->transicionar($viaje, EstadoViaje::SinChofer);
+            $this->maquina->intentar($viaje, EstadoViaje::SinChofer);
 
             return;
         }
 
-        $this->maquina->transicionar($viaje, EstadoViaje::Buscando);
-        $this->despachar($viaje);
+        if ($this->maquina->intentar($viaje, EstadoViaje::Buscando)) {
+            $this->despachar($viaje);
+        }
     }
 
     private function ofrecer(Viaje $viaje, Usuario $chofer): bool

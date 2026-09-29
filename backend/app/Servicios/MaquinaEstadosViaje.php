@@ -3,10 +3,13 @@
 namespace App\Servicios;
 
 use App\Enums\EstadoViaje as E;
+use App\Enums\ResultadoOferta;
 use App\Events\EstadoChoferActualizado;
 use App\Events\ViajeActualizado;
 use App\Excepciones\TransicionInvalida;
+use App\Models\OfertaViaje;
 use App\Models\Viaje;
+use Illuminate\Support\Facades\DB;
 
 /** Única puerta para cambiar el estado de un viaje (spec 5.1). */
 class MaquinaEstadosViaje
@@ -37,15 +40,50 @@ class MaquinaEstadosViaje
 
     public function transicionar(Viaje $viaje, E $hacia, array $atributos = []): bool
     {
-        if ($viaje->estado === $hacia) {
-            return false;
-        }
+        return $this->aplicar($viaje, $hacia, $atributos, estricto: true);
+    }
 
-        if (! $this->puede($viaje->estado, $hacia)) {
-            throw new TransicionInvalida("El viaje no puede pasar de {$viaje->estado->value} a {$hacia->value}.");
-        }
+    /** Como transicionar, pero devuelve false (sin lanzar) si el estado actual ya no lo permite. */
+    public function intentar(Viaje $viaje, E $hacia, array $atributos = []): bool
+    {
+        return $this->aplicar($viaje, $hacia, $atributos, estricto: false);
+    }
 
+    private function aplicar(Viaje $viaje, E $hacia, array $atributos, bool $estricto): bool
+    {
+        return DB::transaction(function () use ($viaje, $hacia, $atributos, $estricto) {
+            // Se valida contra la fila bloqueada, no contra la copia que trae el llamador,
+            // para que dos transiciones concurrentes no se pisen.
+            $actual = Viaje::whereKey($viaje->id)->lockForUpdate()->firstOrFail();
+            $viaje->setRawAttributes($actual->getAttributes(), true);
+            $viaje->setRelations([]);
+
+            if ($viaje->estado === $hacia) {
+                return false;
+            }
+
+            if (! $this->puede($viaje->estado, $hacia)) {
+                if (! $estricto) {
+                    return false;
+                }
+                throw new TransicionInvalida("El viaje no puede pasar de {$viaje->estado->value} a {$hacia->value}.");
+            }
+
+            $this->guardar($viaje, $hacia, $atributos);
+
+            return true;
+        });
+    }
+
+    private function guardar(Viaje $viaje, E $hacia, array $atributos): void
+    {
+        $desde = $viaje->estado;
         $choferAnterior = $viaje->chofer_id;
+        // El chofer con una oferta pendiente no es chofer_id del viaje, pero tiene que enterarse del cambio.
+        $conOferta = $desde === E::Ofrecido
+            ? OfertaViaje::where('viaje_id', $viaje->id)->where('resultado', ResultadoOferta::Pendiente)
+                ->pluck('chofer_id')->all()
+            : [];
 
         $viaje->fill($atributos);
         $viaje->estado = $hacia;
@@ -54,12 +92,10 @@ class MaquinaEstadosViaje
         }
         $viaje->save();
 
-        ViajeActualizado::dispatch($viaje, $choferAnterior !== $viaje->chofer_id ? $choferAnterior : null);
+        ViajeActualizado::dispatch($viaje, $choferAnterior !== $viaje->chofer_id ? $choferAnterior : null, $conOferta);
         foreach (array_unique(array_filter([$choferAnterior, $viaje->chofer_id])) as $choferId) {
             $this->emitirEstadoChofer($choferId);
         }
-
-        return true;
     }
 
     private function emitirEstadoChofer(int $choferId): void

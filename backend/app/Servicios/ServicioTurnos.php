@@ -52,16 +52,23 @@ class ServicioTurnos
 
     public function finalizar(Usuario $chofer): Turno
     {
-        $turno = $chofer->turnoAbierto()->first()
-            ?? throw new ReglaNegocio('No tenés un turno abierto.');
+        $turno = DB::transaction(function () use ($chofer) {
+            // Mismo bloqueo que toma Asignador::asignar: no se puede cerrar el turno mientras se le asigna un viaje.
+            Usuario::whereKey($chofer->id)->lockForUpdate()->first();
 
-        if (Viaje::activosDeChofer($chofer->id)->exists()) {
-            throw new ReglaNegocio('Finalizá el viaje en curso antes de cerrar el turno.');
-        }
+            $turno = $chofer->turnoAbierto()->first()
+                ?? throw new ReglaNegocio('No tenés un turno abierto.');
 
-        $turno->update(['fin' => now()]);
-        // Privacidad: fuera de turno no se conserva la ubicación.
-        UbicacionChofer::where('chofer_id', $chofer->id)->delete();
+            if (Viaje::activosDeChofer($chofer->id)->exists()) {
+                throw new ReglaNegocio('Finalizá el viaje en curso antes de cerrar el turno.');
+            }
+
+            $turno->update(['fin' => now()]);
+            // Privacidad: fuera de turno no se conserva la ubicación.
+            UbicacionChofer::where('chofer_id', $chofer->id)->delete();
+
+            return $turno;
+        });
 
         \App\Events\EstadoChoferActualizado::dispatch($chofer->id, \App\Enums\EstadoChofer::FueraDeTurno->value);
 
