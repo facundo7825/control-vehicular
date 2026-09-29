@@ -140,12 +140,59 @@ class ServicioViaje
                 'motivo_cancelacion' => $motivo,
             ]);
 
-            OfertaViaje::where('viaje_id', $viaje->id)
-                ->where('resultado', ResultadoOferta::Pendiente)
-                ->update(['resultado' => ResultadoOferta::Expirada, 'respondido_en' => now()]);
+            $this->expirarOfertasPendientes($viaje->id);
         }, attempts: 3);
 
         return $viaje->load(['chofer', 'vehiculo', 'solicitante']);
+    }
+
+    /**
+     * Spec 5.6: el admin cancela desde el panel cualquier viaje que no haya terminado, incluidos los
+     * obligatorios y los que están en curso (transición exclusiva del admin en MaquinaEstadosViaje).
+     */
+    public function cancelarPorAdmin(Viaje $viaje, Usuario $admin, string $motivo): Viaje
+    {
+        if (! $admin->esAdmin()) {
+            throw new AccionNoPermitida('Solo un administrador puede cancelar desde el panel.');
+        }
+        $motivo = trim($motivo);
+        if ($motivo === '') {
+            throw new ReglaNegocio('Indicá el motivo de la cancelación.');
+        }
+
+        DB::transaction(function () use ($viaje, $motivo) {
+            // Se valida la fila bloqueada: el chofer o el solicitante pueden haberlo cambiado recién.
+            $viaje->setRawAttributes(Viaje::whereKey($viaje->id)->lockForUpdate()->firstOrFail()->getAttributes(), true);
+
+            if (! self::cancelablePorAdmin($viaje)) {
+                throw new ReglaNegocio($viaje->estado === EstadoViaje::Cancelado
+                    ? 'El viaje ya estaba cancelado.'
+                    : 'El viaje ya terminó; no se puede cancelar.');
+            }
+
+            $this->maquina->transicionarComoAdmin($viaje, EstadoViaje::Cancelado, [
+                'cancelado_por' => 'admin',
+                'motivo_cancelacion' => $motivo,
+            ]);
+
+            $this->expirarOfertasPendientes($viaje->id);
+        }, attempts: 3);
+
+        return $viaje->load(['chofer', 'vehiculo', 'solicitante']);
+    }
+
+    /** ¿El panel ofrece "Cancelar" para este viaje? Todo lo que no terminó (sin_chofer ya es final). */
+    public static function cancelablePorAdmin(Viaje $viaje): bool
+    {
+        return ! in_array($viaje->estado, [EstadoViaje::Finalizado, EstadoViaje::Cancelado, EstadoViaje::SinChofer], true);
+    }
+
+    /** Vence las ofertas que seguían abiertas: si el chofer responde tarde, recibe "La oferta ya no está vigente". */
+    private function expirarOfertasPendientes(int $viajeId): void
+    {
+        OfertaViaje::where('viaje_id', $viajeId)
+            ->where('resultado', ResultadoOferta::Pendiente)
+            ->update(['resultado' => ResultadoOferta::Expirada, 'respondido_en' => now()]);
     }
 
     public function cancelarPorChofer(Viaje $viaje, Usuario $chofer, string $motivo): Viaje

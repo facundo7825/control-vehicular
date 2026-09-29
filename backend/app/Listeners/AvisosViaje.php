@@ -41,6 +41,12 @@ class AvisosViaje implements ShouldQueue
         $v = $e->viaje->loadMissing(['chofer', 'vehiculo', 'solicitante']);
         $datos = ['tipo' => 'viaje', 'viaje_id' => $v->id, 'estado' => $v->estado->value];
 
+        if ($e->porAdmin) {
+            $this->avisarAccionDelAdmin($v, $e->choferAnteriorId, $datos);
+
+            return;
+        }
+
         if ($v->tipo === TipoViaje::Reserva && $this->avisarReserva($v, $e->choferAnteriorId, $datos)) {
             return;
         }
@@ -123,5 +129,33 @@ class AvisosViaje implements ShouldQueue
             default:
                 return false; // en_camino, llego, etc.: mismo aviso que un viaje inmediato
         }
+    }
+
+    /** Cancelación o reasignación hecha desde el panel (spec 5.6). */
+    private function avisarAccionDelAdmin(Viaje $v, ?int $choferAnteriorId, array $datos): void
+    {
+        $esReserva = $v->tipo === TipoViaje::Reserva;
+        $cuando = $v->horaProgramadaLocal();
+        $cual = $esReserva ? "la reserva del $cuando" : 'el viaje';
+
+        if ($v->estado === EstadoViaje::Cancelado) {
+            $titulo = $esReserva ? 'Reserva cancelada' : 'Viaje cancelado';
+            $this->push->enviar($v->solicitante, $titulo, "Un administrador canceló $cual. Motivo: {$v->motivo_cancelacion}", $datos);
+            if ($v->chofer) {
+                $this->push->enviar($v->chofer, $titulo, "Un administrador canceló $cual.", $datos);
+            }
+
+            return;
+        }
+
+        // Reasignación: el viaje quedó aceptado con otro chofer.
+        if ($choferAnteriorId && $anterior = Usuario::find($choferAnteriorId)) {
+            $this->push->enviar($anterior, $esReserva ? 'Reserva reasignada' : 'Viaje reasignado',
+                "Un administrador le asignó $cual a otro chofer.", $datos);
+        }
+        $this->push->enviar($v->chofer, $esReserva ? 'Reserva asignada' : 'Viaje asignado',
+            $esReserva ? "Un administrador te asignó una reserva el $cuando." : 'Un administrador te asignó un viaje.', $datos);
+        $this->push->enviar($v->solicitante, $esReserva ? "Reserva confirmada para $cuando" : 'Tu auto está confirmado',
+            "Ahora te lleva {$v->chofer->nombre}.", $datos);
     }
 }

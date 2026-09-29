@@ -26,6 +26,17 @@ class MaquinaEstadosViaje
         'en_curso' => [E::Finalizado],
     ];
 
+    /**
+     * Transiciones que solo hace un administrador desde el panel (spec 5.6). Están aparte para que
+     * ningún flujo de la app (solicitante o chofer) pueda usarlas: solo transicionarComoAdmin las mira.
+     */
+    private const SOLO_ADMIN = [
+        'en_curso' => [E::Cancelado],
+    ];
+
+    /** Estados desde los que el admin puede reasignar el viaje a otro chofer (queda aceptado). */
+    private const REASIGNABLES = [E::Buscando, E::Ofrecido, E::Aceptado, E::EnCamino, E::Llego, E::SinChofer];
+
     private const MARCAS = [
         'aceptado' => 'aceptado_en',
         'llego' => 'llego_en',
@@ -34,9 +45,10 @@ class MaquinaEstadosViaje
         'cancelado' => 'cancelado_en',
     ];
 
-    public function puede(E $desde, E $hacia): bool
+    public function puede(E $desde, E $hacia, bool $comoAdmin = false): bool
     {
-        return in_array($hacia, self::PERMITIDAS[$desde->value] ?? [], true);
+        return in_array($hacia, self::PERMITIDAS[$desde->value] ?? [], true)
+            || ($comoAdmin && in_array($hacia, self::SOLO_ADMIN[$desde->value] ?? [], true));
     }
 
     public function transicionar(Viaje $viaje, E $hacia, array $atributos = []): bool
@@ -50,33 +62,67 @@ class MaquinaEstadosViaje
         return $this->aplicar($viaje, $hacia, $atributos, estricto: false);
     }
 
-    private function aplicar(Viaje $viaje, E $hacia, array $atributos, bool $estricto): bool
+    /** Transición pedida por un administrador: suma las de SOLO_ADMIN y avisa con los textos del panel. */
+    public function transicionarComoAdmin(Viaje $viaje, E $hacia, array $atributos = []): bool
     {
-        return DB::transaction(function () use ($viaje, $hacia, $atributos, $estricto) {
-            // Se valida contra la fila bloqueada, no contra la copia que trae el llamador,
-            // para que dos transiciones concurrentes no se pisen.
-            $actual = Viaje::whereKey($viaje->id)->lockForUpdate()->firstOrFail();
-            $viaje->setRawAttributes($actual->getAttributes(), true);
-            $viaje->setRelations([]);
+        return $this->aplicar($viaje, $hacia, $atributos, estricto: true, comoAdmin: true);
+    }
+
+    /**
+     * El admin asigna el viaje a otro chofer (spec 5.6). Queda aceptado aunque ya lo estuviera,
+     * así que no pasa por aplicar(), que trata "mismo estado" como repetido.
+     */
+    public function reasignar(Viaje $viaje, int $choferId, ?int $vehiculoId): void
+    {
+        DB::transaction(function () use ($viaje, $choferId, $vehiculoId) {
+            $this->sincronizarConFilaBloqueada($viaje);
+
+            if (! in_array($viaje->estado, self::REASIGNABLES, true)) {
+                throw new TransicionInvalida("El viaje no puede reasignarse en estado {$viaje->estado->value}.");
+            }
+
+            $this->guardar($viaje, E::Aceptado, [
+                'chofer_id' => $choferId,
+                'vehiculo_id' => $vehiculoId,
+                'llego_en' => null,
+            ], porAdmin: true);
+        }, attempts: 3);
+    }
+
+    private function aplicar(Viaje $viaje, E $hacia, array $atributos, bool $estricto, bool $comoAdmin = false): bool
+    {
+        return DB::transaction(function () use ($viaje, $hacia, $atributos, $estricto, $comoAdmin) {
+            $this->sincronizarConFilaBloqueada($viaje);
 
             if ($viaje->estado === $hacia) {
                 return false;
             }
 
-            if (! $this->puede($viaje->estado, $hacia)) {
+            if (! $this->puede($viaje->estado, $hacia, $comoAdmin)) {
                 if (! $estricto) {
                     return false;
                 }
                 throw new TransicionInvalida("El viaje no puede pasar de {$viaje->estado->value} a {$hacia->value}.");
             }
 
-            $this->guardar($viaje, $hacia, $atributos);
+            $this->guardar($viaje, $hacia, $atributos, porAdmin: $comoAdmin);
 
             return true;
         }, attempts: 3);
     }
 
-    private function guardar(Viaje $viaje, E $hacia, array $atributos): void
+    /**
+     * Se valida contra la fila bloqueada, no contra la copia que trae el llamador,
+     * para que dos transiciones concurrentes no se pisen.
+     */
+    private function sincronizarConFilaBloqueada(Viaje $viaje): void
+    {
+        $actual = Viaje::whereKey($viaje->id)->lockForUpdate()->firstOrFail();
+        $viaje->setRawAttributes($actual->getAttributes(), true);
+        $viaje->setRelations([]);
+    }
+
+    private function guardar(Viaje $viaje, E $hacia, array $atributos, bool $porAdmin = false): void
     {
         $desde = $viaje->estado;
         $choferAnterior = $viaje->chofer_id;
@@ -93,7 +139,7 @@ class MaquinaEstadosViaje
         }
         $viaje->save();
 
-        ViajeActualizado::dispatch($viaje, $choferAnterior !== $viaje->chofer_id ? $choferAnterior : null, $conOferta);
+        ViajeActualizado::dispatch($viaje, $choferAnterior !== $viaje->chofer_id ? $choferAnterior : null, $conOferta, $porAdmin);
         foreach (array_unique(array_filter([$choferAnterior, $viaje->chofer_id])) as $choferId) {
             $this->emitirEstadoChofer($choferId);
         }
