@@ -65,4 +65,28 @@ class ViajeController extends Controller
             ] : null,
         ]);
     }
+
+    public function avanzar(Request $request, Viaje $viaje): ViajeResource
+    {
+        $datos = $request->validate(['estado' => ['required', 'in:en_camino,llego,en_curso,finalizado']]);
+
+        return new ViajeResource(
+            $this->viajes->avanzar($viaje, $request->user(), EstadoViaje::from($datos['estado'])),
+        );
+    }
+
+    public function cancelar(Request $request, Viaje $viaje): ViajeResource
+    {
+        $usuario = $request->user();
+
+        if ($usuario->esChofer()) {
+            $datos = $request->validate(['motivo' => ['required', 'string', 'max:255']]);
+
+            return new ViajeResource($this->viajes->cancelarPorChofer($viaje, $usuario, $datos['motivo']));
+        }
+
+        $datos = $request->validate(['motivo' => ['nullable', 'string', 'max:255']]);
+
+        return new ViajeResource($this->viajes->cancelarPorSolicitante($viaje, $usuario, $datos['motivo'] ?? null));
+    }
 }
