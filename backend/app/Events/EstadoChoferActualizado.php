@@ -3,11 +3,11 @@
 namespace App\Events;
 
 use Illuminate\Broadcasting\PrivateChannel;
-use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
+use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
 use Illuminate\Contracts\Events\ShouldDispatchAfterCommit;
 use Illuminate\Foundation\Events\Dispatchable;
 
-class EstadoChoferActualizado implements ShouldBroadcastNow, ShouldDispatchAfterCommit
+class EstadoChoferActualizado implements ShouldBroadcast, ShouldDispatchAfterCommit
 {
     use Dispatchable;
 

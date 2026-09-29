@@ -5,11 +5,11 @@ namespace App\Events;
 use App\Http\Resources\ViajeResource;
 use App\Models\Viaje;
 use Illuminate\Broadcasting\PrivateChannel;
-use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
+use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
 use Illuminate\Contracts\Events\ShouldDispatchAfterCommit;
 use Illuminate\Foundation\Events\Dispatchable;
 
-class ViajeActualizado implements ShouldBroadcastNow, ShouldDispatchAfterCommit
+class ViajeActualizado implements ShouldBroadcast, ShouldDispatchAfterCommit
 {
     use Dispatchable;
 
