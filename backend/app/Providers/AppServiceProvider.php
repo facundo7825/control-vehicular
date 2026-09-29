@@ -23,6 +23,11 @@ class AppServiceProvider extends ServiceProvider
                 default => new \App\Identidad\IdentidadSimulada(),
             };
         });
+
+        $this->app->bind(\App\Mapas\ServicioMapas::class, fn () => match (config('vehiculos.mapas.driver')) {
+            'google' => new \App\Mapas\GoogleMaps((string) config('vehiculos.mapas.google_api_key')),
+            default => new \App\Mapas\ServicioMapasFalso(),
+        });
     }
 
     /**
