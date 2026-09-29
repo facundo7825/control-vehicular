@@ -17,3 +17,6 @@ function choferEnTurno(float $lat = -34.60, float $lng = -58.38, int $minutos = 
 
     return $turno->chofer;
 }
+
+// Carreras entre procesos contra MySQL/MariaDB; se corren aparte: ./vendor/bin/pest tests/Concurrencia
+pest()->extend(Tests\TestCase::class)->in('Concurrencia');
