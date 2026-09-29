@@ -87,3 +87,21 @@ it('corre cada minuto', function () {
 
     expect($evento?->expression)->toBe('* * * * *');
 });
+
+it('una alerta que el admin marcó resuelta no reaparece durante el mismo corte de señal', function () {
+    $chofer = choferEnTurno(minutos: 15);
+    viajeActivoDe($chofer);
+    $this->artisan('vehiculos:alertar-sin-senal');
+    Alerta::sole()->update(['resuelta_en' => now()]);
+
+    $this->travel(5)->minutes();
+    $this->artisan('vehiculos:alertar-sin-senal');
+    expect(Alerta::count())->toBe(1);
+
+    // Vuelve la señal y se corta de nuevo: es un corte nuevo, se alerta otra vez.
+    UbicacionChofer::where('chofer_id', $chofer->id)->update(['actualizado_en' => now()]);
+    $this->travel(11)->minutes();
+    $this->artisan('vehiculos:alertar-sin-senal');
+    expect(Alerta::count())->toBe(2)
+        ->and(Alerta::pendientes()->count())->toBe(1);
+});

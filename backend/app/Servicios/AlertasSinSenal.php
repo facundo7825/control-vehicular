@@ -34,7 +34,13 @@ class AlertasSinSenal
         $resueltas = $pendientes->diffKeys($sinSenal);
         Alerta::whereKey($resueltas->pluck('id'))->update(['resuelta_en' => now()]);
 
-        $nuevas = $sinSenal->diffKeys($pendientes);
+        // Si el admin ya resolvió la alerta de este mismo corte de señal, no se la vuelve a crear:
+        // solo cuenta como corte nuevo si el chofer reportó ubicación después de esa alerta.
+        $nuevas = $sinSenal->diffKeys($pendientes)->reject(fn (Viaje $v) => Alerta::where('tipo', Alerta::CHOFER_SIN_SENAL)
+            ->where('viaje_id', $v->id)
+            ->where('chofer_id', $v->chofer_id)
+            ->where('created_at', '>=', $v->chofer->ubicacion?->actualizado_en ?? $v->chofer->turnoAbierto->inicio)
+            ->exists());
         foreach ($nuevas as $viaje) {
             $ubicacion = $viaje->chofer->ubicacion;
             $desde = $ubicacion
