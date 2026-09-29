@@ -26,6 +26,10 @@ return [
         'driver' => env('NOTIFICACIONES_DRIVER', 'registro'),
     ],
 
+    // Zona horaria de los usuarios, para textos de push y para "reservas del día".
+    // La app (config/app.php) y la base trabajan en UTC.
+    'zona_horaria' => env('VEHICULOS_ZONA_HORARIA', 'America/Argentina/Buenos_Aires'),
+
     'parametros' => [
         'oferta_segundos' => 30,
         'candidatos_distance_matrix' => 5,
@@ -33,6 +37,11 @@ return [
         'colchon_reservas_min' => 30,
         'anticipacion_minima_reserva_min' => 60,
         'plazo_respuesta_reserva_min' => 30,
+        'margen_duracion_reserva_min' => 15,
+        'duracion_reserva_por_defecto_min' => 60,
+        'recordatorio_reserva_1_min' => 1440,
+        'recordatorio_reserva_2_min' => 30,
+        'alerta_sin_turno_min' => 15,
         'sin_senal_min' => 2,
         'no_disponible_min' => 10,
         'gps_turno_seg' => 10,
