@@ -8,3 +8,5 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 
 \Illuminate\Support\Facades\Schedule::command('vehiculos:purgar-recorridos')->dailyAt('03:00');
+
+\Illuminate\Support\Facades\Schedule::command('vehiculos:alertar-sin-senal')->everyMinute()->withoutOverlapping();
