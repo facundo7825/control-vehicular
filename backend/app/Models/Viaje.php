@@ -66,7 +66,13 @@ class Viaje extends Model
      */
     public function scopeActivosDeChofer(Builder $q, int $choferId): Builder
     {
-        return $q->where('chofer_id', $choferId)
+        return $q->where('chofer_id', $choferId)->activos();
+    }
+
+    /** Los viajes que ocupan a algún chofer ahora (mismo criterio que activosDeChofer). */
+    public function scopeActivos(Builder $q): Builder
+    {
+        return $q->whereNotNull('chofer_id')
             ->where(fn (Builder $w) => $w
                 ->whereIn('estado', [EstadoViaje::EnCamino, EstadoViaje::Llego, EstadoViaje::EnCurso])
                 ->orWhere(fn (Builder $a) => $a

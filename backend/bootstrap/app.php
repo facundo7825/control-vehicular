@@ -13,10 +13,13 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withBroadcasting(
         __DIR__.'/../routes/channels.php',
-        ['prefix' => 'api', 'middleware' => ['api', 'auth:sanctum']],
+        ['prefix' => 'api', 'middleware' => ['api', 'auth:sanctum', 'activo']],
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        $middleware->alias(['rol' => \App\Http\Middleware\AsegurarRol::class]);
+        $middleware->alias([
+            'rol' => \App\Http\Middleware\AsegurarRol::class,
+            'activo' => \App\Http\Middleware\AsegurarActivo::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         //

@@ -11,6 +11,9 @@ class Alerta extends Model
 {
     public const RESERVA_SIN_TURNO = 'reserva_sin_turno';
 
+    /** Spec 9: chofer sin señal durante un viaje. Se resuelve sola (AlertasSinSenal). */
+    public const CHOFER_SIN_SENAL = 'chofer_sin_senal';
+
     protected $table = 'alertas';
 
     protected $fillable = ['tipo', 'viaje_id', 'chofer_id', 'mensaje', 'resuelta_en'];

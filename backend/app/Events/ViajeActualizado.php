@@ -13,11 +13,15 @@ class ViajeActualizado implements ShouldBroadcast, ShouldDispatchAfterCommit
 {
     use Dispatchable;
 
-    /** @param  array<int, int>  $choferesConOferta  choferes que tenían una oferta pendiente del viaje */
+    /**
+     * @param  array<int, int>  $choferesConOferta  choferes que tenían una oferta pendiente del viaje
+     * @param  bool  $porAdmin  el cambio lo hizo un administrador desde el panel (cancelación o reasignación)
+     */
     public function __construct(
         public Viaje $viaje,
         public ?int $choferAnteriorId = null,
         public array $choferesConOferta = [],
+        public bool $porAdmin = false,
     ) {}
 
     /** @return array<int, PrivateChannel> */

@@ -2,7 +2,10 @@
 
 namespace App\Enums;
 
-enum EstadoViaje: string
+use Filament\Support\Contracts\HasColor;
+use Filament\Support\Contracts\HasLabel;
+
+enum EstadoViaje: string implements HasColor, HasLabel
 {
     case Buscando = 'buscando';
     case Ofrecido = 'ofrecido';
@@ -24,5 +27,31 @@ enum EstadoViaje: string
     public static function conChofer(): array
     {
         return [self::Aceptado, self::EnCamino, self::Llego, self::EnCurso];
+    }
+
+    public function getLabel(): string
+    {
+        return match ($this) {
+            self::Buscando => 'Buscando',
+            self::Ofrecido => 'Ofrecido',
+            self::Aceptado => 'Aceptado',
+            self::EnCamino => 'En camino',
+            self::Llego => 'Llegó',
+            self::EnCurso => 'En curso',
+            self::Finalizado => 'Finalizado',
+            self::Cancelado => 'Cancelado',
+            self::SinChofer => 'Sin chofer',
+        };
+    }
+
+    public function getColor(): string
+    {
+        return match ($this) {
+            self::Buscando, self::Ofrecido => 'warning',
+            self::Aceptado, self::EnCamino, self::Llego, self::EnCurso => 'info',
+            self::Finalizado => 'success',
+            self::Cancelado => 'gray',
+            self::SinChofer => 'danger',
+        };
     }
 }

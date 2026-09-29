@@ -41,6 +41,8 @@ try {
             'destino_lat' => -34.61, 'destino_lng' => -58.39,
         ])->id,
         'finalizar_turno' => app(ServicioTurnos::class)->finalizar(Usuario::find($a['chofer']))->id,
+        'reasignar_admin' => app(ServicioViaje::class)
+            ->reasignarPorAdmin(Viaje::find($a['viaje']), Usuario::find($a['chofer']))->estado->value,
         'aceptar_oferta' => (function () use ($a) {
             app(Despachador::class)->responder(OfertaViaje::find($a['oferta']), true);
 

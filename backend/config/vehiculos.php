@@ -19,6 +19,9 @@ return [
         // falso | google
         'driver' => env('MAPAS_DRIVER', 'falso'),
         'google_api_key' => env('GOOGLE_MAPS_API_KEY'),
+        // Clave para el mapa del panel (Maps JavaScript API): queda visible en el navegador, conviene una
+        // distinta, restringida por HTTP referrer. Si falta se usa google_api_key.
+        'google_js_api_key' => env('GOOGLE_MAPS_JS_API_KEY'),
     ],
 
     'notificaciones' => [
