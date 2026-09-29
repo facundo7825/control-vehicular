@@ -9,9 +9,11 @@
  */
 
 use App\Enums\EstadoViaje;
+use App\Models\OfertaViaje;
 use App\Models\Usuario;
 use App\Models\Viaje;
 use App\Servicios\Asignador;
+use App\Servicios\Despachador;
 use App\Servicios\ServicioTurnos;
 use App\Servicios\ServicioViaje;
 
@@ -39,6 +41,11 @@ try {
             'destino_lat' => -34.61, 'destino_lng' => -58.39,
         ])->id,
         'finalizar_turno' => app(ServicioTurnos::class)->finalizar(Usuario::find($a['chofer']))->id,
+        'aceptar_oferta' => (function () use ($a) {
+            app(Despachador::class)->responder(OfertaViaje::find($a['oferta']), true);
+
+            return OfertaViaje::find($a['oferta'])->viaje->estado->value;
+        })(),
     };
     echo json_encode(['ok' => true, 'resultado' => $resultado]);
 } catch (Throwable $e) {

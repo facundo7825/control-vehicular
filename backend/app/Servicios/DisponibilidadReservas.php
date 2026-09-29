@@ -59,7 +59,9 @@ class DisponibilidadReservas
             ->where('tipo', TipoViaje::Reserva)
             ->whereIn('estado', EstadoViaje::conChofer())
             ->when($excluirViajeId, fn ($q) => $q->whereKeyNot($excluirViajeId))
-            ->when($bloquear, fn ($q) => $q->lockForUpdate())
+            // Con el índice forzado, FOR UPDATE bloquea solo filas de este chofer. Sin él, en tablas chicas
+            // MySQL recorre toda la tabla y choca con el viaje que otra aceptación ya bloqueó (deadlock).
+            ->when($bloquear, fn ($q) => $q->forceIndex('viajes_chofer_id_estado_index')->lockForUpdate())
             ->get()
             ->doesntContain(fn (Viaje $r) => self::seSuperponen(
                 $inicio, $duracionMin, $r->programado_para, $r->duracion_estimada_min ?? $porDefecto, $colchon,

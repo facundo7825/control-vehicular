@@ -11,6 +11,10 @@
  */
 
 use App\Enums\EstadoViaje;
+use App\Enums\ModoViaje;
+use App\Enums\ResultadoOferta;
+use App\Enums\TipoViaje;
+use App\Models\OfertaViaje;
 use App\Models\Turno;
 use App\Models\Usuario;
 use App\Models\Viaje;
@@ -160,5 +164,38 @@ it('un chofer nunca queda fuera de turno con un viaje obligatorio asignado', fun
         $asignado = $viaje->fresh()->chofer_id === $chofer->id;
         $turnoCerrado = Turno::where('chofer_id', $chofer->id)->whereNull('fin')->doesntExist();
         expect($asignado && $turnoCerrado)->toBeFalse("El chofer {$chofer->id} cerró turno con el viaje {$viaje->id} asignado");
+    }
+});
+
+it('dos reservas superpuestas del mismo chofer aceptadas a la vez: solo una queda aceptada', function () {
+    foreach (range(1, 5) as $_) {
+        $chofer = Usuario::factory()->chofer()->create();
+        $inicio = now()->addDay()->startOfHour();
+        // 10:00 y 10:20 de 60 min cada una: se superponen aun sin colchón.
+        $ofertas = collect([0, 20])->map(function (int $desfase) use ($chofer, $inicio) {
+            $viaje = Viaje::factory()->create([
+                'tipo' => TipoViaje::Reserva,
+                'modo' => ModoViaje::Especifico,
+                'estado' => EstadoViaje::Ofrecido,
+                'programado_para' => $inicio->copy()->addMinutes($desfase),
+                'duracion_estimada_min' => 60,
+            ]);
+
+            return OfertaViaje::create([
+                'viaje_id' => $viaje->id,
+                'chofer_id' => $chofer->id,
+                'resultado' => ResultadoOferta::Pendiente,
+                'ofrecido_en' => now(),
+                'vence_en' => now()->addMinutes(30),
+            ]);
+        });
+
+        $r = carrera($ofertas->map(fn (OfertaViaje $o) => ['aceptar_oferta', ['oferta' => $o->id]])->all());
+
+        $viajes = Viaje::whereIn('id', $ofertas->pluck('viaje_id'))->get();
+        expect(collect($r)->where('ok', true)->count())->toBe(1)
+            ->and($viajes->where('estado', EstadoViaje::Aceptado)->count())->toBe(1)
+            ->and($viajes->where('estado', EstadoViaje::SinChofer)->count())->toBe(1)
+            ->and($viajes->where('chofer_id', $chofer->id)->count())->toBe(1);
     }
 });
