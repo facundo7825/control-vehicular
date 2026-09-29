@@ -24,7 +24,20 @@ class ServicioViaje
         private CalculadorEstadoChofer $estados,
         private MaquinaEstadosViaje $maquina,
         private Parametros $parametros,
+        private DisponibilidadReservas $disponibilidad,
+        private AvisosReserva $avisosReserva,
     ) {}
+
+    /** Un inmediato se puede reasignar hasta que empieza el viaje con el pasajero (spec 5.6). */
+    private const REASIGNABLES_INMEDIATO = [
+        EstadoViaje::Buscando, EstadoViaje::Ofrecido, EstadoViaje::Aceptado,
+        EstadoViaje::EnCamino, EstadoViaje::Llego, EstadoViaje::SinChofer,
+    ];
+
+    /** Una reserva, mientras el chofer no haya salido. */
+    private const REASIGNABLES_RESERVA = [
+        EstadoViaje::Buscando, EstadoViaje::Ofrecido, EstadoViaje::Aceptado, EstadoViaje::SinChofer,
+    ];
 
     public function pedir(Usuario $solicitante, array $datos): Viaje
     {
@@ -185,6 +198,76 @@ class ServicioViaje
     public static function cancelablePorAdmin(Viaje $viaje): bool
     {
         return ! in_array($viaje->estado, [EstadoViaje::Finalizado, EstadoViaje::Cancelado, EstadoViaje::SinChofer], true);
+    }
+
+    /**
+     * Spec 5.6: el admin asigna el viaje a otro chofer, sin oferta, sea o no obligatorio.
+     * Inmediato: el chofer tiene que estar libre ahora. Reserva: la franja tiene que estar libre en su agenda.
+     */
+    public function reasignarPorAdmin(Viaje $viaje, Usuario $chofer): Viaje
+    {
+        $esReserva = DB::transaction(function () use ($viaje, $chofer) {
+            // Mismo orden de bloqueo que Asignador (viaje, luego chofer): compite en igualdad con
+            // cualquier otra asignación a ese chofer.
+            $viaje->setRawAttributes(Viaje::whereKey($viaje->id)->lockForUpdate()->firstOrFail()->getAttributes(), true);
+            $c = Usuario::whereKey($chofer->id)->lockForUpdate()->first();
+
+            if (! $c?->esChofer() || ! $c->activo) {
+                throw new ReglaNegocio('El chofer elegido no existe o no está activo.');
+            }
+            if ($viaje->chofer_id === $c->id) {
+                throw new ReglaNegocio('El viaje ya está asignado a ese chofer.');
+            }
+
+            $esReserva = $viaje->tipo === TipoViaje::Reserva;
+            if (! self::reasignable($viaje)) {
+                throw new ReglaNegocio($esReserva
+                    ? 'La reserva ya comenzó o terminó; no se puede reasignar.'
+                    : 'El viaje ya comenzó o terminó; no se puede reasignar.');
+            }
+
+            if ($esReserva) {
+                $libre = $this->disponibilidad->estaDisponible(
+                    $c->id,
+                    $viaje->programado_para,
+                    $viaje->duracion_estimada_min ?? $this->parametros->entero('duracion_reserva_por_defecto_min'),
+                    excluirViajeId: $viaje->id,
+                    bloquear: true,
+                );
+                if (! $libre) {
+                    throw new ReglaNegocio('El chofer tiene otra reserva en ese horario.');
+                }
+                $vehiculoId = null; // se toma del turno al salir (en_camino), como en toda reserva
+            } else {
+                if ($this->estados->estado($c) !== EstadoChofer::Libre) {
+                    throw new ReglaNegocio('El chofer elegido no está libre.');
+                }
+                $vehiculoId = $c->turnoAbierto()->value('vehiculo_id');
+            }
+
+            // Primero la máquina (así avisa al chofer que tenía la oferta) y después se vence la oferta.
+            $this->maquina->reasignar($viaje, $c->id, $vehiculoId);
+            $this->expirarOfertasPendientes($viaje->id);
+
+            return $esReserva;
+        }, attempts: 3);
+
+        $viaje->refresh();
+
+        if ($esReserva) {
+            // Los recordatorios y la alerta del chofer anterior quedan sin efecto por sigueReservadaPara().
+            $this->avisosReserva->programar($viaje);
+        }
+
+        return $viaje->load(['chofer', 'vehiculo', 'solicitante']);
+    }
+
+    /** ¿El panel ofrece "Reasignar" para este viaje? (se vuelve a verificar con la fila bloqueada) */
+    public static function reasignable(Viaje $viaje): bool
+    {
+        return in_array($viaje->estado, $viaje->tipo === TipoViaje::Reserva
+            ? self::REASIGNABLES_RESERVA
+            : self::REASIGNABLES_INMEDIATO, true);
     }
 
     /** Vence las ofertas que seguían abiertas: si el chofer responde tarde, recibe "La oferta ya no está vigente". */
