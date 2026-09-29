@@ -199,3 +199,26 @@ it('dos reservas superpuestas del mismo chofer aceptadas a la vez: solo una qued
             ->and($viajes->where('chofer_id', $chofer->id)->count())->toBe(1);
     }
 });
+
+it('el admin reasigna un viaje a un chofer mientras se le asigna un obligatorio: queda con un solo viaje activo', function () {
+    foreach (range(1, 10) as $_) {
+        $chofer = choferEnTurno();
+        $aReasignar = Viaje::factory()->create([
+            'chofer_id' => choferEnTurno()->id, 'estado' => EstadoViaje::Aceptado, 'aceptado_en' => now(),
+        ]);
+        $obligatorio = Viaje::factory()->create(['obligatorio' => true]);
+
+        [$reasignacion, $asignacion] = carrera([
+            ['reasignar_admin', ['viaje' => $aReasignar->id, 'chofer' => $chofer->id]],
+            ['asignar', ['viaje' => $obligatorio->id, 'chofer' => $chofer->id]],
+        ]);
+
+        $ganoReasignacion = $reasignacion['ok'];
+        $ganoAsignacion = $asignacion['ok'] && $asignacion['resultado'] === true;
+        expect($ganoReasignacion xor $ganoAsignacion)->toBeTrue(json_encode([$reasignacion, $asignacion]))
+            ->and(Viaje::activosDeChofer($chofer->id)->count())->toBe(1)
+            // El perdedor quedó como estaba.
+            ->and($aReasignar->fresh()->chofer_id === $chofer->id)->toBe($ganoReasignacion)
+            ->and($obligatorio->fresh()->estado)->toBe($ganoAsignacion ? EstadoViaje::Aceptado : EstadoViaje::Buscando);
+    }
+});
