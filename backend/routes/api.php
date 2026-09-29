@@ -7,4 +7,5 @@ Route::post('/auth/intercambio', [AuthController::class, 'intercambio']);
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/yo', [AuthController::class, 'yo']);
+    Route::get('/configuracion', \App\Http\Controllers\ConfiguracionController::class);
 });
