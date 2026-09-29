@@ -24,3 +24,13 @@ it('expone la configuración que necesita la app', function () {
         ->assertOk()
         ->assertExactJson(['gps_turno_seg' => 10, 'gps_viaje_seg' => 5, 'oferta_segundos' => 30]);
 });
+
+it('trae los parámetros de reservas con sus valores por defecto', function (string $clave, int $valor) {
+    expect(app(Parametros::class)->entero($clave))->toBe($valor);
+})->with([
+    ['margen_duracion_reserva_min', 15],
+    ['duracion_reserva_por_defecto_min', 60],
+    ['recordatorio_reserva_1_min', 1440],
+    ['recordatorio_reserva_2_min', 30],
+    ['alerta_sin_turno_min', 15],
+]);

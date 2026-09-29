@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\EstadoViaje;
 use App\Enums\ModoViaje;
 use App\Enums\TipoViaje;
+use App\Support\HoraLocal;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -59,11 +60,32 @@ class Viaje extends Model
         return $this->hasMany(PuntoRecorrido::class);
     }
 
-    /** Viajes que ocupan al chofer ahora (excluye reservas aceptadas todavía a futuro). */
+    /**
+     * Viajes que ocupan al chofer ahora. Los ya iniciados cuentan siempre, incluida una reserva en camino
+     * antes de su hora. Los aceptados cuentan salvo que sean reservas todavía a futuro.
+     */
     public function scopeActivosDeChofer(Builder $q, int $choferId): Builder
     {
         return $q->where('chofer_id', $choferId)
-            ->whereIn('estado', EstadoViaje::conChofer())
-            ->where(fn (Builder $w) => $w->whereNull('programado_para')->orWhere('programado_para', '<=', now()));
+            ->where(fn (Builder $w) => $w
+                ->whereIn('estado', [EstadoViaje::EnCamino, EstadoViaje::Llego, EstadoViaje::EnCurso])
+                ->orWhere(fn (Builder $a) => $a
+                    ->where('estado', EstadoViaje::Aceptado)
+                    ->where(fn (Builder $p) => $p->whereNull('programado_para')->orWhere('programado_para', '<=', now()))));
+    }
+
+    /** Fecha y hora programadas en la zona de los usuarios, p. ej. "02/10 12:00". */
+    public function horaProgramadaLocal(): ?string
+    {
+        return $this->programado_para ? HoraLocal::formatear($this->programado_para) : null;
+    }
+
+    /** ¿Sigue siendo una reserva aceptada de ese chofer para ese momento? La usan los jobs diferidos. */
+    public function sigueReservadaPara(int $choferId, int $programadoPara): bool
+    {
+        return $this->tipo === TipoViaje::Reserva
+            && $this->estado === EstadoViaje::Aceptado
+            && $this->chofer_id === $choferId
+            && $this->programado_para?->getTimestamp() === $programadoPara;
     }
 }

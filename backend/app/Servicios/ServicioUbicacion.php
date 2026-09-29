@@ -8,7 +8,7 @@ use App\Models\PuntoRecorrido;
 use App\Models\UbicacionChofer;
 use App\Models\Usuario;
 use App\Models\Viaje;
-use Illuminate\Support\Carbon;
+use App\Support\HoraLocal;
 
 class ServicioUbicacion
 {
@@ -20,7 +20,7 @@ class ServicioUbicacion
         }
 
         $puntos = collect($puntos)
-            ->map(fn (array $p) => [...$p, 'momento' => Carbon::parse($p['registrado_en'])->min(now())])
+            ->map(fn (array $p) => [...$p, 'momento' => HoraLocal::interpretar($p['registrado_en'])->min(now())])
             ->sortBy('momento')
             ->values();
         $ultimo = $puntos->last();

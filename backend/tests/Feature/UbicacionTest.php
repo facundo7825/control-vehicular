@@ -59,3 +59,19 @@ it('valida coordenadas', function () {
         ['lat' => 120, 'lng' => 2, 'registrado_en' => now()->toIso8601String()],
     ]])->assertStatus(422)->assertJsonValidationErrors('puntos.0.lat');
 });
+
+it('interpreta registrado_en sin offset como hora de Buenos Aires', function () {
+    $this->travelTo(Illuminate\Support\Carbon::parse('2026-10-01 15:00:00')); // 12:00 en Buenos Aires
+    $turno = Turno::factory()->create();
+    UbicacionChofer::create([
+        'chofer_id' => $turno->chofer_id, 'lat' => -34.61, 'lng' => -58.39, 'actualizado_en' => now()->subMinute(),
+    ]);
+
+    $this->actingAs($turno->chofer)->postJson('/api/ubicacion', ['puntos' => [
+        ['lat' => -34.60, 'lng' => -58.38, 'registrado_en' => '2026-10-01T11:59:50'],
+    ]])->assertNoContent();
+
+    $u = UbicacionChofer::find($turno->chofer_id);
+    expect($u->lat)->toBe(-34.60)
+        ->and($u->actualizado_en->equalTo(now()->subSeconds(10)))->toBeTrue();
+});

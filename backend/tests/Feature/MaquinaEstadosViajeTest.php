@@ -12,6 +12,7 @@ it('permite las transiciones del flujo', function (E $desde, E $hacia) {
     [E::Ofrecido, E::Buscando], [E::Ofrecido, E::Aceptado], [E::Ofrecido, E::SinChofer],
     [E::Aceptado, E::EnCamino], [E::EnCamino, E::Llego], [E::Llego, E::EnCurso],
     [E::EnCurso, E::Finalizado], [E::Aceptado, E::Buscando], [E::Llego, E::Cancelado],
+    [E::Aceptado, E::SinChofer],
 ]);
 
 it('prohíbe transiciones fuera del flujo', function (E $desde, E $hacia) {

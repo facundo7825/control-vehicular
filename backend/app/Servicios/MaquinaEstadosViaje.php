@@ -19,7 +19,8 @@ class MaquinaEstadosViaje
     private const PERMITIDAS = [
         'buscando' => [E::Ofrecido, E::Aceptado, E::SinChofer, E::Cancelado],
         'ofrecido' => [E::Buscando, E::Aceptado, E::SinChofer, E::Cancelado],
-        'aceptado' => [E::EnCamino, E::Buscando, E::Cancelado],
+        // aceptado → sin_chofer: el chofer cancela una reserva, que no se reasigna sola (spec 5.4 y 5.6).
+        'aceptado' => [E::EnCamino, E::Buscando, E::Cancelado, E::SinChofer],
         'en_camino' => [E::Llego, E::Buscando, E::Cancelado],
         'llego' => [E::EnCurso, E::Buscando, E::Cancelado],
         'en_curso' => [E::Finalizado],
@@ -72,7 +73,7 @@ class MaquinaEstadosViaje
             $this->guardar($viaje, $hacia, $atributos);
 
             return true;
-        });
+        }, attempts: 3);
     }
 
     private function guardar(Viaje $viaje, E $hacia, array $atributos): void

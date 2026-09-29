@@ -20,6 +20,7 @@ class ViajeResource extends JsonResource
             'destino' => ['lat' => $this->destino_lat, 'lng' => $this->destino_lng, 'direccion' => $this->destino_direccion],
             'motivo' => $this->motivo,
             'programado_para' => $this->programado_para?->toIso8601String(),
+            'duracion_estimada_min' => $this->duracion_estimada_min,
             'chofer' => $this->chofer
                 ? ['id' => $this->chofer->id, 'nombre' => $this->chofer->nombre, 'telefono' => $this->chofer->telefono]
                 : null,

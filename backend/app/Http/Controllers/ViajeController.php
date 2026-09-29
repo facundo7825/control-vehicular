@@ -16,6 +16,8 @@ class ViajeController extends Controller
 {
     private const RELACIONES = ['chofer', 'vehiculo', 'solicitante'];
 
+    private const LIMITE_HISTORIAL = 50;
+
     public function __construct(private ServicioViaje $viajes) {}
 
     public function store(Request $request): JsonResponse
@@ -37,6 +39,31 @@ class ViajeController extends Controller
             ->setStatusCode(201);
     }
 
+    /** "Mis viajes" del solicitante: próximas reservas e historial (spec 7, solicitante 6). */
+    public function index(Request $request): JsonResponse
+    {
+        $id = $request->user()->id;
+
+        $proximas = Viaje::where('solicitante_id', $id)
+            ->where('tipo', TipoViaje::Reserva)
+            ->whereIn('estado', EstadoViaje::enProgreso())
+            ->with(self::RELACIONES)
+            ->orderBy('programado_para')
+            ->get();
+
+        $historial = Viaje::where('solicitante_id', $id)
+            ->whereIn('estado', [EstadoViaje::Finalizado, EstadoViaje::Cancelado, EstadoViaje::SinChofer])
+            ->with(self::RELACIONES)
+            ->latest('id')
+            ->limit(self::LIMITE_HISTORIAL)
+            ->get();
+
+        return response()->json([
+            'proximas' => ViajeResource::collection($proximas),
+            'historial' => ViajeResource::collection($historial),
+        ]);
+    }
+
     public function actual(Request $request): JsonResponse
     {
         $usuario = $request->user();
@@ -44,14 +71,19 @@ class ViajeController extends Controller
 
         if ($usuario->esChofer()) {
             $viaje = Viaje::activosDeChofer($usuario->id)->first();
+            // Las solicitudes de reserva no son urgentes: van en la agenda, no en la pantalla de oferta.
             $oferta = OfertaViaje::where('chofer_id', $usuario->id)
                 ->where('resultado', ResultadoOferta::Pendiente)
                 ->where('vence_en', '>', now())
+                ->whereHas('viaje', fn ($q) => $q->where('tipo', TipoViaje::Inmediato))
                 ->first();
         } else {
+            // Inmediatos en progreso, o reservas que ya comenzaron (el chofer salió).
             $viaje = Viaje::where('solicitante_id', $usuario->id)
-                ->where('tipo', TipoViaje::Inmediato)
-                ->whereIn('estado', EstadoViaje::enProgreso())
+                ->where(fn ($q) => $q
+                    ->where(fn ($i) => $i->where('tipo', TipoViaje::Inmediato)->whereIn('estado', EstadoViaje::enProgreso()))
+                    ->orWhere(fn ($r) => $r->where('tipo', TipoViaje::Reserva)
+                        ->whereIn('estado', [EstadoViaje::EnCamino, EstadoViaje::Llego, EstadoViaje::EnCurso])))
                 ->latest('id')
                 ->first();
         }
