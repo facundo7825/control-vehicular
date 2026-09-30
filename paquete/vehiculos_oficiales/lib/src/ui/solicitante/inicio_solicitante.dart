@@ -18,9 +18,11 @@ class InicioSolicitante extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Al aparecer un viaje (el que había al abrir o uno recién pedido) se va a su pantalla.
-    ref.listen(viajeActualProvider, (_, siguiente) {
-      if (siguiente.value?.viaje != null) context.go(Rutas.viaje);
+    // Al aparecer un viaje (el que había al abrir o uno recién pedido) se va a su pantalla. Solo cuando
+    // aparece o cambia de viaje: las novedades del mismo (posición, estado) no deshacen el "atrás".
+    ref.listen(viajeActualProvider, (anterior, siguiente) {
+      final id = siguiente.value?.viaje?.id;
+      if (id != null && id != anterior?.value?.viaje?.id) context.go(Rutas.viaje);
     });
     final hayViaje = ref.watch(viajeActualProvider).value?.viaje != null;
     final choferes = ref.watch(choferesMapaProvider).value ?? const <ChoferEnMapa>[];

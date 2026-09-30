@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
+import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real.dart';
 import 'package:vehiculos_oficiales/src/ubicacion/ubicador.dart';
 
 import '../fixtures/payloads.dart' as p;
@@ -142,6 +143,26 @@ void main() {
     await tester.tap(find.text('Ver'));
     await tester.pumpAndSettle();
     expect(find.text('Chofer asignado'), findsWidgets);
+  });
+
+  testWidgets('después de volver al mapa, las novedades del mismo viaje no lo vuelven a abrir', (tester) async {
+    e = EntornoPrueba();
+    e.http.responder('POST', 'auth/intercambio', 200, p.intercambio);
+    e.http.responder('GET', 'viajes/actual', 200, '{"viaje":${p.viajeAceptado},"oferta":null}');
+    e.http.responder('GET', 'choferes', 200, p.choferes);
+    final tr = TiempoRealFalso();
+
+    await montarModulo(tester, e, tiempoReal: tr, extra: [ubicadorProvider.overrideWithValue(ubicador)]);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Tenés un viaje en curso.'), findsOneWidget);
+
+    tr.emitir('viaje.1', Eventos.choferUbicacion, p.json(p.eventoUbicacion));
+    tr.emitir('viaje.1', Eventos.viajeActualizado, p.json(p.viajeAceptado)..['estado'] = 'en_camino');
+    await tester.pumpAndSettle();
+
+    expect(find.text('Tenés un viaje en curso.'), findsOneWidget);
+    expect(find.text('El chofer va en camino'), findsNothing);
   });
 
   testWidgets('"Elegir otro" vuelve al mapa con el mismo origen y destino', (tester) async {
