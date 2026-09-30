@@ -1,3 +1,5 @@
+import 'dart:io' show FileSystemException;
+
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
@@ -87,6 +89,64 @@ void main() {
     await Future<void>.delayed(Duration.zero);
 
     expect(cola.guardado, isFalse);
+  });
+
+  group('cola de ubicaciones guardada al quedar lista (spec 10)', () {
+    late AlmacenColaMemoria cola;
+
+    setUp(() {
+      cola = AlmacenColaMemoria()
+        ..turnoId = 1
+        ..puntos = [punto(0)];
+      e.almacenCola = cola;
+    });
+
+    test('un usuario que no es chofer la borra', () async {
+      e.http.responder('POST', 'auth/intercambio', 200, p.intercambio);
+      final c = e.contenedor();
+
+      expect(await sesionResuelta(c), isA<SesionLista>());
+      await Future<void>.delayed(Duration.zero);
+
+      expect(cola.guardado, isFalse);
+    });
+
+    test('también con el token guardado (503 del intercambio)', () async {
+      await e.almacen.guardar('sim|100|Ana Pérez|Secretaria', '7|guardado');
+      e.http.responder('POST', 'auth/intercambio', 503, '{"message":"Servicio de identidad no disponible."}');
+      e.http.responder('GET', 'yo', 200, '{"id":1,"nombre":"Ana","cargo":null,"rol":"admin"}');
+      final c = e.contenedor();
+
+      expect(await sesionResuelta(c), isA<SesionLista>());
+      await Future<void>.delayed(Duration.zero);
+
+      expect(cola.guardado, isFalse);
+    });
+
+    test('un chofer la conserva (el turno la retoma)', () async {
+      e.http.responder(
+        'POST',
+        'auth/intercambio',
+        200,
+        '{"token":"1|abc","usuario":{"id":2,"nombre":"Carlos","cargo":null,"rol":"chofer"}}',
+      );
+      final c = e.contenedor();
+
+      expect(await sesionResuelta(c), isA<SesionLista>());
+      await Future<void>.delayed(Duration.zero);
+
+      expect(cola.guardado, isTrue);
+      expect(cola.borrados, 0);
+    });
+
+    test('si el borrado falla la sesión queda lista igual', () async {
+      cola.error = const FileSystemException('disco');
+      e.http.responder('POST', 'auth/intercambio', 200, p.intercambio);
+      final c = e.contenedor();
+
+      expect(await sesionResuelta(c), isA<SesionLista>());
+      await Future<void>.delayed(Duration.zero);
+    });
   });
 
   test('503 sin token guardado: identidad no disponible, y reintentar funciona', () async {
