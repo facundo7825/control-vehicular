@@ -75,6 +75,12 @@ class RastreadorTurno {
   /// Pendiente mientras hay puntos encolados que todavía no se guardaron.
   Timer? _guardado;
 
+  /// Guardados pedidos (para saber si el que terminó es el último).
+  int _guardados = 0;
+
+  /// El último guardado fue de una cola vacía y terminó bien.
+  bool _vacioGuardado = false;
+
   /// Perro guardián del GPS: se arma al abrir el stream y con cada punto; dispara una sola vez por período
   /// de silencio.
   Timer? _silencio;
@@ -197,10 +203,21 @@ class RastreadorTurno {
     _guardado = null;
     final guardar = this.guardar;
     if (guardar == null) return;
+    final puntos = cola.puntos;
+    // Con conexión casi todos los guardados son de una cola vacía: no se reescribe un vacío ya guardado.
+    if (puntos.isEmpty && _vacioGuardado) return;
+    _vacioGuardado = false;
+    final numero = ++_guardados;
     unawaited(
-      Future.sync(() => guardar(cola.puntos)).catchError(
-        (Object e) => debugPrint('vehiculos_oficiales: no se pudo guardar la cola de ubicaciones (${e.runtimeType}).'),
-      ),
+      Future.sync(() => guardar(puntos))
+          .then((_) {
+            // Solo si terminó bien y no se pidió otro guardado después (que pudo tener puntos).
+            if (puntos.isEmpty && numero == _guardados) _vacioGuardado = true;
+          })
+          .catchError(
+            (Object e) =>
+                debugPrint('vehiculos_oficiales: no se pudo guardar la cola de ubicaciones (${e.runtimeType}).'),
+          ),
     );
   }
 

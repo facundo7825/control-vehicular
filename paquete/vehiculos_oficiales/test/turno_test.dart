@@ -591,6 +591,33 @@ void main() {
       });
     });
 
+    test('con la cola vacía no se reescribe lo guardado si ya estaba vacío', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        crear();
+        async.flushMicrotasks();
+
+        // Cada punto sale antes de que venza su guardado periódico: solo quedan los guardados de después
+        // de cada envío, todos con la cola vacía.
+        for (var s = 0; s < 5; s++) {
+          async.elapse(const Duration(seconds: 9));
+          gps.emitir(punto(s * 10 + 9));
+          async.elapse(const Duration(seconds: 1));
+        }
+        expect(api.lotes, hasLength(5));
+        expect(almacen.escrituras, [isEmpty]);
+
+        // Un guardado con puntos vuelve a habilitar el vacío siguiente (lo guardado refleja la cola reducida).
+        gps.emitir(punto(59));
+        async.elapse(const Duration(seconds: 5));
+        expect(segundos(almacen.puntos), [59]);
+        async.elapse(const Duration(seconds: 5));
+        expect(api.lotes, hasLength(6));
+        expect(almacen.puntos, isEmpty);
+        expect(almacen.escrituras, hasLength(3));
+      });
+    });
+
     test('al reiniciar con el mismo turno abierto, lo guardado vuelve a la cola y sale en orden', () {
       fakeAsync((async) {
         api.turno = turnoDePrueba();
