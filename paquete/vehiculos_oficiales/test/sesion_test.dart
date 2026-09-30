@@ -1,11 +1,16 @@
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:vehiculos_oficiales/src/api/api_vehiculos.dart';
 import 'package:vehiculos_oficiales/src/api/errores_api.dart';
 import 'package:vehiculos_oficiales/src/entorno.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
+import 'package:vehiculos_oficiales/src/sesion/almacen_token.dart';
 import 'package:vehiculos_oficiales/src/sesion/sesion.dart';
 
 import 'fixtures/payloads.dart' as p;
+import 'soporte/dobles.dart';
 import 'soporte/entorno_prueba.dart';
 
 /// Espera a que la sesión salga de "iniciando".
@@ -122,5 +127,72 @@ void main() {
 
     await c.read(sesionProvider.notifier).iniciar();
     expect(c.read(sesionProvider), isA<SesionConError>());
+  });
+
+  almacenQueFalla();
+}
+
+/// Almacén seguro que falla (p. ej. `PlatformException` del keystore).
+class AlmacenQueFalla implements AlmacenToken {
+  @override
+  Future<String?> leer(String tokenPJ) async => throw PlatformException(code: 'leer');
+
+  @override
+  Future<void> guardar(String tokenPJ, String tokenSanctum) async => throw PlatformException(code: 'guardar');
+
+  @override
+  Future<void> borrar() async => throw PlatformException(code: 'borrar');
+}
+
+/// La API responde algo que no se esperaba (un error que no es `ErrorApi`).
+class ApiQueRompe extends ApiFalsa {
+  @override
+  Future<Intercambio> intercambiar(String tokenExterno) async => throw StateError('inesperado');
+}
+
+void almacenQueFalla() {
+  group('almacén seguro que falla', () {
+    late EntornoPrueba e;
+
+    setUp(() => e = EntornoPrueba()..almacen = AlmacenQueFalla());
+
+    ProviderContainer crear([List<Override> extra = const []]) => e.contenedor(extra);
+
+    test('si no puede guardar el token, la sesión igual queda lista', () async {
+      e.http.responder('POST', 'auth/intercambio', 200, p.intercambio);
+      final c = crear();
+
+      expect(await sesionResuelta(c), isA<SesionLista>());
+      expect(c.read(clienteApiProvider).token, startsWith('1|'));
+    });
+
+    test('503 y no puede leer el token guardado: identidad no disponible', () async {
+      e.http.responder('POST', 'auth/intercambio', 503, '{"message":"Servicio de identidad no disponible."}');
+      final c = crear();
+
+      expect(await sesionResuelta(c), isA<SesionIdentidadNoDisponible>());
+    });
+
+    test('un 401 con un almacén que no puede borrar no deja un error sin capturar', () async {
+      e.http.responder('POST', 'auth/intercambio', 401, p.intercambioInvalido);
+      final c = crear();
+
+      expect(await sesionResuelta(c), isA<SesionVencida>());
+      await Future<void>.delayed(Duration.zero);
+      expect(e.sesionesInvalidas, 1);
+    });
+
+    test('un error inesperado queda en error con reintentar', () async {
+      final c = crear([apiProvider.overrideWithValue(ApiQueRompe())]);
+
+      expect(await sesionResuelta(c), isA<SesionConError>());
+    });
+
+    test('una respuesta mal formada del intercambio queda en error con reintentar', () async {
+      e.http.responder('POST', 'auth/intercambio', 200, '{"token":1}');
+      final c = crear();
+
+      expect(await sesionResuelta(c), isA<SesionConError>());
+    });
   });
 }

@@ -1,8 +1,12 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/errores_api.dart';
 import '../entorno.dart';
 import '../modelos/modelos.dart';
+import 'almacen_token.dart';
 
 sealed class EstadoSesion {
   const EstadoSesion();
@@ -57,7 +61,7 @@ class SesionNotifier extends Notifier<EstadoSesion> {
     final aviso = ref.watch(avisoSesionProvider);
     aviso.escuchar(() {
       state = const SesionVencida();
-      ref.read(almacenTokenProvider).borrar();
+      unawaited(_almacenar('borrar', (a) => a.borrar()));
     });
     Future.microtask(iniciar);
     return const SesionIniciando();
@@ -71,12 +75,12 @@ class SesionNotifier extends Notifier<EstadoSesion> {
     state = const SesionIniciando();
     final tokenPJ = ref.read(entornoProvider).sesion.token;
     final api = ref.read(apiProvider);
-    final almacen = ref.read(almacenTokenProvider);
 
     try {
       final r = await api.intercambiar(tokenPJ);
       api.cliente.token = r.token;
-      await almacen.guardar(tokenPJ, r.token);
+      // Si no se puede guardar, igual se sigue: solo se pierde el respaldo ante una caída del PJ.
+      await _almacenar('guardar', (a) => a.guardar(tokenPJ, r.token));
       if (ref.mounted) state = SesionLista(r.usuario);
     } on SesionInvalida {
       // El aviso ya pasó el estado a SesionVencida y llamó a la app principal.
@@ -87,12 +91,26 @@ class SesionNotifier extends Notifier<EstadoSesion> {
       if (ref.mounted) state = respaldo ?? const SesionIdentidadNoDisponible();
     } on ErrorApi catch (e) {
       if (ref.mounted) state = SesionConError(e.mensaje);
+    } catch (e) {
+      // Cualquier otra cosa (un bug, una respuesta rara): no se queda "iniciando" para siempre.
+      debugPrint('vehiculos_oficiales: error inesperado al iniciar la sesión (${e.runtimeType}).');
+      if (ref.mounted) state = const SesionConError('Ocurrió un error inesperado.');
+    }
+  }
+
+  /// El almacén seguro es un respaldo: si falla (p. ej. `PlatformException` del keystore) se sigue sin él.
+  Future<T?> _almacenar<T>(String accion, Future<T> Function(AlmacenToken almacen) f) async {
+    try {
+      return await f(ref.read(almacenTokenProvider));
+    } catch (e) {
+      debugPrint('vehiculos_oficiales: no se pudo $accion el token guardado (${e.runtimeType}).');
+      return null;
     }
   }
 
   /// Spec 9: si el PJ no responde pero el token Sanctum de esta misma sesión sigue vigente, se sigue.
   Future<EstadoSesion?> _conTokenGuardado(String tokenPJ) async {
-    final guardado = await ref.read(almacenTokenProvider).leer(tokenPJ);
+    final guardado = await _almacenar('leer', (a) => a.leer(tokenPJ));
     if (guardado == null) return null;
 
     final api = ref.read(apiProvider);
@@ -101,7 +119,8 @@ class SesionNotifier extends Notifier<EstadoSesion> {
     aviso.silenciado = true; // un 401 acá significa "token guardado vencido", no "sesión del PJ inválida"
     try {
       return SesionLista(await api.yo());
-    } on ErrorApi {
+    } catch (_) {
+      // ErrorApi (401: el token guardado venció) o cualquier otro: no sirve, identidad no disponible.
       api.cliente.token = null;
       return null;
     } finally {

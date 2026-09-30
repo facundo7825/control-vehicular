@@ -22,11 +22,17 @@ class PuenteFalso implements PuenteNotificaciones {
   String? tokenPush;
   final controlador = StreamController<Map<String, dynamic>>.broadcast();
 
-  @override
-  Future<String?> token() async => tokenPush;
+  /// Si no es nulo, `token()` lo lanza (p. ej. FCM sin APNs en iOS).
+  Object? errorToken;
+
+  /// Si no es nulo, reemplaza a `controlador.stream` (p. ej. un stream de una sola escucha ya usado).
+  Stream<Map<String, dynamic>>? mensajesPropios;
 
   @override
-  Stream<Map<String, dynamic>> get mensajes => controlador.stream;
+  Future<String?> token() async => errorToken != null ? throw errorToken! : tokenPush;
+
+  @override
+  Stream<Map<String, dynamic>> get mensajes => mensajesPropios ?? controlador.stream;
 }
 
 /// Todo lo que un test necesita para armar el módulo sin red, sin Firebase y sin Google.
@@ -37,7 +43,7 @@ class EntornoPrueba {
   final String tokenPJ;
   final PuenteFalso puente;
   final http = AdaptadorFalso();
-  final almacen = AlmacenTokenMemoria();
+  AlmacenToken almacen = AlmacenTokenMemoria();
   int sesionesInvalidas = 0;
 
   EntornoModulo get entorno => EntornoModulo(

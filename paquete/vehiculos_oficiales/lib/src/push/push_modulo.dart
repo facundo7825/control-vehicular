@@ -45,12 +45,24 @@ class PushModulo {
 
   Future<void> iniciar() async {
     final puente = _ref.read(entornoProvider).push;
-    _escucha = puente.mensajes.listen(_alRecibir);
+    // El puente es código de la app principal: nada de lo que haga mal debe romper el módulo.
+    try {
+      _escucha = puente.mensajes.listen(
+        _alRecibir,
+        onError: (Object e) => debugPrint('vehiculos_oficiales: error en los mensajes push (${e.runtimeType}).'),
+      );
+    } catch (e) {
+      // P. ej. un stream de una sola escucha que ya escuchó una apertura anterior del módulo.
+      debugPrint('vehiculos_oficiales: no se pudo escuchar los mensajes push (${e.runtimeType}).');
+    }
     try {
       final token = await puente.token();
       if (token != null && token.isNotEmpty) await _ref.read(apiProvider).registrarTokenPush(token);
     } on ErrorApi catch (e) {
       debugPrint('vehiculos_oficiales: no se pudo registrar el token push: $e');
+    } catch (e) {
+      // P. ej. FCM en iOS sin token APNs. No se imprime el error completo: podría traer el token.
+      debugPrint('vehiculos_oficiales: no se pudo obtener el token push (${e.runtimeType}).');
     }
   }
 

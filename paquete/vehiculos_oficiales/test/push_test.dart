@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vehiculos_oficiales/src/entorno.dart';
@@ -83,6 +86,33 @@ void main() {
     await vaciar();
 
     expect(avisos, isEmpty);
+  });
+
+  test('si el puente falla al dar el token, no escapa el error y los mensajes igual llegan', () async {
+    final e = EntornoPrueba()..puente.errorToken = PlatformException(code: 'apns-token-not-set');
+    final c = crear(e);
+    final avisos = <AvisoPush>[];
+    c.read(pushModuloProvider).avisos.listen(avisos.add);
+    await vaciar();
+
+    e.puente.controlador.add({'modulo': 'vehiculos_oficiales', 'tipo': 'recordatorio_reserva'});
+    await vaciar();
+
+    expect(api.tokens, isEmpty);
+    expect(avisos.single.tipo, 'recordatorio_reserva');
+  });
+
+  test('un stream de mensajes de una sola escucha ya usado no impide registrar el token', () async {
+    final unico = StreamController<Map<String, dynamic>>();
+    addTearDown(unico.close);
+    final e = EntornoPrueba(tokenPush: 'fcm-abc')..puente.mensajesPropios = unico.stream;
+    unico.stream.listen((_) {}); // lo escuchó una apertura anterior del módulo
+
+    final c = crear(e);
+    c.read(pushModuloProvider);
+    await vaciar();
+
+    expect(api.tokens, ['fcm-abc']);
   });
 
   test('lee oferta_reserva con ids numéricos', () {
