@@ -19,9 +19,10 @@ abstract interface class Ubicador {
   Future<PermisoUbicacion> pedirPermiso();
 
   /// GPS del turno cada [intervalo], con el servicio en primer plano en Android (spec 7). Los errores
-  /// de la plataforma (permiso revocado, GPS apagado) llegan como errores del stream. Para cambiar el
-  /// intervalo hay que cancelar la suscripción anterior antes de volver a llamar: geolocator_android
-  /// reutiliza el stream abierto mientras tenga alguien escuchando.
+  /// de la plataforma (permiso revocado, GPS apagado) llegan como errores del stream. El turno lo abre
+  /// una sola vez (`RastreadorTurno`): reabrirlo con la app en segundo plano puede fallar. Para volver a
+  /// abrirlo hay que cancelar antes la suscripción anterior: geolocator_android reutiliza el stream
+  /// abierto mientras tenga alguien escuchando.
   Stream<PuntoGps> seguir(Duration intervalo);
 
   /// Ajustes del sistema: los de ubicación si el GPS está apagado, los de la app si no. Nunca lanza.

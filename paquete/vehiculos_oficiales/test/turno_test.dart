@@ -56,44 +56,79 @@ void main() {
       async.flushMicrotasks();
 
       expect(c.read(turnoProvider).value!.id, 1);
-      expect(gps.intervalos, [const Duration(seconds: 10)]);
+      // El GPS se abre una sola vez al ritmo más rápido (el del viaje); el envío va al del turno.
+      expect(gps.intervalos, [const Duration(seconds: 5)]);
       gps
         ..emitir(punto(0))
         ..emitir(punto(5));
       expect(c.read(posicionPropiaProvider).punto!.registradoEn, punto(5).registradoEn);
+      gps.emitir(punto(10));
 
       async.elapse(const Duration(seconds: 9));
       expect(envios(), 0);
       async.elapse(const Duration(seconds: 1));
-      expect(segundos(api.lotes.single), [0, 5]);
+      // Sin viaje se encola un punto por intervalo de envío: el de los 5 s no entra.
+      expect(segundos(api.lotes.single), [0, 10]);
 
       async.elapse(const Duration(seconds: 10)); // cola vacía: no sale nada
       expect(envios(), 1);
     });
   });
 
-  test('con un viaje activo el GPS y los envíos pasan a 5 s, y vuelven a 10 s al terminar', () {
+  test('con un viaje activo los envíos pasan a 5 s y vuelven a 10 s al terminar, sin reabrir el GPS', () {
     fakeAsync((async) {
       api.turno = turnoDePrueba();
       api.actual = ViajeActual(viaje: viaje(estado: 'aceptado', conChofer: true));
       crear();
       async.flushMicrotasks();
 
-      expect(gps.intervalos.last, const Duration(seconds: 5));
-      gps.emitir(punto(0));
+      expect(gps.intervalos, [const Duration(seconds: 5)]);
+      gps
+        ..emitir(punto(0))
+        ..emitir(punto(5));
       async.elapse(const Duration(seconds: 5));
-      expect(envios(), 1);
+      expect(segundos(api.lotes.single), [0, 5]); // en viaje entran todos
 
       tr.emitir('chofer.2', Eventos.viajeActualizado, jsonViaje(viaje(estado: 'finalizado', conChofer: true)));
       async.flushMicrotasks();
-      expect(gps.intervalos.last, const Duration(seconds: 10));
+      expect(gps.intervalos, [const Duration(seconds: 5)]);
       expect(gps.siguiendo, isTrue);
 
-      gps.emitir(punto(10));
+      gps
+        ..emitir(punto(15))
+        ..emitir(punto(20))
+        ..emitir(punto(25));
       async.elapse(const Duration(seconds: 5));
       expect(envios(), 1);
       async.elapse(const Duration(seconds: 5));
       expect(envios(), 2);
+      expect(segundos(api.lotes.last), [15, 25]); // sin viaje, uno cada 10 s
+    });
+  });
+
+  test('al asignarle un viaje con la app en segundo plano no se reabre el GPS: solo cambia el envío', () {
+    fakeAsync((async) {
+      api.turno = turnoDePrueba();
+      crear();
+      async.flushMicrotasks();
+
+      tr.emitir(
+        'chofer.2',
+        Eventos.viajeActualizado,
+        jsonViaje(viaje(id: 3, estado: 'aceptado', obligatorio: true, conChofer: true)),
+      );
+      async.flushMicrotasks();
+      expect(gps.intervalos, [const Duration(seconds: 5)]);
+      expect(gps.siguiendo, isTrue);
+
+      gps.emitir(punto(0));
+      async.elapse(const Duration(seconds: 5));
+      expect(envios(), 1);
+
+      tr.emitir('chofer.2', Eventos.viajeActualizado, jsonViaje(viaje(id: 3, estado: 'cancelado', conChofer: true)));
+      async.flushMicrotasks();
+      expect(gps.intervalos, hasLength(1));
+      expect(gps.siguiendo, isTrue);
     });
   });
 
@@ -104,7 +139,12 @@ void main() {
       crear();
       async.flushMicrotasks();
 
-      expect(gps.intervalos, [const Duration(seconds: 15)]);
+      expect(gps.intervalos, [const Duration(seconds: 3)]);
+      gps.emitir(punto(0));
+      async.elapse(const Duration(seconds: 14));
+      expect(envios(), 0);
+      async.elapse(const Duration(seconds: 1));
+      expect(envios(), 1);
     });
   });
 
@@ -147,7 +187,7 @@ void main() {
       async.flushMicrotasks();
       gps
         ..emitir(punto(0))
-        ..emitir(punto(3));
+        ..emitir(punto(10));
 
       c.read(turnoProvider.notifier).finalizar();
       async.flushMicrotasks();
@@ -179,6 +219,20 @@ void main() {
       gps.emitir(punto(20));
       async.elapse(const Duration(seconds: 10));
       expect(envios(), 1);
+    });
+  });
+
+  test('un error inesperado del envío no se escapa y el rastreo sigue', () {
+    fakeAsync((async) {
+      api = _ApiRota()..turno = turnoDePrueba();
+      crear();
+      async.flushMicrotasks();
+
+      gps.emitir(punto(0));
+      async.elapse(const Duration(seconds: 10));
+
+      expect(envios(), 1);
+      expect(gps.siguiendo, isTrue);
     });
   });
 
@@ -272,4 +326,13 @@ void main() {
       expect(envios(), 0);
     });
   });
+}
+
+/// Un envío que falla con algo que no es un [ErrorApi] (un error de programación, un plugin).
+class _ApiRota extends ApiChofer {
+  @override
+  Future<void> enviarUbicacion(List<PuntoGps> puntos) async {
+    await super.enviarUbicacion(puntos);
+    throw StateError('inesperado');
+  }
 }
