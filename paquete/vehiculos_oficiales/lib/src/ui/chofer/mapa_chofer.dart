@@ -58,10 +58,7 @@ class MapaChofer extends ConsumerWidget {
           if (posicion.sinGps)
             MaterialBanner(
               leading: const Icon(Icons.gps_off),
-              content: const Text(
-                'No podemos obtener tu ubicación. Revisá que la ubicación del teléfono esté activa y el permiso '
-                'concedido.',
-              ),
+              content: const Text('Sin señal de GPS por ahora'),
               actions: [
                 TextButton(
                   onPressed: () => ref.read(ubicadorProvider).abrirAjustes(PermisoUbicacion.denegado),
