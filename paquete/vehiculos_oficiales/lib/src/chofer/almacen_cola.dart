@@ -21,22 +21,31 @@ abstract interface class AlmacenCola {
   Future<void> borrar();
 }
 
-/// Un archivo JSON ([nombreArchivo]) en el directorio que devuelve [_directorio] (el de soporte de la app
-/// en producción; uno temporal en los tests).
+/// Un archivo JSON ([subdirectorio]/[nombreArchivo]) dentro del directorio que devuelve [_directorio]. En
+/// producción es el de caché de la app: iOS (iCloud/iTunes) y Android (Auto Backup) no lo incluyen en las
+/// copias de seguridad, así que el recorrido del chofer no termina en una nube personal (spec 10). El sistema
+/// puede vaciarlo con poco espacio: se pierde lo pendiente, que es un respaldo de mejor esfuerzo. En los
+/// tests es un directorio temporal. El subdirectorio (se crea si falta) evita chocar con archivos de la app.
 ///
 /// Los puntos se guardan tal cual los dio el GPS (también el -1 de iOS en rumbo y velocidad, y la hora en
-/// microsegundos UTC): el filtro para la API está en `PuntoGps.toJson` y se aplica al enviar.
+/// microsegundos UTC): el filtro para la API está en `PuntoGps.toJson` y se aplica al enviar. Un número no
+/// finito (NaN, infinito) se guarda como nulo; un punto sin latitud o longitud se descarta al leer.
 ///
-/// Las operaciones se hacen de a una y en el orden en que se piden: un `borrar` pedido después de un
-/// `guardar` nunca queda antes. Se escribe en un archivo temporal que después se renombra, para que una
-/// app cerrada a mitad de la escritura no deje un archivo cortado. Un archivo ilegible se lee como vacío.
+/// Las operaciones se hacen de a una y en el orden en que se piden, también entre instancias (un módulo
+/// cerrado con una escritura pendiente y vuelto a abrir lee después de esa escritura): un `borrar` pedido
+/// después de un `guardar` nunca queda antes. Se escribe en un archivo temporal que después se renombra,
+/// para que una app cerrada a mitad de la escritura no deje un archivo cortado. Un archivo ilegible se lee
+/// como vacío.
 class AlmacenColaArchivo implements AlmacenCola {
   AlmacenColaArchivo(this._directorio);
 
+  static const subdirectorio = 'vehiculos_oficiales';
   static const nombreArchivo = 'cola_ubicaciones.json';
 
   final Future<Directory> Function() _directorio;
-  Future<void> _anterior = Future.value();
+
+  /// Compartida por todas las instancias: en producción todas usan el mismo archivo.
+  static Future<void> _anterior = Future.value();
 
   @override
   Future<List<PuntoGps>> leer(int turnoId) => _enOrden(() async {
@@ -45,7 +54,7 @@ class AlmacenColaArchivo implements AlmacenCola {
     try {
       final j = leerMapa(jsonDecode(await archivo.readAsString()));
       if (j['turno_id'] != turnoId) return <PuntoGps>[];
-      return [for (final p in j['puntos'] as List) _deDisco(leerMapa(p))];
+      return [for (final p in j['puntos'] as List) ?_deDisco(leerMapa(p))];
     } catch (e) {
       // JSON cortado o con otra forma: se sigue sin lo guardado.
       debugPrint('vehiculos_oficiales: no se pudo leer la cola de ubicaciones guardada (${e.runtimeType}).');
@@ -61,40 +70,54 @@ class AlmacenColaArchivo implements AlmacenCola {
     });
     return _enOrden(() async {
       final archivo = await _archivo();
-      final temporal = File('${archivo.path}.tmp');
+      await archivo.parent.create(recursive: true);
+      final temporal = _temporal(archivo);
       await temporal.writeAsString(contenido, flush: true);
       await temporal.rename(archivo.path);
     });
   }
 
+  /// También el temporal que pudo quedar de una escritura cortada o fallida.
   @override
   Future<void> borrar() => _enOrden(() async {
     final archivo = await _archivo();
-    if (await archivo.exists()) await archivo.delete();
+    for (final f in [archivo, _temporal(archivo)]) {
+      if (await f.exists()) await f.delete();
+    }
   });
 
-  Future<File> _archivo() async => File('${(await _directorio()).path}/$nombreArchivo');
+  Future<File> _archivo() async => File('${(await _directorio()).path}/$subdirectorio/$nombreArchivo');
 
-  Future<T> _enOrden<T>(Future<T> Function() operacion) {
+  static File _temporal(File archivo) => File('${archivo.path}.tmp');
+
+  static Future<T> _enOrden<T>(Future<T> Function() operacion) {
     final resultado = _anterior.then((_) => operacion());
     _anterior = resultado.then<void>((_) {}, onError: (Object _) {});
     return resultado;
   }
 
   static Json _aDisco(PuntoGps p) => {
-    'lat': p.posicion.lat,
-    'lng': p.posicion.lng,
-    'rumbo': p.rumbo,
-    'velocidad': p.velocidad,
+    'lat': _finito(p.posicion.lat),
+    'lng': _finito(p.posicion.lng),
+    'rumbo': _finito(p.rumbo),
+    'velocidad': _finito(p.velocidad),
     'registrado_en_us': p.registradoEn.microsecondsSinceEpoch,
   };
 
-  static PuntoGps _deDisco(Json j) => PuntoGps(
-    posicion: Coordenada((j['lat'] as num).toDouble(), (j['lng'] as num).toDouble()),
-    rumbo: (j['rumbo'] as num?)?.toDouble(),
-    velocidad: (j['velocidad'] as num?)?.toDouble(),
-    registradoEn: DateTime.fromMicrosecondsSinceEpoch(j['registrado_en_us'] as int, isUtc: true),
-  );
+  /// `jsonEncode` lanza con NaN o infinito.
+  static double? _finito(double? x) => x != null && x.isFinite ? x : null;
+
+  static PuntoGps? _deDisco(Json j) {
+    final lat = j['lat'] as num?;
+    final lng = j['lng'] as num?;
+    if (lat == null || lng == null) return null;
+    return PuntoGps(
+      posicion: Coordenada(lat.toDouble(), lng.toDouble()),
+      rumbo: (j['rumbo'] as num?)?.toDouble(),
+      velocidad: (j['velocidad'] as num?)?.toDouble(),
+      registradoEn: DateTime.fromMicrosecondsSinceEpoch(j['registrado_en_us'] as int, isUtc: true),
+    );
+  }
 }
 
 /// En web no se persiste nada.
@@ -112,5 +135,5 @@ class AlmacenColaNula implements AlmacenCola {
 }
 
 final almacenColaProvider = Provider<AlmacenCola>(
-  (ref) => kIsWeb ? const AlmacenColaNula() : AlmacenColaArchivo(getApplicationSupportDirectory),
+  (ref) => kIsWeb ? const AlmacenColaNula() : AlmacenColaArchivo(getApplicationCacheDirectory),
 );

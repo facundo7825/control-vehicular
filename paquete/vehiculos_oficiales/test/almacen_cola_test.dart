@@ -15,7 +15,11 @@ void main() {
 
   tearDown(() => dir.deleteSync(recursive: true));
 
-  File archivo() => File('${dir.path}/${AlmacenColaArchivo.nombreArchivo}');
+  /// Crea el subdirectorio si falta, para poder dejar un archivo "de antes".
+  File archivo() {
+    final sub = Directory('${dir.path}/${AlmacenColaArchivo.subdirectorio}')..createSync(recursive: true);
+    return File('${sub.path}/${AlmacenColaArchivo.nombreArchivo}');
+  }
 
   final puntos = [
     PuntoGps(
@@ -97,5 +101,61 @@ void main() {
     await Future.wait([guardado, borrado]);
 
     expect(archivo().existsSync(), isFalse);
+  });
+
+  test('guarda en un subdirectorio propio del paquete, creándolo si falta', () async {
+    expect(Directory('${dir.path}/${AlmacenColaArchivo.subdirectorio}').existsSync(), isFalse);
+
+    await almacen.guardar(7, puntos);
+
+    expect(File('${dir.path}/vehiculos_oficiales/cola_ubicaciones.json').existsSync(), isTrue);
+    expect(File('${dir.path}/cola_ubicaciones.json').existsSync(), isFalse);
+  });
+
+  test('borrar también elimina el temporal que dejó una escritura cortada', () async {
+    await almacen.guardar(7, puntos);
+    final temporal = File('${archivo().path}.tmp')..writeAsStringSync('{"turno_id": 7, "pun');
+
+    await almacen.borrar();
+
+    expect(temporal.existsSync(), isFalse);
+    expect(archivo().existsSync(), isFalse);
+  });
+
+  test('un número no finito se guarda como nulo, sin lanzar', () async {
+    final raros = [
+      PuntoGps(
+        posicion: const Coordenada(-26.83, -65.2),
+        rumbo: double.nan,
+        velocidad: double.infinity,
+        registradoEn: DateTime.utc(2026, 10, 1, 12),
+      ),
+      // Sin posición el punto no sirve: se descarta al leer, sin perder los demás.
+      PuntoGps(
+        posicion: const Coordenada(double.nan, double.negativeInfinity),
+        registradoEn: DateTime.utc(2026, 10, 1, 12, 0, 5),
+      ),
+      puntos[2],
+    ];
+
+    await almacen.guardar(7, raros);
+
+    final leidos = await almacen.leer(7);
+    expect(leidos, hasLength(2));
+    expect(leidos[0].rumbo, isNull);
+    expect(leidos[0].velocidad, isNull);
+    mismosPuntos([leidos[1]], [puntos[2]]);
+  });
+
+  test('las operaciones de dos instancias sobre el mismo archivo también van en orden', () async {
+    // El módulo se cerró con una escritura pendiente y se volvió a abrir (otro contenedor, otra instancia).
+    final anterior = AlmacenColaArchivo(() async {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      return dir;
+    });
+    final guardado = anterior.guardar(7, puntos);
+
+    mismosPuntos(await AlmacenColaArchivo(() async => dir).leer(7), puntos);
+    await guardado;
   });
 }
