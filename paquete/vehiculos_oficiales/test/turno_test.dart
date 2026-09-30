@@ -4,6 +4,9 @@ import 'package:fake_async/fake_async.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vehiculos_oficiales/src/api/errores_api.dart';
+import 'package:vehiculos_oficiales/src/chofer/cola_ubicaciones.dart';
+import 'package:vehiculos_oficiales/src/chofer/emisor_ubicacion.dart';
+import 'package:vehiculos_oficiales/src/chofer/rastreador_turno.dart';
 import 'package:vehiculos_oficiales/src/chofer/turno.dart';
 import 'package:vehiculos_oficiales/src/entorno.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
@@ -377,6 +380,141 @@ void main() {
       expect(gps.siguiendo, isTrue);
       async.elapse(const Duration(seconds: 10));
       expect(segundos(api.lotes.last), [1]); // el punto de antes de reabrir no se perdió
+    });
+  });
+
+  group('GPS que no entrega posiciones', () {
+    const limite = Duration(seconds: 30);
+
+    test('un stream que nunca emite se avisa pasado el límite, una sola vez, y un punto lo limpia', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        final c = crear();
+        async.flushMicrotasks();
+
+        async.elapse(limite - const Duration(seconds: 1));
+        expect(c.read(posicionPropiaProvider).sinGps, isFalse);
+        async.elapse(const Duration(seconds: 1));
+        expect(c.read(posicionPropiaProvider).sinGps, isTrue);
+
+        // Sigue en silencio: no se vuelve a avisar ni se reabre el GPS solo.
+        final avisos = <PosicionPropia>[];
+        c.listen(posicionPropiaProvider, (_, n) => avisos.add(n));
+        async.elapse(const Duration(minutes: 5));
+        expect(avisos, isEmpty);
+        expect(gps.intervalos, hasLength(1));
+
+        gps.emitir(punto(0));
+        expect(c.read(posicionPropiaProvider).sinGps, isFalse);
+        expect(c.read(posicionPropiaProvider).punto, isNotNull);
+      });
+    });
+
+    test('tras recuperarse, un nuevo silencio vuelve a avisar', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        final c = crear();
+        async.flushMicrotasks();
+
+        async.elapse(limite);
+        gps.emitir(punto(0));
+        expect(c.read(posicionPropiaProvider).sinGps, isFalse);
+        async.elapse(limite);
+        expect(c.read(posicionPropiaProvider).sinGps, isTrue);
+      });
+    });
+
+    test('con puntos regulares nunca se avisa', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        final c = crear();
+        async.flushMicrotasks();
+
+        for (var s = 0; s < 300; s += 5) {
+          gps.emitir(punto(s));
+          async.elapse(const Duration(seconds: 5));
+          expect(c.read(posicionPropiaProvider).sinGps, isFalse);
+        }
+      });
+    });
+
+    test('Reintentar rearma el aviso sobre el stream nuevo', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        final c = crear();
+        async.flushMicrotasks();
+        async.elapse(limite);
+        expect(c.read(posicionPropiaProvider).sinGps, isTrue);
+
+        c.read(turnoProvider.notifier).reintentarGps();
+        async.flushMicrotasks();
+        expect(gps.intervalos, hasLength(2));
+        gps.emitir(punto(0));
+        expect(c.read(posicionPropiaProvider).sinGps, isFalse);
+        async.elapse(limite);
+        expect(c.read(posicionPropiaProvider).sinGps, isTrue);
+      });
+    });
+
+    test('el límite es max(30 s, 3 × intervalo del GPS) y se puede inyectar', () {
+      fakeAsync((async) {
+        final avisos = <Object>[];
+        RastreadorTurno crearR(Duration intervaloViaje, {Duration? sinPosicionTras}) {
+          final cola = ColaUbicaciones();
+          return RastreadorTurno(
+            ubicador: gps,
+            cola: cola,
+            emisor: EmisorUbicacion(api: api, cola: cola),
+            intervaloTurno: const Duration(seconds: 60),
+            intervaloViaje: intervaloViaje,
+            alPunto: (_) {},
+            alErrorGps: avisos.add,
+            alQuedarSinTurno: () {},
+            sinPosicionTras: sinPosicionTras,
+          )..iniciar();
+        }
+
+        final lento = crearR(const Duration(seconds: 20)); // 3 × 20 s = 60 s
+        async.elapse(const Duration(seconds: 59));
+        expect(avisos, isEmpty);
+        async.elapse(const Duration(seconds: 1));
+        expect(avisos.single, isA<SinPosicionGps>());
+        lento.detener();
+
+        avisos.clear();
+        final rapido = crearR(const Duration(seconds: 5), sinPosicionTras: const Duration(seconds: 2));
+        async.elapse(const Duration(seconds: 2));
+        expect(avisos.single, isA<SinPosicionGps>());
+        rapido.detener();
+      });
+    });
+
+    test('detener y cerrar el módulo no dejan timers pendientes', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        final c = crear();
+        async.flushMicrotasks();
+        gps.emitir(punto(0));
+
+        c.dispose();
+        async.flushMicrotasks();
+        expect(async.pendingTimers, isEmpty);
+        async.elapse(const Duration(minutes: 2));
+      });
+    });
+
+    test('finalizar el turno cancela el aviso', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        final c = crear();
+        async.flushMicrotasks();
+
+        c.read(turnoProvider.notifier).finalizar();
+        async.flushMicrotasks();
+        expect(async.pendingTimers, isEmpty);
+        async.elapse(const Duration(minutes: 2));
+        expect(c.read(posicionPropiaProvider).sinGps, isFalse);
+      });
     });
   });
 
