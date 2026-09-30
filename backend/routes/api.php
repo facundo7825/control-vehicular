@@ -10,6 +10,7 @@ Route::middleware(['auth:sanctum', 'activo'])->group(function () {
     Route::get('/configuracion', \App\Http\Controllers\ConfiguracionController::class);
     Route::get('/choferes', \App\Http\Controllers\MapaController::class);
     Route::get('/viajes/actual', [\App\Http\Controllers\ViajeController::class, 'actual']);
+    Route::get('/viajes/{viaje}', [\App\Http\Controllers\ViajeController::class, 'show'])->whereNumber('viaje');
     Route::get('/viajes', [\App\Http\Controllers\ViajeController::class, 'index']);
     Route::post('/push/token', \App\Http\Controllers\PushController::class);
     Route::get('/viajes/{viaje}/eta', \App\Http\Controllers\EtaController::class);
