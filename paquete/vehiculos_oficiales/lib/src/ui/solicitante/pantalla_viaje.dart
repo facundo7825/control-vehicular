@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../mapa/mapa.dart';
 import '../../modelos/modelos.dart';
 import '../../solicitante/borrador_pedido.dart';
+import '../../viaje/eta_viaje.dart';
 import '../../viaje/viaje_actual.dart';
 import '../comunes/comunes.dart';
 import '../modulo_app.dart';
@@ -97,6 +98,22 @@ class _Buscando extends ConsumerWidget {
   }
 }
 
+/// Línea de llegada estimada, o nada si todavía no hay ETA o el chofer ya está en el origen (`segundos == 0`).
+@visibleForTesting
+String? textoEta(Eta? eta) {
+  if (eta == null) return null;
+  final aDestino = eta.hacia == Eta.destino;
+  final segundos = eta.segundos;
+  if (segundos != null) {
+    if (segundos == 0) return null;
+    final minutos = (segundos / 60).ceil();
+    return aDestino ? 'Llegada a destino en ~$minutos min' : 'Llega en ~$minutos min';
+  }
+  final metros = eta.metros;
+  if (metros != null) return 'A ${formatearDistancia(metros.toDouble())} del ${aDestino ? 'destino' : 'origen'}';
+  return 'Ubicación del chofer no disponible';
+}
+
 class _Activo extends ConsumerWidget {
   const _Activo({required this.viaje, this.ubicacion});
 
@@ -109,7 +126,7 @@ class _Activo extends ConsumerWidget {
     final vehiculo = viaje.vehiculo;
     final mapa = ref.watch(constructorMapaProvider);
     final texto = Theme.of(context).textTheme;
-    final aproximandose = viaje.estado == EstadoViaje.aceptado || viaje.estado == EstadoViaje.enCamino;
+    final eta = ref.watch(etaViajeProvider);
 
     return Column(
       children: [
@@ -148,11 +165,7 @@ class _Activo extends ConsumerWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(viaje.estado.texto, style: texto.titleLarge),
-              if (aproximandose && ubicacion != null)
-                // Sin ETA real en v1: distancia en línea recta hasta el origen (ver Decisiones).
-                Text(
-                  'A ${formatearDistancia(distanciaMetros(ubicacion!.posicion, viaje.origen.coordenada))} del origen',
-                ),
+              if (textoEta(eta) case final linea?) Text(linea),
               const SizedBox(height: 8),
               if (chofer != null) Text(chofer.nombre, style: texto.titleMedium),
               if (vehiculo != null) Text([vehiculo.descripcion, ?vehiculo.color].join(' · ')),

@@ -46,6 +46,22 @@ void main() {
     expect(http.pedidos.single.headers['Authorization'], 'Bearer 1|abc');
   });
 
+  test('la ETA sale por GET viajes/{id}/eta con Bearer', () async {
+    http.responder(
+      'GET',
+      'viajes/7/eta',
+      200,
+      '{"hacia":"origen","segundos":240,"metros":1850,"calculado_en":"2026-10-01T12:00:00+00:00","ubicacion_actualizada_en":null}',
+    );
+    api.cliente.token = '1|abc';
+
+    final eta = await api.eta(7);
+
+    expect(eta.segundos, 240);
+    expect(http.pedidos.single.uri.path, '/api/viajes/7/eta');
+    expect(http.pedidos.single.headers['Authorization'], 'Bearer 1|abc');
+  });
+
   test('401 lanza SesionInvalida y avisa', () async {
     http.responder('GET', 'yo', 401, p.noAutenticado);
 

@@ -132,6 +132,34 @@ void main() {
     expect(d.choferes.single.reservasDelDia, 0);
   });
 
+  test('lee la ETA con y sin datos', () {
+    final e = Eta.fromJson({
+      'hacia': 'origen',
+      'segundos': 240,
+      'metros': 1850,
+      'calculado_en': '2026-10-01T12:00:00+00:00',
+      'ubicacion_actualizada_en': '2026-10-01T08:59:55-03:00',
+    });
+    expect(e.hacia, 'origen');
+    expect(e.segundos, 240);
+    expect(e.metros, 1850);
+    expect(e.calculadoEn, DateTime.utc(2026, 10, 1, 12));
+    expect(e.ubicacionActualizadaEn, DateTime.utc(2026, 10, 1, 11, 59, 55));
+    expect(e.ubicacionActualizadaEn!.isUtc, isTrue);
+
+    final sin = Eta.fromJson({
+      'hacia': 'destino',
+      'segundos': null,
+      'metros': null,
+      'calculado_en': '2026-10-01T12:00:00+00:00',
+      'ubicacion_actualizada_en': null,
+    });
+    expect(sin.hacia, 'destino');
+    expect(sin.segundos, isNull);
+    expect(sin.metros, isNull);
+    expect(sin.ubicacionActualizadaEn, isNull);
+  });
+
   test('acepta coordenadas enteras y escribe fechas en UTC con Z', () {
     expect(Lugar.fromJson({'lat': -26, 'lng': -65, 'direccion': null}).coordenada, const Coordenada(-26, -65));
     expect(escribirFecha(DateTime.utc(2026, 10, 2, 13)), '2026-10-02T13:00:00.000Z');

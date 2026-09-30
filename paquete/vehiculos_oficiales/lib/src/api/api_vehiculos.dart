@@ -31,6 +31,8 @@ class ApiVehiculos {
 
   Future<MisViajes> misViajes() async => MisViajes.fromJson(await cliente.getMapa('viajes'));
 
+  Future<Eta> eta(int viajeId) async => Eta.fromJson(await cliente.getMapa('viajes/$viajeId/eta'));
+
   Future<Viaje> pedirViaje(PedidoViaje pedido) async =>
       Viaje.fromJson(await cliente.postMapa('viajes', datos: pedido.toJson()));
 

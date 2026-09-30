@@ -53,6 +53,16 @@ class ApiFalsa extends ApiVehiculos {
   final cancelaciones = <(int, String?)>[];
   Viaje? respuestaPedido;
   ErrorApi? errorPedido;
+  Eta? etaRespuesta;
+  ErrorApi? fallarEta;
+  int consultasEta = 0;
+
+  @override
+  Future<Eta> eta(int viajeId) async {
+    consultasEta++;
+    if (fallarEta != null) throw fallarEta!;
+    return etaRespuesta ?? (throw StateError('Sin ETA preparada'));
+  }
 
   @override
   Future<ViajeActual> viajeActual() async {

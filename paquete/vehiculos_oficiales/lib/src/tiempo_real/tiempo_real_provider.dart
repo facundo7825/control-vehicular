@@ -17,6 +17,9 @@ final tiempoRealProvider = Provider<TiempoReal>((ref) {
 /// Spec 6: con el WebSocket caído se consulta la API cada 10 s.
 final intervaloRespaldoProvider = Provider<Duration>((ref) => const Duration(seconds: 10));
 
+/// Cada cuánto se vuelve a pedir la llegada estimada del viaje activo (el backend la cachea 30 s).
+final intervaloEtaProvider = Provider<Duration>((ref) => const Duration(seconds: 30));
+
 /// Estado del socket, para avisar en pantalla cuando se está actualizando por sondeo.
 final estadoConexionProvider = NotifierProvider<EstadoConexionNotifier, EstadoConexion>(EstadoConexionNotifier.new);
 

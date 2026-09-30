@@ -19,6 +19,14 @@ String viajeJson({String estado = 'aceptado', String modo = 'mas_cercano', bool 
     ..['modo'] = modo,
 );
 
+String etaJson({String hacia = 'origen', int? segundos = 240, int? metros = 1850}) => jsonEncode({
+  'hacia': hacia,
+  'segundos': segundos,
+  'metros': metros,
+  'calculado_en': '2026-10-01T12:00:00+00:00',
+  'ubicacion_actualizada_en': null,
+});
+
 void main() {
   late EntornoPrueba e;
   late TiempoRealFalso tr;
@@ -65,6 +73,7 @@ void main() {
 
   testWidgets('viaje activo: chofer, vehículo, llamar y cambios de estado en vivo', (tester) async {
     e.http.responder('GET', 'viajes/actual', 200, actualCon(p.viajeAceptado));
+    e.http.responder('GET', 'viajes/1/eta', 200, etaJson());
 
     await abrir(tester);
     expect(find.text('Chofer asignado'), findsWidgets);
@@ -78,7 +87,7 @@ void main() {
     tr.emitir('viaje.1', Eventos.viajeActualizado, p.json(viajeJson(estado: 'en_camino')));
     await tester.pumpAndSettle();
     expect(find.text('El chofer va en camino'), findsWidgets);
-    expect(find.textContaining('km del origen'), findsOneWidget);
+    expect(find.text('Llega en ~4 min'), findsOneWidget);
     expect(find.byKey(const Key('marcador-chofer')), findsOneWidget);
 
     tr.emitir('viaje.1', Eventos.viajeActualizado, p.json(viajeJson(estado: 'en_curso')));
@@ -89,6 +98,7 @@ void main() {
 
   testWidgets('con el socket caído avisa y se mantiene al día consultando cada 10 s', (tester) async {
     tr = TiempoRealFalso(estado: EstadoConexion.desconectado);
+    e.http.responder('GET', 'viajes/1/eta', 200, etaJson());
     e.http.responder('GET', 'viajes/actual', 200, actualCon(p.viajeAceptado));
     e.http.responder('GET', 'viajes/actual', 200, actualCon(viajeJson(estado: 'llego')));
     e.http.responder('GET', 'choferes', 200, p.choferes);
@@ -130,6 +140,7 @@ void main() {
   });
 
   testWidgets('viaje finalizado: volver al mapa', (tester) async {
+    e.http.responder('GET', 'viajes/1/eta', 200, etaJson());
     e.http.responder('GET', 'viajes/actual', 200, actualCon(p.viajeAceptado));
 
     await abrir(tester);
@@ -140,5 +151,67 @@ void main() {
     await tester.tap(find.text('Volver al mapa'));
     await tester.pumpAndSettle();
     expect(find.byType(InicioSolicitante), findsOneWidget);
+  });
+
+  group('línea de llegada estimada', () {
+    Future<void> conEta(WidgetTester tester, {required String estado, required String eta}) async {
+      e.http.responder('GET', 'viajes/actual', 200, actualCon(viajeJson(estado: estado)));
+      e.http.responder('GET', 'viajes/1/eta', 200, eta);
+      await abrir(tester);
+    }
+
+    testWidgets('hacia el origen con tiempo: minutos redondeados hacia arriba', (tester) async {
+      await conEta(tester, estado: 'en_camino', eta: etaJson(segundos: 241));
+      expect(find.text('Llega en ~5 min'), findsOneWidget);
+    });
+
+    testWidgets('menos de un minuto se muestra como 1 min', (tester) async {
+      await conEta(tester, estado: 'en_camino', eta: etaJson(segundos: 20));
+      expect(find.text('Llega en ~1 min'), findsOneWidget);
+    });
+
+    testWidgets('con segundos en 0 no agrega nada', (tester) async {
+      await conEta(tester, estado: 'en_camino', eta: etaJson(segundos: 0, metros: 0));
+      expect(find.textContaining('Llega en'), findsNothing);
+      expect(find.textContaining('no disponible'), findsNothing);
+      expect(find.textContaining('del origen'), findsNothing);
+    });
+
+    testWidgets('hacia el destino con tiempo', (tester) async {
+      await conEta(
+        tester,
+        estado: 'en_curso',
+        eta: etaJson(hacia: 'destino', segundos: 600),
+      );
+      expect(find.text('Llegada a destino en ~10 min'), findsOneWidget);
+    });
+
+    testWidgets('sin tiempo pero con distancia: línea recta', (tester) async {
+      await conEta(tester, estado: 'en_camino', eta: etaJson(segundos: null, metros: 1850));
+      expect(find.text('A 1,9 km del origen'), findsOneWidget);
+    });
+
+    testWidgets('sin tiempo ni distancia hacia el destino: del destino', (tester) async {
+      await conEta(
+        tester,
+        estado: 'en_curso',
+        eta: etaJson(hacia: 'destino', segundos: null, metros: 500),
+      );
+      expect(find.text('A 500 m del destino'), findsOneWidget);
+    });
+
+    testWidgets('sin ubicación del chofer', (tester) async {
+      await conEta(tester, estado: 'en_camino', eta: etaJson(segundos: null, metros: null));
+      expect(find.text('Ubicación del chofer no disponible'), findsOneWidget);
+    });
+
+    testWidgets('mientras carga no muestra la línea', (tester) async {
+      e.http.responder('GET', 'viajes/actual', 200, actualCon(viajeJson(estado: 'en_camino')));
+      e.http.responder('GET', 'viajes/1/eta', 500, '{"message":"Server Error"}');
+      await abrir(tester);
+      expect(find.textContaining('Llega en'), findsNothing);
+      expect(find.textContaining('no disponible'), findsNothing);
+      expect(find.text('El chofer va en camino'), findsWidgets);
+    });
   });
 }
