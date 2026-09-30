@@ -1,0 +1,193 @@
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
+import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real.dart';
+import 'package:vehiculos_oficiales/src/ubicacion/ubicador.dart';
+
+import '../fixtures/payloads.dart' as p;
+import '../soporte/dobles.dart';
+import '../soporte/entorno_prueba.dart';
+import '../soporte/montar.dart';
+
+const _reservado =
+    '[{"id":3,"nombre":"Luis Díaz","estado":"reservado_pronto","lat":-26.83,"lng":-65.21,"rumbo":null,"actualizado_en":"2026-10-01T12:00:00+00:00","vehiculo":{"patente":"AC456EF","marca":"Fiat","modelo":"Cronos","color":null}}]';
+
+void main() {
+  late EntornoPrueba e;
+  late UbicadorFalso ubicador;
+
+  setUp(() {
+    e = EntornoPrueba();
+    e.http.responder('POST', 'auth/intercambio', 200, p.intercambio);
+    e.http.responder('GET', 'viajes/actual', 200, p.viajeActualVacio);
+    e.http.responder('GET', 'choferes', 200, p.choferes);
+    ubicador = UbicadorFalso(const Coordenada(-26.8241, -65.2226));
+  });
+
+  Future<void> abrir(WidgetTester tester) =>
+      montarModulo(tester, e, extra: [ubicadorProvider.overrideWithValue(ubicador)]);
+
+  Map<String, dynamic> ultimoCuerpo() => jsonDecode(e.http.pedidos.last.cuerpo) as Map<String, dynamic>;
+
+  testWidgets('muestra los choferes en turno; el libre en verde', (tester) async {
+    await abrir(tester);
+
+    expect(find.text('choferLibre: Carlos Gómez · Libre'), findsOneWidget);
+  });
+
+  testWidgets('un chofer reservado pronto se ve pero no se puede elegir', (tester) async {
+    e = EntornoPrueba();
+    e.http.responder('POST', 'auth/intercambio', 200, p.intercambio);
+    e.http.responder('GET', 'viajes/actual', 200, p.viajeActualVacio);
+    e.http.responder('GET', 'choferes', 200, _reservado);
+
+    await abrir(tester);
+    await tester.tap(find.text('choferNoDisponible: Luis Díaz · Reservado pronto'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('no se le pueden pedir viajes ahora'), findsOneWidget);
+    expect(tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Pedir a este chofer')).onPressed, isNull);
+  });
+
+  testWidgets('pedir el más cercano con mi ubicación y un destino marcado en el mapa', (tester) async {
+    e.http.responder('POST', 'viajes', 201, p.viajeOfrecido);
+    e.http.responder('GET', 'viajes/actual', 200, p.viajeActualVacio);
+
+    await abrir(tester);
+    expect(tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Pedir el más cercano')).onPressed, isNull);
+
+    await tester.tap(find.byTooltip('Usar mi ubicación'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('tocar-mapa'))); // después del origen se marca el destino
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Direcciones y motivo (opcional)'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextField, 'Dirección de destino'), 'Tribunales');
+    await tester.enterText(find.widgetWithText(TextField, 'Motivo'), 'Audiencia');
+    await tester.tap(find.text('Pedir el más cercano'));
+    await esperar(tester);
+
+    expect(ultimoCuerpo(), {
+      'modo': 'mas_cercano',
+      'origen_lat': -26.8241,
+      'origen_lng': -65.2226,
+      'destino_lat': puntoTocado.lat,
+      'destino_lng': puntoTocado.lng,
+      'destino_direccion': 'Tribunales',
+      'motivo': 'Audiencia',
+    });
+    expect(find.text('Buscando el chofer más cercano…'), findsOneWidget);
+  });
+
+  testWidgets('pedir a un chofer elegido en el mapa', (tester) async {
+    e.http.responder('POST', 'viajes', 201, jsonEncode(p.json(p.viajeOfrecido)..['modo'] = 'especifico'));
+
+    await abrir(tester);
+    await tester.tap(find.text('choferLibre: Carlos Gómez · Libre'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Pedir a este chofer'));
+    await tester.pumpAndSettle();
+    expect(find.text('Chofer: Carlos Gómez'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('tocar-mapa')));
+    await tester.tap(find.text('Destino'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('tocar-mapa')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Pedir a Carlos Gómez'));
+    await esperar(tester);
+
+    expect(ultimoCuerpo()['modo'], 'especifico');
+    expect(ultimoCuerpo()['chofer_id'], 2);
+    expect(find.text('Esperando que el chofer acepte…'), findsOneWidget);
+  });
+
+  testWidgets('sin permiso de ubicación se explica cómo marcar el origen', (tester) async {
+    ubicador.posicion = null;
+
+    await abrir(tester);
+    await tester.tap(find.byTooltip('Usar mi ubicación'));
+    await tester.pump();
+
+    expect(find.text('No pudimos obtener tu ubicación. Marcá el origen tocando el mapa.'), findsOneWidget);
+  });
+
+  testWidgets('si el backend rechaza el pedido se muestra su mensaje', (tester) async {
+    e.http.responder('POST', 'viajes', 422, '{"message":"Ya ten\\u00e9s un viaje en curso."}');
+
+    await abrir(tester);
+    await tester.tap(find.byKey(const Key('tocar-mapa')));
+    await tester.tap(find.byKey(const Key('tocar-mapa')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Pedir el más cercano'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Ya tenés un viaje en curso.'), findsOneWidget);
+  });
+
+  testWidgets('con un viaje en curso al abrir va a su pantalla; al volver ofrece verlo', (tester) async {
+    e = EntornoPrueba();
+    e.http.responder('POST', 'auth/intercambio', 200, p.intercambio);
+    e.http.responder('GET', 'viajes/actual', 200, '{"viaje":${p.viajeAceptado},"oferta":null}');
+    e.http.responder('GET', 'choferes', 200, p.choferes);
+
+    await abrir(tester);
+    expect(find.text('Carlos Gómez'), findsOneWidget);
+
+    await tester.binding.handlePopRoute(); // "atrás" del sistema: vuelve al mapa, no cierra el módulo
+    await tester.pumpAndSettle();
+    expect(find.text('Tenés un viaje en curso.'), findsOneWidget);
+
+    await tester.tap(find.text('Ver'));
+    await tester.pumpAndSettle();
+    expect(find.text('Chofer asignado'), findsWidgets);
+  });
+
+  testWidgets('las direcciones y el motivo tienen el límite del backend (255 caracteres)', (tester) async {
+    await abrir(tester);
+    await tester.tap(find.text('Direcciones y motivo (opcional)'));
+    await tester.pumpAndSettle();
+
+    expect(tester.widgetList<TextField>(find.byType(TextField)).map((c) => c.maxLength), [255, 255, 255]);
+  });
+
+  testWidgets('después de volver al mapa, las novedades del mismo viaje no lo vuelven a abrir', (tester) async {
+    e = EntornoPrueba();
+    e.http.responder('POST', 'auth/intercambio', 200, p.intercambio);
+    e.http.responder('GET', 'viajes/actual', 200, '{"viaje":${p.viajeAceptado},"oferta":null}');
+    e.http.responder('GET', 'choferes', 200, p.choferes);
+    final tr = TiempoRealFalso();
+
+    await montarModulo(tester, e, tiempoReal: tr, extra: [ubicadorProvider.overrideWithValue(ubicador)]);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Tenés un viaje en curso.'), findsOneWidget);
+
+    tr.emitir('viaje.1', Eventos.choferUbicacion, p.json(p.eventoUbicacion));
+    tr.emitir('viaje.1', Eventos.viajeActualizado, p.json(p.viajeAceptado)..['estado'] = 'en_camino');
+    await tester.pumpAndSettle();
+
+    expect(find.text('Tenés un viaje en curso.'), findsOneWidget);
+    expect(find.text('El chofer va en camino'), findsNothing);
+  });
+
+  testWidgets('"Elegir otro" vuelve al mapa con el mismo origen y destino', (tester) async {
+    e = EntornoPrueba();
+    e.http.responder('POST', 'auth/intercambio', 200, p.intercambio);
+    final sinChofer = p.json(p.viajeOfrecido)
+      ..['estado'] = 'sin_chofer'
+      ..['modo'] = 'especifico';
+    e.http.responder('GET', 'viajes/actual', 200, jsonEncode({'viaje': sinChofer, 'oferta': null}));
+    e.http.responder('GET', 'choferes', 200, p.choferes);
+
+    await abrir(tester);
+    await tester.tap(find.text('Elegir otro'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Plaza Independencia'), findsOneWidget);
+    expect(find.text('Tribunales'), findsOneWidget);
+    expect(tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Pedir el más cercano')).onPressed, isNotNull);
+  });
+}

@@ -1,0 +1,149 @@
+import 'dart:async';
+
+import 'package:vehiculos_oficiales/src/api/api_vehiculos.dart';
+import 'package:vehiculos_oficiales/src/api/cliente_api.dart';
+import 'package:vehiculos_oficiales/src/api/errores_api.dart';
+import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
+import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real.dart';
+import 'package:vehiculos_oficiales/src/ubicacion/ubicador.dart';
+
+import '../fixtures/payloads.dart' as p;
+import 'adaptador_falso.dart';
+import 'entorno_prueba.dart';
+
+const solicitante = Usuario(id: 1, nombre: 'Ana Pérez', cargo: 'Secretaria', rol: Rol.solicitante);
+const chofer = Usuario(id: 2, nombre: 'Carlos Gómez', cargo: 'Chofer', rol: Rol.chofer);
+
+/// Un viaje real (fixture) con el estado pedido. `conChofer` agrega chofer 2 y vehículo.
+Viaje viaje({
+  int id = 1,
+  String estado = 'ofrecido',
+  bool conChofer = false,
+  bool obligatorio = false,
+  String tipo = 'inmediato',
+}) {
+  final j = p.json(conChofer ? p.viajeAceptado : p.viajeOfrecido)
+    ..['id'] = id
+    ..['estado'] = estado
+    ..['obligatorio'] = obligatorio
+    ..['tipo'] = tipo;
+  return Viaje.fromJson(j);
+}
+
+Json jsonViaje(Viaje v, {bool conChofer = true}) {
+  final j = p.json(conChofer ? p.viajeAceptado : p.viajeOfrecido)
+    ..['id'] = v.id
+    ..['estado'] = v.estado.valor
+    ..['obligatorio'] = v.obligatorio
+    ..['tipo'] = v.tipo.name;
+  return j;
+}
+
+/// API con respuestas programables. Lo que no se programa falla como "sin respuesta preparada".
+class ApiFalsa extends ApiVehiculos {
+  ApiFalsa() : super(ClienteApi(baseApi: configPrueba.apiUri, alRecibir401: () {}, adaptador: AdaptadorFalso()));
+
+  ViajeActual actual = ViajeActual.vacio;
+  MisViajes mis = const MisViajes(proximas: [], historial: []);
+  List<ChoferEnMapa> listaChoferes = [];
+  ErrorApi? fallarConsultas;
+
+  /// Solo para `choferes()` (además de [fallarConsultas]).
+  ErrorApi? fallarChoferes;
+  int consultasActual = 0;
+  int consultasChoferes = 0;
+  final pedidos = <PedidoViaje>[];
+  final cancelaciones = <(int, String?)>[];
+  Viaje? respuestaPedido;
+  ErrorApi? errorPedido;
+  Eta? etaRespuesta;
+  ErrorApi? fallarEta;
+  int consultasEta = 0;
+
+  @override
+  Future<Eta> eta(int viajeId) async {
+    consultasEta++;
+    if (fallarEta != null) throw fallarEta!;
+    return etaRespuesta ?? (throw StateError('Sin ETA preparada'));
+  }
+
+  @override
+  Future<ViajeActual> viajeActual() async {
+    consultasActual++;
+    if (fallarConsultas != null) throw fallarConsultas!;
+    return actual;
+  }
+
+  @override
+  Future<MisViajes> misViajes() async => mis;
+
+  @override
+  Future<List<ChoferEnMapa>> choferes() async {
+    consultasChoferes++;
+    if (fallarConsultas != null) throw fallarConsultas!;
+    if (fallarChoferes != null) throw fallarChoferes!;
+    return listaChoferes;
+  }
+
+  @override
+  Future<Viaje> pedirViaje(PedidoViaje pedido) async {
+    pedidos.add(pedido);
+    if (errorPedido != null) throw errorPedido!;
+    return respuestaPedido ?? viaje();
+  }
+
+  @override
+  Future<Viaje> cancelarViaje(int viajeId, {String? motivo}) async {
+    cancelaciones.add((viajeId, motivo));
+    return viaje(id: viajeId, estado: 'cancelado');
+  }
+}
+
+/// Reverb en memoria: se controla el estado de la conexión y se emiten eventos a mano.
+class TiempoRealFalso implements TiempoReal {
+  TiempoRealFalso({EstadoConexion estado = EstadoConexion.conectado}) : _estado = estado;
+
+  EstadoConexion _estado;
+  final _estados = StreamController<EstadoConexion>.broadcast(sync: true);
+  final _canales = <String, StreamController<EventoTiempoReal>>{};
+
+  Set<String> get canalesActivos => _canales.keys.toSet();
+
+  @override
+  EstadoConexion get estado => _estado;
+
+  @override
+  Stream<EstadoConexion> get estados => _estados.stream;
+
+  void cambiar(EstadoConexion e) {
+    _estado = e;
+    _estados.add(e);
+  }
+
+  void emitir(String canal, String evento, Json datos) => _canales[canal]?.add(EventoTiempoReal(canal, evento, datos));
+
+  @override
+  Stream<EventoTiempoReal> canal(String nombre) {
+    final c = _canales[nombre] ??= StreamController<EventoTiempoReal>.broadcast(
+      sync: true,
+      onCancel: () => _canales.remove(nombre),
+    );
+    return c.stream;
+  }
+
+  @override
+  void conectar() {}
+
+  @override
+  void cerrar() {}
+}
+
+class UbicadorFalso implements Ubicador {
+  UbicadorFalso([this.posicion]);
+
+  /// Nula = permiso denegado o GPS apagado.
+  Coordenada? posicion;
+
+  @override
+  Future<Coordenada?> actual() async => posicion;
+}
