@@ -318,4 +318,61 @@ void main() {
       },
     );
   });
+
+  group('un evento atrasado no revive un viaje cancelado o finalizado', () {
+    for (final final_ in ['cancelado', 'finalizado']) {
+      test('$final_: tras descartar, un "aceptado" tardío del mismo viaje se ignora', () {
+        fakeAsync((async) {
+          api.actual = ViajeActual(viaje: viaje(estado: 'ofrecido'));
+          final c = crear();
+          async.flushMicrotasks();
+
+          tr.emitir('viaje.1', Eventos.viajeActualizado, jsonViaje(viaje(estado: final_, conChofer: true)));
+          c.read(viajeActualProvider.notifier).descartar();
+          tr.emitir('viaje.1', Eventos.viajeActualizado, p.json(p.viajeAceptado));
+          async.flushMicrotasks();
+
+          expect(leer(c).viaje, isNull);
+        });
+      });
+    }
+
+    test('un poll que trae el viaje viejo después de verlo cancelado se ignora', () {
+      fakeAsync((async) {
+        tr = TiempoRealFalso(estado: EstadoConexion.desconectado);
+        api.actual = ViajeActual(viaje: viaje(estado: 'aceptado', conChofer: true));
+        final c = crear();
+        async.flushMicrotasks();
+        final notifier = c.read(viajeActualProvider.notifier);
+
+        api.actual = ViajeActual(viaje: viaje(estado: 'cancelado', conChofer: true));
+        async.elapse(const Duration(seconds: 10));
+        expect(leer(c).viaje!.estado, EstadoViaje.cancelado);
+        notifier.descartar();
+
+        api.actual = ViajeActual(viaje: viaje(estado: 'aceptado', conChofer: true));
+        async.elapse(const Duration(seconds: 10));
+
+        expect(leer(c).viaje, isNull);
+      });
+    });
+
+    test('sin_chofer no es final: un "aceptado" posterior se aplica', () {
+      fakeAsync((async) {
+        api.actual = ViajeActual(viaje: viaje(estado: 'buscando'));
+        final c = crear();
+        async.flushMicrotasks();
+
+        tr.emitir('viaje.1', Eventos.viajeActualizado, jsonViaje(viaje(estado: 'sin_chofer')));
+        c.read(viajeActualProvider.notifier).descartar();
+        tr.emitir('viaje.1', Eventos.viajeActualizado, p.json(p.viajeAceptado));
+        // descartado el viaje, el solicitante sigue sin viaje actual: lo trae el refresco
+        api.actual = ViajeActual(viaje: viaje(estado: 'aceptado', conChofer: true));
+        c.read(viajeActualProvider.notifier).refrescar();
+        async.flushMicrotasks();
+
+        expect(leer(c).viaje!.estado, EstadoViaje.aceptado);
+      });
+    });
+  });
 }

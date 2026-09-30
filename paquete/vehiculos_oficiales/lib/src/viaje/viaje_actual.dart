@@ -60,6 +60,12 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
   /// Viaje de la última oferta que el chofer aceptó (desde que toca "Aceptar").
   int? _aceptandoViajeId;
 
+  /// Viajes que se vieron `cancelado` o `finalizado` (finales en el backend; `sin_chofer` no: un administrador
+  /// puede reasignarlo). Un evento, una consulta o una respuesta atrasados (reintento de la cola del backend,
+  /// reinicio del servidor) no los devuelven a un estado activo. Acotado a los últimos [_maxFinales].
+  final _finales = <int>{};
+  static const _maxFinales = 50;
+
   late Usuario _usuario;
   late TiempoReal _tr;
 
@@ -219,7 +225,8 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
   Future<SeguimientoViaje> _consultar(Viaje? previo) async {
     final api = ref.read(apiProvider);
     final actual = await api.viajeActual();
-    var viaje = actual.viaje;
+    // Un viaje que ya se vio cancelado o finalizado no vuelve a estar activo: la consulta atrasada se ignora.
+    var viaje = actual.viaje != null && _revive(actual.viaje!) ? null : actual.viaje;
 
     // `viajes/actual` no devuelve viajes terminados: si el que se seguía desapareció mientras no había
     // socket, se busca en el historial para mostrar cómo terminó (p. ej. sin_chofer).
@@ -229,6 +236,7 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
     }
     // Un viaje ya terminado se queda en pantalla hasta que el usuario lo descarte.
     if (viaje == null && previo != null && previo.estado.terminado) viaje = previo;
+    _recordarFinal(viaje);
 
     UbicacionChofer? ubicacion = viaje?.chofer?.id == state.value?.viaje?.chofer?.id
         ? state.value?.ubicacionChofer
@@ -282,7 +290,21 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
     }
   }
 
+  static bool _esFinal(EstadoViaje e) => e == EstadoViaje.cancelado || e == EstadoViaje.finalizado;
+
+  /// Un viaje que ya se vio final y ahora aparece en un estado activo: es una novedad atrasada.
+  bool _revive(Viaje v) => !_esFinal(v.estado) && _finales.contains(v.id);
+
+  void _recordarFinal(Viaje? v) {
+    if (v == null || !_esFinal(v.estado)) return;
+    _finales.remove(v.id); // reinsertado al final: se descarta el más viejo
+    _finales.add(v.id);
+    if (_finales.length > _maxFinales) _finales.remove(_finales.first);
+  }
+
   void _aplicarViaje(Viaje v) {
+    if (_revive(v)) return;
+    _recordarFinal(v);
     final actual = state.value ?? const SeguimientoViaje();
     if (_atrasado(actual.viaje, v)) return;
     var nuevo = actual;

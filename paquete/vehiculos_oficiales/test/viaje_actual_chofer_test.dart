@@ -357,4 +357,83 @@ void main() {
       });
     });
   });
+
+  group('un evento atrasado no revive un viaje cancelado o finalizado', () {
+    for (final final_ in ['cancelado', 'finalizado']) {
+      test('$final_: tras descartar, un "en_camino" tardío del mismo viaje se ignora', () {
+        fakeAsync((async) {
+          api.actual = ViajeActual(viaje: viaje(estado: 'en_camino', conChofer: true));
+          final c = crear();
+          async.flushMicrotasks();
+
+          tr.emitir('chofer.2', Eventos.viajeActualizado, jsonViaje(viaje(estado: final_, conChofer: true)));
+          c.read(viajeActualProvider.notifier).descartar();
+          tr.emitir('chofer.2', Eventos.viajeActualizado, jsonViaje(viaje(estado: 'en_camino', conChofer: true)));
+          async.flushMicrotasks();
+
+          expect(leer(c).viaje, isNull);
+        });
+      });
+    }
+
+    test('antes de descartar, el estado final se conserva', () {
+      fakeAsync((async) {
+        api.actual = ViajeActual(viaje: viaje(estado: 'en_camino', conChofer: true));
+        final c = crear();
+        async.flushMicrotasks();
+
+        tr.emitir('chofer.2', Eventos.viajeActualizado, jsonViaje(viaje(estado: 'cancelado', conChofer: true)));
+        tr.emitir('chofer.2', Eventos.viajeActualizado, jsonViaje(viaje(estado: 'en_camino', conChofer: true)));
+
+        expect(leer(c).viaje!.estado, EstadoViaje.cancelado);
+      });
+    });
+
+    test('un refresco que trae el viaje viejo como en_camino después de verlo cancelado se ignora', () {
+      fakeAsync((async) {
+        api.actual = ViajeActual(viaje: viaje(estado: 'en_camino', conChofer: true));
+        final c = crear();
+        async.flushMicrotasks();
+        final notifier = c.read(viajeActualProvider.notifier);
+
+        tr.emitir('chofer.2', Eventos.viajeActualizado, jsonViaje(viaje(estado: 'cancelado', conChofer: true)));
+        notifier.descartar();
+        notifier.refrescar(); // el API todavía devuelve en_camino
+        async.flushMicrotasks();
+
+        expect(leer(c).viaje, isNull);
+      });
+    });
+
+    test('la respuesta de avanzar a finalizado también lo marca como final', () {
+      fakeAsync((async) {
+        api.actual = ViajeActual(viaje: viaje(estado: 'en_curso', conChofer: true));
+        final c = crear();
+        async.flushMicrotasks();
+        final notifier = c.read(viajeActualProvider.notifier);
+
+        api.respuestaAvance = viaje(estado: 'finalizado', conChofer: true);
+        notifier.avanzar(EstadoViaje.finalizado);
+        async.flushMicrotasks();
+        notifier.descartar();
+        tr.emitir('chofer.2', Eventos.viajeActualizado, jsonViaje(viaje(estado: 'en_curso', conChofer: true)));
+
+        expect(leer(c).viaje, isNull);
+      });
+    });
+
+    test('sin_chofer no es final: un "aceptado" posterior (reasignación) se aplica', () {
+      fakeAsync((async) {
+        api.actual = ViajeActual(viaje: viaje(estado: 'en_camino', conChofer: true));
+        final c = crear();
+        async.flushMicrotasks();
+
+        tr.emitir('chofer.2', Eventos.viajeActualizado, jsonViaje(viaje(estado: 'sin_chofer')));
+        c.read(viajeActualProvider.notifier).descartar();
+        tr.emitir('chofer.2', Eventos.viajeActualizado, jsonViaje(viaje(estado: 'aceptado', conChofer: true)));
+
+        expect(leer(c).viaje!.estado, EstadoViaje.aceptado);
+      });
+    });
+  });
 }
