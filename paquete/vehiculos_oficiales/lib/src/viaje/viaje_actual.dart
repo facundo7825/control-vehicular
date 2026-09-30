@@ -41,6 +41,10 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
   int? _canalViajeId;
   bool _consultando = false;
 
+  /// Cambia con cada novedad del viaje o de la oferta que no vino de [refrescar] (respuesta de una acción,
+  /// evento del socket). Una consulta que empezó antes y termina después no pisa esa novedad.
+  int _version = 0;
+
   late Usuario _usuario;
   late TiempoReal _tr;
 
@@ -66,9 +70,10 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
   Future<void> refrescar() async {
     if (_consultando) return;
     _consultando = true;
+    final version = _version;
     try {
       final nuevo = await _consultar(state.value?.viaje);
-      if (!ref.mounted) return;
+      if (!ref.mounted || version != _version) return;
       state = AsyncData(nuevo);
       _seguir(nuevo.viaje);
     } on SesionInvalida {
@@ -84,7 +89,7 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
   /// Pedido inmediato (spec 5.2 y 5.3). Los errores (422, etc.) llegan a la pantalla.
   Future<Viaje> pedir(PedidoViaje pedido) async {
     final v = await ref.read(apiProvider).pedirViaje(pedido);
-    state = AsyncData(SeguimientoViaje(viaje: v));
+    _fijar(SeguimientoViaje(viaje: v));
     _seguir(v);
     return v;
   }
@@ -93,12 +98,21 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
     final actual = state.value?.viaje;
     if (actual == null) return;
     final v = await ref.read(apiProvider).cancelarViaje(actual.id, motivo: motivo);
-    _aplicarViaje(v);
+    if (ref.mounted) _aplicarViaje(v);
+  }
+
+  /// Paso siguiente del chofer (spec 5.5): `en_camino`, `llego`, `en_curso` o `finalizado`. Los errores
+  /// (422 de una reserva que todavía no puede empezar, 403 si el viaje ya no es suyo) llegan a la pantalla.
+  Future<void> avanzar(EstadoViaje hacia) async {
+    final actual = state.value?.viaje;
+    if (actual == null) return;
+    final v = await ref.read(apiProvider).avanzarViaje(actual.id, hacia);
+    if (ref.mounted) _aplicarViaje(v);
   }
 
   /// El usuario ya vio el estado final (finalizado, cancelado, sin chofer): se vuelve al mapa.
   void descartar() {
-    state = const AsyncData(SeguimientoViaje());
+    _fijar(const SeguimientoViaje());
     _seguir(null);
   }
 
@@ -161,7 +175,7 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
       case Eventos.ofertaCreada:
         final oferta = Oferta.fromJson(e.datos);
         // Las solicitudes de reserva van a la agenda, no a la pantalla de oferta (AvisosViaje / ViajeController::actual).
-        if (oferta.viaje.tipo == TipoViaje.inmediato) state = AsyncData(actual.conOferta(oferta));
+        if (oferta.viaje.tipo == TipoViaje.inmediato) _fijar(actual.conOferta(oferta));
       case Eventos.choferUbicacion:
         final u = UbicacionChofer.fromJson(e.datos);
         if (actual.viaje?.chofer?.id == u.choferId) state = AsyncData(actual.conUbicacion(u));
@@ -170,6 +184,7 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
 
   void _aplicarViaje(Viaje v) {
     final actual = state.value ?? const SeguimientoViaje();
+    if (_atrasado(actual.viaje, v)) return;
     var nuevo = actual;
 
     if (_usuario.esChofer) {
@@ -186,9 +201,34 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
       nuevo = nuevo.conViaje(v);
     }
 
-    state = AsyncData(nuevo);
+    _fijar(nuevo);
     _seguir(nuevo.viaje);
   }
+
+  void _fijar(SeguimientoViaje s) {
+    _version++;
+    state = AsyncData(s);
+  }
+
+  /// Cuánto avanzó un viaje con chofer (0 = todavía sin chofer).
+  static int _avance(EstadoViaje e) => switch (e) {
+    EstadoViaje.buscando || EstadoViaje.ofrecido => 0,
+    EstadoViaje.aceptado => 1,
+    EstadoViaje.enCamino => 2,
+    EstadoViaje.llego => 3,
+    EstadoViaje.enCurso => 4,
+    EstadoViaje.finalizado || EstadoViaje.cancelado || EstadoViaje.sinChofer => 5,
+  };
+
+  /// Una respuesta o un evento que llega tarde (p. ej. la respuesta de "Iniciar viaje" después del evento
+  /// "cancelado") no hace retroceder el mismo viaje con el mismo chofer. Con otro chofer (reasignado,
+  /// cancelado por el chofer) sí se aplica.
+  static bool _atrasado(Viaje? actual, Viaje v) =>
+      actual != null &&
+      actual.id == v.id &&
+      actual.chofer?.id == v.chofer?.id &&
+      _avance(v.estado) > 0 &&
+      _avance(v.estado) < _avance(actual.estado);
 
   /// El solicitante escucha `viaje.{id}` (estado y posición del chofer) mientras el viaje no terminó.
   /// El chofer ya recibe `viaje.actualizado` por `chofer.{id}`.

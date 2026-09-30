@@ -40,6 +40,9 @@ class ApiChofer extends ApiFalsa {
   /// Si no es nulo, `enviarUbicacion` espera a que el test lo complete.
   Completer<void>? demoraUbicacion;
 
+  /// Si no es nulo, `viajeActual` espera a que el test lo complete (una consulta que tarda).
+  Completer<void>? demoraActual;
+
   Viaje? respuestaAceptar;
   ErrorApi? errorOferta;
   Viaje? respuestaAvance;
@@ -48,6 +51,13 @@ class ApiChofer extends ApiFalsa {
   Viaje? respuestaCancelar;
   Agenda agendaRespuesta = Agenda.vacia;
   ErrorApi? errorAgenda;
+
+  @override
+  Future<ViajeActual> viajeActual() async {
+    final consulta = super.viajeActual(); // lee `actual` al empezar, como el servidor
+    if (demoraActual != null) await demoraActual!.future;
+    return consulta;
+  }
 
   @override
   Future<Configuracion> configuracion() async {

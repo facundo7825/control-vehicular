@@ -8,6 +8,7 @@ import '../entorno.dart';
 import '../push/push_modulo.dart';
 import '../sesion/sesion.dart';
 import 'chofer/inicio_chofer.dart';
+import 'chofer/viaje_chofer.dart';
 import 'sesion/pantalla_inicio.dart';
 import 'solicitante/inicio_solicitante.dart';
 import 'solicitante/mis_viajes.dart';
@@ -24,6 +25,7 @@ abstract final class Rutas {
   static const reservar = '/solicitante/reservar';
   static const misViajes = '/solicitante/mis-viajes';
   static const chofer = '/chofer';
+  static const viajeChofer = '/chofer/viaje';
 }
 
 /// Raíz del módulo: su propio `ProviderScope` y su propio router (no toca los de la app principal).
@@ -107,7 +109,11 @@ class _RaizModuloState extends ConsumerState<_RaizModulo> {
                 GoRoute(path: 'mis-viajes', builder: (_, _) => const MisViajesPantalla()),
               ],
             ),
-            GoRoute(path: Rutas.chofer, builder: (_, _) => const InicioChofer()),
+            GoRoute(
+              path: Rutas.chofer,
+              builder: (_, _) => const InicioChofer(),
+              routes: [GoRoute(path: 'viaje', builder: (_, _) => const ViajeChofer())],
+            ),
           ],
         ),
       ],

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../api/errores_api.dart';
 import '../../chofer/turno.dart';
@@ -9,7 +10,9 @@ import '../../modelos/modelos.dart';
 import '../../sesion/sesion.dart';
 import '../../solicitante/choferes_mapa.dart';
 import '../../ubicacion/ubicador.dart';
+import '../../viaje/viaje_actual.dart';
 import '../comunes/comunes.dart';
+import '../modulo_app.dart';
 import 'inicio_chofer.dart';
 
 /// Spec 7, chofer 2 y 6: su posición, su estado, el vehículo del turno y "Finalizar turno".
@@ -28,12 +31,18 @@ class MapaChofer extends ConsumerWidget {
     final config = ref.watch(entornoProvider).config;
     final aqui = posicion.punto?.posicion;
     final texto = Theme.of(context).textTheme;
+    final hayViaje = ref.watch(viajeActualProvider).value?.viaje != null;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Vehículos oficiales'), leading: const BotonCerrarModulo()),
       body: Column(
         children: [
           const BannerConexion(),
+          if (hayViaje)
+            MaterialBanner(
+              content: const Text('Tenés un viaje en curso.'),
+              actions: [TextButton(onPressed: () => context.go(Rutas.viajeChofer), child: const Text('Ver'))],
+            ),
           if (posicion.sinGps)
             MaterialBanner(
               leading: const Icon(Icons.gps_off),

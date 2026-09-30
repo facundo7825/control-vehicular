@@ -1,18 +1,26 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../chofer/turno.dart';
+import '../../viaje/viaje_actual.dart';
 import '../comunes/comunes.dart';
 import '../modulo_app.dart';
 import 'iniciar_turno.dart';
 import 'mapa_chofer.dart';
 
-/// Entrada del chofer: sin turno, "Iniciar turno"; con turno, su mapa.
+/// Entrada del chofer: sin turno, "Iniciar turno"; con turno, su mapa. Como `InicioSolicitante`, pasa a la
+/// pantalla del viaje cuando aparece uno (el que había al abrir, uno aceptado o asignado).
 class InicioChofer extends ConsumerWidget {
   const InicioChofer({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Solo cuando aparece o cambia de viaje: las novedades del mismo no deshacen el "atrás".
+    ref.listen(viajeActualProvider, (anterior, siguiente) {
+      final id = siguiente.value?.viaje?.id;
+      if (id != null && id != anterior?.value?.viaje?.id) context.go(Rutas.viajeChofer);
+    });
     final turno = ref.watch(turnoProvider);
 
     if (turno.hasValue) {
