@@ -167,5 +167,6 @@ void main() {
 
   test('un estado desconocido es un error de formato', () {
     expect(() => EstadoViaje.desde('volando'), throwsFormatException);
+    expect(() => ModoViaje.desde('teletransporte'), throwsFormatException);
   });
 }

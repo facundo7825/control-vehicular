@@ -213,6 +213,39 @@ void main() {
     });
   });
 
+  test('un estado desconocido en un evento o en el sondeo no escapa y se conserva el estado', () {
+    fakeAsync((async) {
+      // API real sobre HTTP falso: el payload mal formado pasa por el parseo de ApiVehiculos.
+      final e = EntornoPrueba();
+      e.http.responder('GET', 'viajes/actual', 200, '{"viaje":${p.viajeAceptado},"oferta":null}');
+      e.http.responder(
+        'GET',
+        'viajes/actual',
+        200,
+        '{"viaje":${p.viajeAceptado.replaceFirst('"aceptado"', '"volando"')}}',
+      );
+      e.http.responder('GET', 'choferes', 200, p.choferes);
+      final c = e.contenedor([
+        tiempoRealProvider.overrideWithValue(tr),
+        usuarioProvider.overrideWithValue(solicitante),
+      ]);
+      c.listen(viajeActualProvider, (_, _) {});
+      async.elapse(Duration.zero);
+      expect(leer(c).viaje!.estado, EstadoViaje.aceptado);
+
+      tr.emitir('viaje.1', Eventos.viajeActualizado, p.json(p.viajeAceptado)..['estado'] = 'volando');
+      tr.emitir('viaje.1', Eventos.choferUbicacion, {'chofer_id': 2, 'lat': 'norte'});
+      expect(leer(c).viaje!.estado, EstadoViaje.aceptado);
+
+      tr.cambiar(EstadoConexion.desconectado);
+      async.elapse(const Duration(seconds: 10));
+
+      expect(e.http.pedidos.where((r) => r.uri.path.endsWith('viajes/actual')), hasLength(2));
+      expect(leer(c).viaje!.estado, EstadoViaje.aceptado);
+      expect(c.read(viajeActualProvider).hasError, isFalse);
+    });
+  });
+
   test('ignora eventos de otros viajes y ubicaciones de otros choferes', () {
     fakeAsync((async) {
       api.actual = ViajeActual(viaje: viaje(estado: 'aceptado', conChofer: true));

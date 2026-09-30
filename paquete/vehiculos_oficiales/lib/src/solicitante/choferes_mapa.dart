@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/errores_api.dart';
@@ -43,7 +44,17 @@ class ChoferesMapaNotifier extends AsyncNotifier<List<ChoferEnMapa>> {
     }
   }
 
+  /// Un evento que no se puede leer se ignora: el próximo evento o el respaldo traen el estado.
   void _alEvento(EventoTiempoReal e) {
+    try {
+      _aplicarEvento(e);
+    } catch (error) {
+      if (!esErrorDeLectura(error)) rethrow;
+      debugPrint('vehiculos_oficiales: evento ${e.nombre} ignorado, no se pudo leer: $error');
+    }
+  }
+
+  void _aplicarEvento(EventoTiempoReal e) {
     final lista = state.value;
     if (lista == null) return;
 

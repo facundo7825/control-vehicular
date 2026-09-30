@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/errores_api.dart';
@@ -134,7 +135,18 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
     return SeguimientoViaje(viaje: viaje, oferta: actual.oferta, ubicacionChofer: ubicacion);
   }
 
+  /// Un evento que no se puede leer (p. ej. un estado nuevo del backend) se ignora: el respaldo o el
+  /// próximo evento traen el estado.
   void _alEvento(EventoTiempoReal e) {
+    try {
+      _aplicarEvento(e);
+    } catch (error) {
+      if (!esErrorDeLectura(error)) rethrow;
+      debugPrint('vehiculos_oficiales: evento ${e.nombre} ignorado, no se pudo leer: $error');
+    }
+  }
+
+  void _aplicarEvento(EventoTiempoReal e) {
     final actual = state.value;
     if (actual == null) return;
 

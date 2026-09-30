@@ -114,4 +114,19 @@ void main() {
       expect(leer(c).single.nombre, 'Carlos Gómez');
     });
   });
+
+  test('un evento mal formado (estado desconocido, datos faltantes) se ignora sin escapar', () {
+    fakeAsync((async) {
+      final c = crear();
+      async.flushMicrotasks();
+
+      tr.emitir('mapa.choferes', Eventos.choferEstado, {'chofer_id': 2, 'estado': 'de_vacaciones'});
+      tr.emitir('mapa.choferes', Eventos.choferEstado, {'estado': 'libre'});
+      tr.emitir('mapa.choferes', Eventos.choferUbicacion, {'chofer_id': 2});
+      async.flushMicrotasks();
+
+      expect(leer(c).single.estado, EstadoChofer.libre);
+      expect(leer(c).single.posicion, const Coordenada(-26.8301, -65.2001));
+    });
+  });
 }

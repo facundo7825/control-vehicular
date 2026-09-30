@@ -48,7 +48,10 @@ enum ModoViaje {
 
   final String valor;
 
-  static ModoViaje desde(String valor) => values.firstWhere((e) => e.valor == valor);
+  static ModoViaje desde(String valor) => values.firstWhere(
+    (e) => e.valor == valor,
+    orElse: () => throw FormatException('Modo de viaje desconocido: $valor'),
+  );
 }
 
 /// `ViajeResource` del backend (también es el payload del evento `viaje.actualizado`).

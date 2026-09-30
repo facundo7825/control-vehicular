@@ -117,6 +117,20 @@ void main() {
     await expectLater(api.misViajes(), throwsA(isA<ErrorServidor>()));
   });
 
+  test('una respuesta que no se puede leer (estado desconocido, tipos cambiados) es ErrorServidor', () async {
+    http.responder('GET', 'viajes/actual', 200, p.viajeActualSolicitante.replaceFirst('"ofrecido"', '"volando"'));
+    http.responder('GET', 'choferes', 200, p.choferes.replaceFirst('"libre"', '"de_vacaciones"'));
+    http.responder('GET', 'viajes', 200, '{"proximas":null,"historial":[]}');
+    http.responder('GET', 'viajes/1/eta', 200, '{"minutos":"muchos"}');
+    http.responder('POST', 'auth/intercambio', 200, '[]');
+
+    await expectLater(api.viajeActual(), throwsA(isA<ErrorServidor>()));
+    await expectLater(api.choferes(), throwsA(isA<ErrorServidor>()));
+    await expectLater(api.misViajes(), throwsA(isA<ErrorServidor>()));
+    await expectLater(api.eta(1), throwsA(isA<ErrorServidor>()));
+    await expectLater(api.intercambiar('sim|1|A|B'), throwsA(isA<ErrorServidor>()));
+  });
+
   test('pedir un viaje manda los campos de ViajeController::store', () async {
     http.responder('POST', 'viajes', 201, p.viajeOfrecido);
 

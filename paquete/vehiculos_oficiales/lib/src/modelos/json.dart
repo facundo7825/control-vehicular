@@ -16,3 +16,7 @@ String escribirFecha(DateTime d) => d.toUtc().toIso8601String();
 Json leerMapa(Object? v) => (v as Map).cast<String, dynamic>();
 
 List<Json> leerLista(Object? v) => (v as List).map(leerMapa).toList();
+
+/// Lo que lanza la lectura de un JSON que no tiene la forma esperada (un valor de enum nuevo, un campo que
+/// falta o cambió de tipo). Quien lee datos del backend lo trata como "respuesta inválida", no como un bug.
+bool esErrorDeLectura(Object e) => e is FormatException || e is TypeError || e is StateError || e is ArgumentError;
