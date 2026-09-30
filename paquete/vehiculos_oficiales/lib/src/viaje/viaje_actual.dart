@@ -54,6 +54,9 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
   /// evento del socket). Una consulta que empezó antes y termina después no pisa esa novedad.
   int _version = 0;
 
+  /// Se pidió un refresco mientras había uno en vuelo: al terminar se hace uno más (nunca más de uno).
+  bool _pendiente = false;
+
   late Usuario _usuario;
   late TiempoReal _tr;
 
@@ -76,26 +79,45 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
   }
 
   /// Consulta la API y reemplaza el estado. La usan el respaldo, la reconexión y los avisos push.
+  ///
+  /// Si se pide con otra consulta en vuelo, o si la que estaba en vuelo se descartó porque una novedad
+  /// cambió el estado, se hace una más al terminar (una sola): la reconexión refresca una única vez y no
+  /// puede quedarse sin su estado completo.
   Future<void> refrescar() async {
-    if (_consultando) return;
+    if (_consultando) {
+      _pendiente = true;
+      return;
+    }
     _consultando = true;
+    _pendiente = false;
+    try {
+      final descartada = await _refrescarUna();
+      if (ref.mounted && (descartada || _pendiente)) await _refrescarUna();
+    } finally {
+      _consultando = false;
+      _pendiente = false;
+    }
+  }
+
+  /// Una consulta completa. Devuelve `true` si su resultado se descartó porque el estado cambió mientras
+  /// tanto. Los errores de la API no se propagan (corre sin await desde el timer y el listener).
+  Future<bool> _refrescarUna() async {
     final version = _version;
     final antes = state.value;
     try {
       var nuevo = await _consultar(antes?.viaje);
-      if (!ref.mounted || version != _version) return;
+      if (!ref.mounted) return false;
+      if (version != _version) return true;
       // Sin socket, un viaje asignado sin oferta aparece recién acá.
       if (nuevo.viaje case final v? when _llegoSinOferta(antes, v)) nuevo = nuevo.conAsignado(true);
       state = AsyncData(nuevo);
       _seguir(nuevo.viaje);
     } on SesionInvalida {
-      // `ClienteApi` ya avisó la sesión inválida (una sola vez); acá no hay nada más que hacer y este
-      // método corre sin await desde el timer y el listener, así que no puede propagar el error.
+      // `ClienteApi` ya avisó la sesión inválida (una sola vez); acá no hay nada más que hacer.
     } on ErrorApi {
       // Sin red o error pasajero: se conserva lo último que se sabía y se reintenta en el próximo ciclo.
-    } finally {
-      _consultando = false;
     }
+    return false;
   }
 
   /// Pedido inmediato (spec 5.2 y 5.3). Los errores (422, etc.) llegan a la pantalla.
@@ -270,10 +292,20 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
       antes?.viaje?.id != v.id &&
       antes?.oferta?.viaje.id != v.id;
 
+  /// Aplica una novedad. Solo cuenta como cambio (y descarta las consultas en vuelo) si el viaje, la oferta
+  /// o el aviso de asignado son otros: un evento repetido no tira una consulta que trae el estado completo.
   void _fijar(SeguimientoViaje s) {
-    _version++;
+    if (!_equivalente(state.value, s)) _version++;
     state = AsyncData(s);
   }
+
+  static bool _equivalente(SeguimientoViaje? a, SeguimientoViaje b) =>
+      a != null &&
+      a.asignadoSinOferta == b.asignadoSinOferta &&
+      a.oferta?.id == b.oferta?.id &&
+      a.viaje?.id == b.viaje?.id &&
+      a.viaje?.estado == b.viaje?.estado &&
+      a.viaje?.chofer?.id == b.viaje?.chofer?.id;
 
   /// Cuánto avanzó un viaje con chofer (0 = todavía sin chofer).
   static int _avance(EstadoViaje e) => switch (e) {

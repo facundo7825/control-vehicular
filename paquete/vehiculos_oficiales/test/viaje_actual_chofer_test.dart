@@ -93,6 +93,9 @@ void main() {
       async.elapse(const Duration(seconds: 10)); // empieza la consulta, que ve "aceptado"
       c.read(viajeActualProvider.notifier).avanzar(EstadoViaje.enCamino);
       async.flushMicrotasks();
+      // El servidor ya está en "enCamino" (la consulta en vuelo vio "aceptado" al empezar): la repetición
+      // que sigue a la descartada trae el estado nuevo.
+      api.actual = ViajeActual(viaje: viaje(estado: 'en_camino', conChofer: true));
       api.demoraActual!.complete();
       async.flushMicrotasks();
 
@@ -227,6 +230,72 @@ void main() {
         async.flushMicrotasks();
 
         expect(leer(c).asignadoSinOferta, isFalse);
+      });
+    });
+  });
+
+  group('refresco completo al reconectar', () {
+    /// Socket caído, viaje "aceptado"; el servidor ya está en "llego" y la consulta de la reconexión queda
+    /// en vuelo (ve "llego" al empezar).
+    ProviderContainer conReconexionEnVuelo(FakeAsync async) {
+      tr = TiempoRealFalso(estado: EstadoConexion.desconectado);
+      api.actual = ViajeActual(viaje: viaje(estado: 'aceptado', conChofer: true));
+      final c = crear();
+      async.flushMicrotasks();
+
+      api.actual = ViajeActual(viaje: viaje(estado: 'llego', conChofer: true));
+      api.demoraActual = Completer<void>();
+      final antes = api.consultasActual;
+      tr.cambiar(EstadoConexion.conectado);
+      async.flushMicrotasks();
+      expect(api.consultasActual, antes + 1);
+      return c;
+    }
+
+    test('un evento que cambia algo durante la consulta la descarta, y se consulta otra vez una sola vez', () {
+      fakeAsync((async) {
+        final c = conReconexionEnVuelo(async);
+        final antes = api.consultasActual;
+
+        final inmediata = p.json(p.viajeActualChofer)['oferta'] as Map<String, dynamic>;
+        tr.emitir('chofer.2', Eventos.ofertaCreada, {...inmediata, 'oferta_id': inmediata['id']});
+        api.demoraActual!.complete();
+        async.flushMicrotasks();
+
+        expect(api.consultasActual, antes + 1);
+        expect(leer(c).viaje!.estado, EstadoViaje.llego);
+      });
+    });
+
+    test('un evento que no cambia nada no descarta la consulta en vuelo', () {
+      fakeAsync((async) {
+        final c = conReconexionEnVuelo(async);
+        final antes = api.consultasActual;
+
+        tr.emitir('chofer.2', Eventos.viajeActualizado, jsonViaje(viaje(estado: 'aceptado', conChofer: true)));
+        api.demoraActual!.complete();
+        async.flushMicrotasks();
+
+        expect(api.consultasActual, antes); // ninguna consulta más
+        expect(leer(c).viaje!.estado, EstadoViaje.llego);
+      });
+    });
+
+    test('refrescar() durante una consulta en vuelo encadena exactamente una más', () {
+      fakeAsync((async) {
+        final c = conReconexionEnVuelo(async);
+        final antes = api.consultasActual;
+        final notifier = c.read(viajeActualProvider.notifier);
+
+        notifier.refrescar();
+        notifier.refrescar();
+        notifier.refrescar();
+        api.actual = ViajeActual(viaje: viaje(estado: 'en_curso', conChofer: true));
+        api.demoraActual!.complete();
+        async.flushMicrotasks();
+
+        expect(api.consultasActual, antes + 1);
+        expect(leer(c).viaje!.estado, EstadoViaje.enCurso);
       });
     });
   });
