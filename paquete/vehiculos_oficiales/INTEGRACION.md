@@ -80,6 +80,8 @@ class PuenteFcm implements PuenteNotificaciones {
 <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+<!-- El GPS del turno mantiene el procesador despierto (enableWakeLock): sin este permiso Android rechaza el stream. -->
+<uses-permission android:name="android.permission.WAKE_LOCK" />
 <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 <!-- Opcional, según la política de ubicación en segundo plano de Google Play que acepte el PJ: -->
 <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
