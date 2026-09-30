@@ -96,3 +96,67 @@ it('cachea el cálculo 30 segundos', function () {
     $c = $this->actingAs($viaje->solicitante)->getJson("/api/viajes/{$viaje->id}/eta")->json('calculado_en');
     expect($c)->not->toBe($a);
 });
+
+it('no estima con una ubicación vieja y la informa', function () {
+    $this->travelTo(now()->startOfSecond());
+    $mapas = Mockery::mock(App\Mapas\ServicioMapas::class);
+    $mapas->shouldNotReceive('duracionesHacia');
+    app()->instance(App\Mapas\ServicioMapas::class, $mapas);
+
+    $chofer = choferEnTurno(-34.5947, -58.3816, 3);
+    $viaje = viajeConChofer(EstadoViaje::EnCamino, $chofer);
+
+    $this->actingAs($viaje->solicitante)->getJson("/api/viajes/{$viaje->id}/eta")
+        ->assertOk()
+        ->assertJsonPath('segundos', null)
+        ->assertJsonPath('metros', null)
+        ->assertJsonPath('ubicacion_actualizada_en', now()->subMinutes(3)->toIso8601String());
+});
+
+it('estima con una ubicación reciente e informa cuándo se actualizó', function () {
+    $this->travelTo(now()->startOfSecond());
+    $chofer = choferEnTurno(-34.5947, -58.3816, 1);
+    $viaje = viajeConChofer(EstadoViaje::EnCamino, $chofer);
+
+    $r = $this->actingAs($viaje->solicitante)->getJson("/api/viajes/{$viaje->id}/eta")
+        ->assertOk()
+        ->assertJsonPath('ubicacion_actualizada_en', now()->subMinute()->toIso8601String());
+
+    expect($r->json('metros'))->toBeBetween(900, 1100)->and($r->json('segundos'))->not->toBeNull();
+});
+
+it('informa ubicacion_actualizada_en null si no hay ubicación', function () {
+    $chofer = choferEnTurno();
+    UbicacionChofer::where('chofer_id', $chofer->id)->delete();
+    $viaje = viajeConChofer(EstadoViaje::EnCamino, $chofer);
+
+    $this->actingAs($viaje->solicitante)->getJson("/api/viajes/{$viaje->id}/eta")
+        ->assertOk()
+        ->assertJsonPath('ubicacion_actualizada_en', null);
+});
+
+it('no reutiliza el cache al cambiar el estado del viaje', function () {
+    $chofer = choferEnTurno(-34.5947, -58.3816);
+    $viaje = viajeConChofer(EstadoViaje::EnCamino, $chofer);
+
+    $this->actingAs($viaje->solicitante)->getJson("/api/viajes/{$viaje->id}/eta")
+        ->assertJsonPath('metros', fn ($m) => $m > 0);
+
+    $viaje->update(['estado' => EstadoViaje::Llego]);
+
+    $this->actingAs($viaje->solicitante)->getJson("/api/viajes/{$viaje->id}/eta")
+        ->assertJsonPath('segundos', 0)
+        ->assertJsonPath('metros', 0);
+});
+
+it('no reutiliza el cache al reasignar el chofer', function () {
+    $primero = choferEnTurno(-34.5947, -58.3816); // ~1 km
+    $viaje = viajeConChofer(EstadoViaje::EnCamino, $primero);
+    $m1 = $this->actingAs($viaje->solicitante)->getJson("/api/viajes/{$viaje->id}/eta")->json('metros');
+
+    $segundo = choferEnTurno(-34.5037, -58.3816); // ~10 km
+    $viaje->update(['chofer_id' => $segundo->id]);
+    $m2 = $this->actingAs($viaje->solicitante)->getJson("/api/viajes/{$viaje->id}/eta")->json('metros');
+
+    expect($m2)->toBeGreaterThan($m1 * 5);
+});

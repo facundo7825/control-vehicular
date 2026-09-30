@@ -19,10 +19,12 @@ it('deja entrar a un admin activo y muestra el panel en español', function () {
     expect(app()->getLocale())->toBe('es');
 });
 
-it('no cambia el idioma de la API', function () {
-    $this->actingAs(Usuario::factory()->create())->getJson('/api/yo')->assertOk();
+it('sigue respondiendo la API en español después de visitar el panel', function () {
+    $this->actingAs(Usuario::factory()->admin()->create())->get('/admin')->assertOk();
 
-    expect(app()->getLocale())->toBe(config('app.locale'));
+    $this->postJson('/api/auth/intercambio')
+        ->assertStatus(422)
+        ->assertJsonPath('errors.token_externo.0', 'El campo token externo es obligatorio.');
 });
 
 it('rechaza con 403 a solicitantes, choferes y admins inactivos', function (array $atributos) {
