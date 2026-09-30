@@ -14,22 +14,31 @@ import '../tiempo_real/tiempo_real_provider.dart';
 /// Lo que se muestra del viaje en curso: el viaje (puede quedar en un estado final hasta que el usuario
 /// lo descarte), la oferta pendiente del chofer y la última posición conocida del chofer asignado.
 class SeguimientoViaje {
-  const SeguimientoViaje({this.viaje, this.oferta, this.ubicacionChofer});
+  const SeguimientoViaje({this.viaje, this.oferta, this.ubicacionChofer, this.asignadoSinOferta = false});
 
   final Viaje? viaje;
   final Oferta? oferta;
   final UbicacionChofer? ubicacionChofer;
 
+  /// Chofer: [viaje] le llegó ya asignado, sin oferta (obligatorio, o asignado por un administrador). Se
+  /// muestra el aviso "Viaje asignado" hasta que lo vea (`verViajeAsignado`).
+  final bool asignadoSinOferta;
+
   SeguimientoViaje conViaje(Viaje? v) => SeguimientoViaje(
     viaje: v,
     oferta: oferta,
     ubicacionChofer: v?.chofer?.id == viaje?.chofer?.id ? ubicacionChofer : null,
+    asignadoSinOferta: asignadoSinOferta && v?.id == viaje?.id,
   );
 
-  SeguimientoViaje conOferta(Oferta? o) => SeguimientoViaje(viaje: viaje, oferta: o, ubicacionChofer: ubicacionChofer);
+  SeguimientoViaje conOferta(Oferta? o) =>
+      SeguimientoViaje(viaje: viaje, oferta: o, ubicacionChofer: ubicacionChofer, asignadoSinOferta: asignadoSinOferta);
 
   SeguimientoViaje conUbicacion(UbicacionChofer? u) =>
-      SeguimientoViaje(viaje: viaje, oferta: oferta, ubicacionChofer: u);
+      SeguimientoViaje(viaje: viaje, oferta: oferta, ubicacionChofer: u, asignadoSinOferta: asignadoSinOferta);
+
+  SeguimientoViaje conAsignado(bool a) =>
+      SeguimientoViaje(viaje: viaje, oferta: oferta, ubicacionChofer: ubicacionChofer, asignadoSinOferta: a);
 }
 
 final viajeActualProvider = AsyncNotifierProvider<ViajeActualNotifier, SeguimientoViaje>(ViajeActualNotifier.new);
@@ -71,9 +80,12 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
     if (_consultando) return;
     _consultando = true;
     final version = _version;
+    final antes = state.value;
     try {
-      final nuevo = await _consultar(state.value?.viaje);
+      var nuevo = await _consultar(antes?.viaje);
       if (!ref.mounted || version != _version) return;
+      // Sin socket, un viaje asignado sin oferta aparece recién acá.
+      if (nuevo.viaje case final v? when _llegoSinOferta(antes, v)) nuevo = nuevo.conAsignado(true);
       state = AsyncData(nuevo);
       _seguir(nuevo.viaje);
     } on SesionInvalida {
@@ -108,6 +120,47 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
     if (actual == null) return;
     final v = await ref.read(apiProvider).avanzarViaje(actual.id, hacia);
     if (ref.mounted) _aplicarViaje(v);
+  }
+
+  /// Chofer: acepta la oferta pendiente (spec 5.1). Con la respuesta queda el viaje y se va la oferta. Si
+  /// ya no está vigente (422) también se va, y el error llega a la pantalla.
+  Future<void> aceptarOferta() async {
+    final oferta = state.value?.oferta;
+    if (oferta == null) return;
+    try {
+      final v = await ref.read(apiProvider).aceptarOferta(oferta.id);
+      if (ref.mounted) _aplicarViaje(v);
+    } on ErrorNegocio {
+      _quitarOferta(oferta.id);
+      rethrow;
+    }
+  }
+
+  /// Chofer: rechaza la oferta pendiente. Sin red, la oferta queda (se puede reintentar hasta que venza).
+  Future<void> rechazarOferta() async {
+    final oferta = state.value?.oferta;
+    if (oferta == null) return;
+    try {
+      await ref.read(apiProvider).rechazarOferta(oferta.id);
+    } on ErrorNegocio {
+      _quitarOferta(oferta.id);
+      rethrow;
+    }
+    _quitarOferta(oferta.id);
+  }
+
+  /// La cuenta regresiva de la oferta llegó a cero (según el reloj del servidor).
+  void ofertaVencida(int ofertaId) => _quitarOferta(ofertaId);
+
+  /// El chofer vio el aviso "Viaje asignado".
+  void verViajeAsignado() {
+    final actual = state.value;
+    if (actual != null && actual.asignadoSinOferta) _fijar(actual.conAsignado(false));
+  }
+
+  void _quitarOferta(int ofertaId) {
+    final actual = state.value;
+    if (ref.mounted && actual?.oferta?.id == ofertaId) _fijar(actual!.conOferta(null));
   }
 
   /// El usuario ya vio el estado final (finalizado, cancelado, sin chofer): se vuelve al mapa.
@@ -188,6 +241,7 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
     var nuevo = actual;
 
     if (_usuario.esChofer) {
+      final sinOferta = _llegoSinOferta(actual, v);
       // La oferta ya se respondió, venció o se la llevó otro.
       if (actual.oferta?.viaje.id == v.id && v.estado != EstadoViaje.ofrecido) nuevo = nuevo.conOferta(null);
       // Mismo viaje (incluso si se lo reasignaron a otro o lo cancelaron: el chofer lo ve y lo descarta)
@@ -197,6 +251,7 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
           !v.estado.terminado &&
           (v.tipo == TipoViaje.inmediato || v.estado != EstadoViaje.aceptado);
       if (actual.viaje?.id == v.id || ocupaAhora) nuevo = nuevo.conViaje(v);
+      if (sinOferta) nuevo = nuevo.conAsignado(true);
     } else if (actual.viaje == null || actual.viaje!.id == v.id) {
       nuevo = nuevo.conViaje(v);
     }
@@ -204,6 +259,16 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
     _fijar(nuevo);
     _seguir(nuevo.viaje);
   }
+
+  /// Chofer: un inmediato que ya le llega aceptado, sin haber tenido la oferta (spec 5.2 y 5.6). Uno que el
+  /// chofer aceptó siempre tuvo su oferta en el estado (el evento o la respuesta de aceptar la encuentran).
+  bool _llegoSinOferta(SeguimientoViaje? antes, Viaje v) =>
+      _usuario.esChofer &&
+      v.tipo == TipoViaje.inmediato &&
+      v.estado == EstadoViaje.aceptado &&
+      v.chofer?.id == _usuario.id &&
+      antes?.viaje?.id != v.id &&
+      antes?.oferta?.viaje.id != v.id;
 
   void _fijar(SeguimientoViaje s) {
     _version++;

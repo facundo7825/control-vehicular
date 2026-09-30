@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:vehiculos_oficiales/src/api/errores_api.dart';
 import 'package:vehiculos_oficiales/src/entorno.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
 import 'package:vehiculos_oficiales/src/sesion/sesion.dart';
@@ -10,6 +11,7 @@ import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real.dart';
 import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real_provider.dart';
 import 'package:vehiculos_oficiales/src/viaje/viaje_actual.dart';
 
+import 'fixtures/payloads.dart' as p;
 import 'soporte/dobles.dart';
 import 'soporte/dobles_chofer.dart';
 import 'soporte/entorno_prueba.dart';
@@ -101,6 +103,131 @@ void main() {
         ..actual = ViajeActual(viaje: viaje(estado: 'llego', conChofer: true));
       async.elapse(const Duration(seconds: 10)); // la siguiente sí se aplica
       expect(leer(c).viaje!.estado, EstadoViaje.llego);
+    });
+  });
+
+  group('oferta', () {
+    ProviderContainer conOferta(FakeAsync async) {
+      api.actual = ViajeActual.fromJson(p.json(p.viajeActualChofer));
+      final c = crear();
+      async.flushMicrotasks();
+      expect(leer(c).oferta!.id, 1);
+      return c;
+    }
+
+    test('aceptar: queda el viaje, se va la oferta y no es "asignado sin oferta"', () {
+      fakeAsync((async) {
+        final c = conOferta(async);
+
+        c.read(viajeActualProvider.notifier).aceptarOferta();
+        async.flushMicrotasks();
+
+        expect(api.llamadas, contains('aceptar:1'));
+        expect(leer(c).oferta, isNull);
+        expect(leer(c).viaje!.estado, EstadoViaje.aceptado);
+        expect(leer(c).asignadoSinOferta, isFalse);
+      });
+    });
+
+    test('si el evento "aceptado" llega antes que la respuesta, tampoco es "asignado sin oferta"', () {
+      fakeAsync((async) {
+        final c = conOferta(async);
+
+        tr.emitir('chofer.2', Eventos.viajeActualizado, jsonViaje(viaje(estado: 'aceptado', conChofer: true)));
+        c.read(viajeActualProvider.notifier).aceptarOferta(); // la oferta ya no está: no hace nada
+        async.flushMicrotasks();
+
+        expect(leer(c).viaje!.estado, EstadoViaje.aceptado);
+        expect(leer(c).asignadoSinOferta, isFalse);
+      });
+    });
+
+    test('rechazar la quita; un 422 también la quita y llega a quien llamó', () {
+      fakeAsync((async) {
+        var c = conOferta(async);
+        c.read(viajeActualProvider.notifier).rechazarOferta();
+        async.flushMicrotasks();
+        expect(api.llamadas, contains('rechazar:1'));
+        expect(leer(c).oferta, isNull);
+
+        c = conOferta(async);
+        api.errorOferta = const ErrorNegocio('La oferta ya no está vigente.');
+        Object? error;
+        c.read(viajeActualProvider.notifier).aceptarOferta().catchError((Object e) => error = e);
+        async.flushMicrotasks();
+        expect(error, isA<ErrorNegocio>());
+        expect(leer(c).oferta, isNull);
+      });
+    });
+
+    test('sin red al rechazar la oferta se conserva', () {
+      fakeAsync((async) {
+        final c = conOferta(async);
+        api.errorOferta = const SinConexion();
+
+        c.read(viajeActualProvider.notifier).rechazarOferta().catchError((Object _) {});
+        async.flushMicrotasks();
+
+        expect(leer(c).oferta!.id, 1);
+      });
+    });
+
+    test('al vencer se quita', () {
+      fakeAsync((async) {
+        final c = conOferta(async);
+
+        c.read(viajeActualProvider.notifier).ofertaVencida(1);
+
+        expect(leer(c).oferta, isNull);
+      });
+    });
+  });
+
+  group('asignado sin oferta', () {
+    test('un obligatorio aceptado que llega por el canal queda marcado hasta verlo', () {
+      fakeAsync((async) {
+        final c = crear();
+        async.flushMicrotasks();
+
+        tr.emitir(
+          'chofer.2',
+          Eventos.viajeActualizado,
+          jsonViaje(viaje(id: 3, estado: 'aceptado', obligatorio: true, conChofer: true)),
+        );
+        expect(leer(c).viaje!.id, 3);
+        expect(leer(c).asignadoSinOferta, isTrue);
+
+        tr.emitir('chofer.2', Eventos.choferUbicacion, p.json(p.eventoUbicacion));
+        expect(leer(c).asignadoSinOferta, isTrue);
+
+        c.read(viajeActualProvider.notifier).verViajeAsignado();
+        expect(leer(c).asignadoSinOferta, isFalse);
+        expect(leer(c).viaje!.id, 3);
+      });
+    });
+
+    test('sin socket, el viaje asignado que aparece en la consulta también queda marcado', () {
+      fakeAsync((async) {
+        tr = TiempoRealFalso(estado: EstadoConexion.desconectado);
+        final c = crear();
+        async.flushMicrotasks();
+
+        api.actual = ViajeActual(viaje: viaje(id: 4, estado: 'aceptado', conChofer: true));
+        async.elapse(const Duration(seconds: 10));
+
+        expect(leer(c).viaje!.id, 4);
+        expect(leer(c).asignadoSinOferta, isTrue);
+      });
+    });
+
+    test('el viaje que había al abrir no se marca', () {
+      fakeAsync((async) {
+        api.actual = ViajeActual(viaje: viaje(estado: 'aceptado', conChofer: true));
+        final c = crear();
+        async.flushMicrotasks();
+
+        expect(leer(c).asignadoSinOferta, isFalse);
+      });
     });
   });
 }

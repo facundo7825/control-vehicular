@@ -10,16 +10,23 @@ import 'iniciar_turno.dart';
 import 'mapa_chofer.dart';
 
 /// Entrada del chofer: sin turno, "Iniciar turno"; con turno, su mapa. Como `InicioSolicitante`, pasa a la
-/// pantalla del viaje cuando aparece uno (el que había al abrir, uno aceptado o asignado).
+/// pantalla que corresponde cuando aparece algo nuevo: una oferta, un viaje asignado sin oferta o un viaje
+/// (el que había al abrir, uno aceptado, una reserva que arrancó).
 class InicioChofer extends ConsumerWidget {
   const InicioChofer({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Solo cuando aparece o cambia de viaje: las novedades del mismo no deshacen el "atrás".
+    // Solo cuando aparece algo nuevo: las novedades de lo mismo no deshacen el "atrás".
     ref.listen(viajeActualProvider, (anterior, siguiente) {
-      final id = siguiente.value?.viaje?.id;
-      if (id != null && id != anterior?.value?.viaje?.id) context.go(Rutas.viajeChofer);
+      final antes = anterior?.value;
+      final ahora = siguiente.value;
+      if (ahora == null) return;
+      if (ahora.asignadoSinOferta && antes?.asignadoSinOferta != true) return context.go(Rutas.viajeAsignado);
+      final oferta = ahora.oferta;
+      if (oferta != null && oferta.id != antes?.oferta?.id) return context.go(Rutas.ofertaChofer);
+      final id = ahora.viaje?.id;
+      if (id != null && id != antes?.viaje?.id) context.go(Rutas.viajeChofer);
     });
     final turno = ref.watch(turnoProvider);
 
