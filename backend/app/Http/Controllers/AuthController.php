@@ -34,8 +34,11 @@ class AuthController extends Controller
             return response()->json(['message' => 'Usuario deshabilitado.'], 403);
         }
 
+        $token = $usuario->createToken('app')->plainTextToken;
+        $usuario->recortarTokens();
+
         return response()->json([
-            'token' => $usuario->createToken('app')->plainTextToken,
+            'token' => $token,
             'usuario' => self::datosUsuario($usuario),
         ]);
     }

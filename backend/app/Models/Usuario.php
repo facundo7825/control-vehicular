@@ -56,6 +56,16 @@ class Usuario extends Authenticatable implements FilamentUser, HasName
             || Viaje::where('chofer_id', $this->id)->whereIn('estado', EstadoViaje::conChofer())->exists();
     }
 
+    /** Borra los tokens de la app que excedan los $maximo más recientes (se permiten varios: más de un dispositivo). */
+    public function recortarTokens(int $maximo = 5): void
+    {
+        $sobrantes = $this->tokens()->orderByDesc('id')->skip($maximo)->take(PHP_INT_MAX)->pluck('id');
+
+        if ($sobrantes->isNotEmpty()) {
+            $this->tokens()->whereIn('id', $sobrantes)->delete();
+        }
+    }
+
     protected static function booted(): void
     {
         // Desactivar corta el acceso ya: se revocan los tokens de la app (el middleware 'activo' cubre el resto).
