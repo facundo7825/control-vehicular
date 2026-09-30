@@ -169,6 +169,50 @@ void main() {
     });
   });
 
+  test('un viaje terminado que se recuperó del historial se conserva al refrescar hasta descartarlo', () {
+    fakeAsync((async) {
+      tr = TiempoRealFalso(estado: EstadoConexion.desconectado);
+      api.actual = ViajeActual(viaje: viaje(estado: 'ofrecido'));
+      final c = crear();
+      async.flushMicrotasks();
+
+      api.actual = ViajeActual.vacio;
+      api.mis = MisViajes(
+        proximas: const [],
+        historial: [viaje(estado: 'sin_chofer')],
+      );
+      async.elapse(const Duration(seconds: 10));
+      expect(leer(c).viaje!.estado, EstadoViaje.sinChofer);
+
+      async.elapse(const Duration(seconds: 30));
+      expect(leer(c).viaje!.estado, EstadoViaje.sinChofer);
+
+      tr.cambiar(EstadoConexion.conectado);
+      async.flushMicrotasks();
+      expect(leer(c).viaje!.id, 1);
+      expect(leer(c).viaje!.estado, EstadoViaje.sinChofer);
+
+      c.read(viajeActualProvider.notifier).descartar();
+      expect(leer(c).viaje, isNull);
+    });
+  });
+
+  test('un 401 durante el sondeo no produce un error sin capturar y se conserva el estado', () {
+    fakeAsync((async) {
+      tr = TiempoRealFalso(estado: EstadoConexion.desconectado);
+      api.actual = ViajeActual(viaje: viaje(estado: 'ofrecido'));
+      final c = crear();
+      async.flushMicrotasks();
+
+      api.fallarConsultas = const SesionInvalida();
+      async.elapse(const Duration(seconds: 20));
+      async.flushMicrotasks();
+
+      expect(api.consultasActual, 3);
+      expect(leer(c).viaje!.estado, EstadoViaje.ofrecido);
+    });
+  });
+
   test('ignora eventos de otros viajes y ubicaciones de otros choferes', () {
     fakeAsync((async) {
       api.actual = ViajeActual(viaje: viaje(estado: 'aceptado', conChofer: true));

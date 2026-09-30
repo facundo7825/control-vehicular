@@ -71,7 +71,8 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
       state = AsyncData(nuevo);
       _seguir(nuevo.viaje);
     } on SesionInvalida {
-      rethrow;
+      // `ClienteApi` ya avisó la sesión inválida (una sola vez); acá no hay nada más que hacer y este
+      // método corre sin await desde el timer y el listener, así que no puede propagar el error.
     } on ErrorApi {
       // Sin red o error pasajero: se conserva lo último que se sabía y se reintenta en el próximo ciclo.
     } finally {
@@ -111,6 +112,8 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
       final historial = (await api.misViajes()).historial;
       viaje = historial.where((v) => v.id == previo.id).firstOrNull;
     }
+    // Un viaje ya terminado se queda en pantalla hasta que el usuario lo descarte.
+    if (viaje == null && previo != null && previo.estado.terminado) viaje = previo;
 
     UbicacionChofer? ubicacion = viaje?.chofer?.id == state.value?.viaje?.chofer?.id
         ? state.value?.ubicacionChofer
