@@ -45,6 +45,17 @@ void main() {
     });
   });
 
+  test('descartado mientras hace la primera consulta, no queda escuchando el canal del viaje', () {
+    fakeAsync((async) {
+      api.actual = ViajeActual(viaje: viaje(estado: 'ofrecido'));
+      final c = crear();
+      c.dispose(); // la consulta inicial sigue en vuelo
+      async.flushMicrotasks();
+
+      expect(tr.canalesActivos, isEmpty);
+    });
+  });
+
   test('con el socket conectado se actualiza por eventos y no consulta la API', () {
     fakeAsync((async) {
       api.actual = ViajeActual(viaje: viaje(estado: 'ofrecido'));

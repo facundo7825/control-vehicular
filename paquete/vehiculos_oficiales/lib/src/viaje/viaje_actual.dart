@@ -84,6 +84,8 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
     });
 
     final inicial = await _consultar(null);
+    // Descartado mientras consultaba: el onDispose ya corrió y no cancelaría un canal abierto ahora.
+    if (!ref.mounted) return inicial;
     _seguir(inicial.viaje);
     return inicial;
   }
