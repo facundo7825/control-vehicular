@@ -5,6 +5,7 @@ import 'package:vehiculos_oficiales/src/api/cliente_api.dart';
 import 'package:vehiculos_oficiales/src/api/errores_api.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
 import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real.dart';
+import 'package:vehiculos_oficiales/src/ubicacion/ubicador.dart';
 
 import '../fixtures/payloads.dart' as p;
 import 'adaptador_falso.dart';
@@ -121,4 +122,14 @@ class TiempoRealFalso implements TiempoReal {
 
   @override
   void cerrar() {}
+}
+
+class UbicadorFalso implements Ubicador {
+  UbicadorFalso([this.posicion]);
+
+  /// Nula = permiso denegado o GPS apagado.
+  Coordenada? posicion;
+
+  @override
+  Future<Coordenada?> actual() async => posicion;
 }

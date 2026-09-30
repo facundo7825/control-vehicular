@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../mapa/mapa.dart';
 import '../../modelos/modelos.dart';
+import '../../solicitante/borrador_pedido.dart';
 import '../../viaje/viaje_actual.dart';
 import '../comunes/comunes.dart';
 import '../modulo_app.dart';
@@ -202,6 +203,7 @@ class _SinChofer extends ConsumerWidget {
   }
 
   void _volver(BuildContext context, WidgetRef ref) {
+    ref.read(borradorPedidoProvider.notifier).desdeViaje(viaje); // mismo origen y destino para elegir otro
     ref.read(viajeActualProvider.notifier).descartar();
     context.go(Rutas.solicitante);
   }
