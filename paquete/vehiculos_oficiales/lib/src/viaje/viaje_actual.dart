@@ -57,6 +57,9 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
   /// Se pidió un refresco mientras había uno en vuelo: al terminar se hace uno más (nunca más de uno).
   bool _pendiente = false;
 
+  /// Viaje de la última oferta que el chofer aceptó (desde que toca "Aceptar").
+  int? _aceptandoViajeId;
+
   late Usuario _usuario;
   late TiempoReal _tr;
 
@@ -149,11 +152,15 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
   Future<void> aceptarOferta() async {
     final oferta = state.value?.oferta;
     if (oferta == null) return;
+    // Lo que llegue de este viaje (la respuesta o el evento "aceptado", en cualquier orden, aunque la oferta
+    // ya haya vencido en pantalla) lo aceptó el chofer: no es un viaje asignado sin oferta.
+    _aceptandoViajeId = oferta.viaje.id;
     try {
       final v = await ref.read(apiProvider).aceptarOferta(oferta.id);
       if (ref.mounted) _aplicarViaje(v);
-    } on ErrorNegocio {
-      _quitarOferta(oferta.id);
+    } on ErrorApi catch (e) {
+      _aceptandoViajeId = null;
+      if (e is ErrorNegocio) _quitarOferta(oferta.id);
       rethrow;
     }
   }
@@ -289,6 +296,7 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
       v.tipo == TipoViaje.inmediato &&
       v.estado == EstadoViaje.aceptado &&
       v.chofer?.id == _usuario.id &&
+      v.id != _aceptandoViajeId &&
       antes?.viaje?.id != v.id &&
       antes?.oferta?.viaje.id != v.id;
 

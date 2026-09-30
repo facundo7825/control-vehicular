@@ -183,6 +183,58 @@ void main() {
     expect(find.text('Cancelar viaje'), findsNothing);
   });
 
+  testWidgets('aceptar con la respuesta cruzando el cero: termina en el viaje, no en "Viaje asignado"', (tester) async {
+    final demora = e.http.demorar('POST', 'ofertas/1/aceptar');
+
+    await abrir(tester);
+    await llegaOferta(tester, const Duration(seconds: 3));
+    await tester.tap(find.text('Aceptar'));
+    await tester.pump(const Duration(seconds: 4)); // la cuenta llegó a 0 con el pedido en vuelo
+    expect(find.text('La oferta venció'), findsNothing);
+
+    demora.complete((200, p.viajeAceptado));
+    await esperar(tester);
+
+    expect(find.byType(ViajeAsignado), findsNothing);
+    expect(find.byType(ViajeChofer), findsOneWidget);
+  });
+
+  testWidgets('aceptar cruzando el cero y el evento "aceptado" antes que la respuesta: tampoco es asignado', (
+    tester,
+  ) async {
+    final demora = e.http.demorar('POST', 'ofertas/1/aceptar');
+
+    await abrir(tester);
+    await llegaOferta(tester, const Duration(seconds: 3));
+    await tester.tap(find.text('Aceptar'));
+    await tester.pump(const Duration(seconds: 4));
+
+    tr.emitir('chofer.2', Eventos.viajeActualizado, p.json(p.viajeAceptado));
+    await tester.pump();
+    demora.complete((200, p.viajeAceptado));
+    await esperar(tester);
+
+    expect(find.byType(ViajeAsignado), findsNothing);
+    expect(find.byType(ViajeChofer), findsOneWidget);
+  });
+
+  testWidgets('una segunda oferta mientras se ve "La oferta venció" se muestra y vuelve a avisar', (tester) async {
+    await abrir(tester);
+    await llegaOferta(tester, const Duration(seconds: 3));
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pump();
+    expect(find.text('La oferta venció'), findsOneWidget);
+    expect(alertas, 1);
+
+    tr.emitir('chofer.2', Eventos.ofertaCreada, {...ofertaCreada(const Duration(seconds: 30)), 'oferta_id': 2});
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('La oferta venció'), findsNothing);
+    expect(find.text('Aceptar'), findsOneWidget);
+    expect(alertas, 2);
+  });
+
   testWidgets('una oferta pendiente al abrir el módulo se muestra enseguida', (tester) async {
     final conOferta = p.json(p.viajeActualChofer);
     (conOferta['oferta'] as Map<String, dynamic>)['vence_en'] = escribirFecha(

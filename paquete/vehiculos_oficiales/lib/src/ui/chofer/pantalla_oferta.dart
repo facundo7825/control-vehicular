@@ -23,9 +23,13 @@ final alertaOfertaProvider = Provider<void Function()>(
 Future<void> _alertar() async {
   try {
     await HapticFeedback.vibrate();
+  } catch (_) {
+    // Plataforma sin vibración.
+  }
+  try {
     await SystemSound.play(SystemSoundType.alert);
   } catch (_) {
-    // Plataforma sin vibración o sin sonidos del sistema.
+    // Plataforma sin sonidos del sistema.
   }
 }
 
@@ -53,7 +57,9 @@ class _PantallaOfertaState extends ConsumerState<PantallaOferta> {
   }
 
   void _vencer() {
-    if (_vencida) return;
+    // Con una respuesta en vuelo no se vence: se espera a saber qué pasó (al terminar se reconstruye y, si
+    // la oferta sigue ahí con la cuenta en cero, vence).
+    if (_vencida || _respondiendo) return;
     setState(() => _vencida = true);
     ref.read(viajeActualProvider.notifier).ofertaVencida(_oferta!.id);
   }
@@ -66,21 +72,32 @@ class _PantallaOfertaState extends ConsumerState<PantallaOferta> {
         await notifier.aceptarOferta(); // con el viaje asignado, InicioChofer pasa a su pantalla
       } else {
         await notifier.rechazarOferta();
-        if (mounted) context.go(Rutas.chofer);
+        if (mounted) _volver();
       }
     } on ErrorApi catch (e) {
       if (!mounted) return;
       mostrarError(context, e);
-      if (e is ErrorNegocio) context.go(Rutas.chofer); // "La oferta ya no está vigente."
+      if (e is ErrorNegocio) _volver(); // "La oferta ya no está vigente."
     } finally {
       if (mounted) setState(() => _respondiendo = false);
     }
   }
 
+  /// Vuelve al mapa, o a otra oferta que haya llegado mientras tanto.
+  void _volver() => context.go(ref.read(viajeActualProvider).value?.oferta != null ? Rutas.ofertaChofer : Rutas.chofer);
+
   @override
   Widget build(BuildContext context) {
     final seguimiento = ref.watch(viajeActualProvider).value;
     final actual = seguimiento?.oferta;
+    if (actual != null && actual.id != _oferta?.id) {
+      // Otra oferta llegó con esta pantalla abierta (la ruta se reutiliza): empieza de cero y vuelve a avisar.
+      _vencida = false;
+      _segundos = 0;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) ref.read(alertaOfertaProvider)();
+      });
+    }
     if (actual != null) _oferta = actual;
     final oferta = _oferta;
 
@@ -110,7 +127,9 @@ class _PantallaOfertaState extends ConsumerState<PantallaOferta> {
         body: SafeArea(
           child: Padding(
             padding: const EdgeInsets.all(24),
-            child: _vencida ? const _Vencida() : _Detalle(oferta: oferta, restante: restante, alResponder: _botones),
+            child: _vencida
+                ? _Vencida(alVolver: _volver)
+                : _Detalle(oferta: oferta, restante: restante, alResponder: _botones),
           ),
         ),
       ),
@@ -164,7 +183,9 @@ class _Detalle extends ConsumerWidget {
 }
 
 class _Vencida extends StatelessWidget {
-  const _Vencida();
+  const _Vencida({required this.alVolver});
+
+  final VoidCallback alVolver;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -175,7 +196,7 @@ class _Vencida extends StatelessWidget {
       const SizedBox(height: 16),
       Text('La oferta venció', textAlign: TextAlign.center, style: Theme.of(context).textTheme.titleLarge),
       const SizedBox(height: 32),
-      FilledButton(onPressed: () => context.go(Rutas.chofer), child: const Text('Volver al mapa')),
+      FilledButton(onPressed: alVolver, child: const Text('Volver al mapa')),
     ],
   );
 }
