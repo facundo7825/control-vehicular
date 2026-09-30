@@ -62,7 +62,7 @@ class _Titulo extends StatelessWidget {
 
 String _estadoReserva(Viaje v) => switch (v.estado) {
   EstadoViaje.buscando || EstadoViaje.ofrecido => 'Esperando confirmación del chofer',
-  EstadoViaje.aceptado => 'Confirmada · ${v.chofer?.nombre ?? ''}',
+  EstadoViaje.aceptado => ['Confirmada', ?v.chofer?.nombre].where((t) => t.isNotEmpty).join(' · '),
   _ => v.estado.texto,
 };
 

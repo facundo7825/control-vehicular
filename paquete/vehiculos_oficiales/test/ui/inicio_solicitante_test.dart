@@ -145,6 +145,14 @@ void main() {
     expect(find.text('Chofer asignado'), findsWidgets);
   });
 
+  testWidgets('las direcciones y el motivo tienen el límite del backend (255 caracteres)', (tester) async {
+    await abrir(tester);
+    await tester.tap(find.text('Direcciones y motivo (opcional)'));
+    await tester.pumpAndSettle();
+
+    expect(tester.widgetList<TextField>(find.byType(TextField)).map((c) => c.maxLength), [255, 255, 255]);
+  });
+
   testWidgets('después de volver al mapa, las novedades del mismo viaje no lo vuelven a abrir', (tester) async {
     e = EntornoPrueba();
     e.http.responder('POST', 'auth/intercambio', 200, p.intercambio);

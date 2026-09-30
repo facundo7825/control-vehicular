@@ -47,6 +47,9 @@ class ApiFalsa extends ApiVehiculos {
   MisViajes mis = const MisViajes(proximas: [], historial: []);
   List<ChoferEnMapa> listaChoferes = [];
   ErrorApi? fallarConsultas;
+
+  /// Solo para `choferes()` (además de [fallarConsultas]).
+  ErrorApi? fallarChoferes;
   int consultasActual = 0;
   int consultasChoferes = 0;
   final pedidos = <PedidoViaje>[];
@@ -78,6 +81,7 @@ class ApiFalsa extends ApiVehiculos {
   Future<List<ChoferEnMapa>> choferes() async {
     consultasChoferes++;
     if (fallarConsultas != null) throw fallarConsultas!;
+    if (fallarChoferes != null) throw fallarChoferes!;
     return listaChoferes;
   }
 

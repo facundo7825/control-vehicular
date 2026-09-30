@@ -98,6 +98,15 @@ class _Buscando extends ConsumerWidget {
   }
 }
 
+/// Teléfono para `tel:`: solo dígitos y un `+` inicial (llega como texto libre, p. ej. "+54 (381) 555-0000").
+/// Nulo si no queda ningún dígito.
+String? telefonoMarcable(String? telefono) {
+  if (telefono == null) return null;
+  final digitos = telefono.replaceAll(RegExp(r'\D'), '');
+  if (digitos.isEmpty) return null;
+  return telefono.trimLeft().startsWith('+') ? '+$digitos' : digitos;
+}
+
 /// Línea de llegada estimada, o nada si todavía no hay ETA o el chofer ya está en el origen (`segundos == 0`).
 @visibleForTesting
 String? textoEta(Eta? eta) {
@@ -124,6 +133,7 @@ class _Activo extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final chofer = viaje.chofer;
     final vehiculo = viaje.vehiculo;
+    final telefono = telefonoMarcable(chofer?.telefono);
     final mapa = ref.watch(constructorMapaProvider);
     final texto = Theme.of(context).textTheme;
     final eta = ref.watch(etaViajeProvider);
@@ -172,15 +182,15 @@ class _Activo extends ConsumerWidget {
               const SizedBox(height: 16),
               Row(
                 children: [
-                  if (chofer?.telefono != null)
+                  if (telefono != null)
                     Expanded(
                       child: FilledButton.icon(
                         icon: const Icon(Icons.phone),
                         label: const Text('Llamar'),
-                        onPressed: () => ref.read(lanzadorUrlProvider)(Uri(scheme: 'tel', path: chofer!.telefono)),
+                        onPressed: () => ref.read(lanzadorUrlProvider)(Uri(scheme: 'tel', path: telefono)),
                       ),
                     ),
-                  if (chofer?.telefono != null && viaje.estado.cancelablePorSolicitante) const SizedBox(width: 12),
+                  if (telefono != null && viaje.estado.cancelablePorSolicitante) const SizedBox(width: 12),
                   if (viaje.estado.cancelablePorSolicitante)
                     Expanded(
                       child: OutlinedButton(

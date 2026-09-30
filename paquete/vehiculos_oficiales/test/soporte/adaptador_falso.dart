@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -16,6 +17,7 @@ class PedidoRegistrado {
 /// y registra cada pedido. Una respuesta nula simula falta de red.
 class AdaptadorFalso implements HttpClientAdapter {
   final Map<String, List<(int, String?)>> _respuestas = {};
+  final Map<String, Completer<(int, String?)>> _demorados = {};
   final List<PedidoRegistrado> pedidos = [];
 
   /// Encola una respuesta. Si queda una sola, se repite en los pedidos siguientes.
@@ -23,6 +25,9 @@ class AdaptadorFalso implements HttpClientAdapter {
       (_respuestas['$metodo $ruta'] ??= []).add((estado, cuerpo));
 
   void sinRed(String metodo, String ruta) => (_respuestas['$metodo $ruta'] ??= []).add((-1, null));
+
+  /// Los pedidos a esa ruta quedan esperando hasta que el test complete el `Completer` con (estado, cuerpo).
+  Completer<(int, String?)> demorar(String metodo, String ruta) => _demorados['$metodo $ruta'] = Completer();
 
   @override
   Future<ResponseBody> fetch(
@@ -36,11 +41,16 @@ class AdaptadorFalso implements HttpClientAdapter {
     pedidos.add(PedidoRegistrado(options.method, options.uri, options.headers, utf8.decode(bytes)));
 
     final ruta = options.uri.path.replaceFirst(RegExp(r'^/api/'), '');
+    final demorado = _demorados['${options.method} $ruta'];
     final cola = _respuestas['${options.method} $ruta'];
-    if (cola == null || cola.isEmpty) {
+    if (demorado == null && (cola == null || cola.isEmpty)) {
       throw StateError('Sin respuesta preparada para ${options.method} $ruta');
     }
-    final (estado, cuerpo) = cola.length > 1 ? cola.removeAt(0) : cola.first;
+    final (estado, cuerpo) = demorado != null
+        ? await demorado.future
+        : cola!.length > 1
+        ? cola.removeAt(0)
+        : cola.first;
     if (estado == -1) {
       throw DioException.connectionError(requestOptions: options, reason: 'sin red');
     }

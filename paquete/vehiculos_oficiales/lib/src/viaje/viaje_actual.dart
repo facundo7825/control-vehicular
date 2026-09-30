@@ -121,15 +121,20 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
         : null;
     final choferId = viaje?.chofer?.id;
     if (choferId != null && !_usuario.esChofer && _tr.estado != EstadoConexion.conectado) {
-      // Sin socket tampoco llegan las posiciones: se toman de GET /choferes.
-      final c = (await api.choferes()).where((c) => c.id == choferId).firstOrNull;
-      if (c?.posicion != null) {
-        ubicacion = UbicacionChofer(
-          choferId: c!.id,
-          posicion: c.posicion!,
-          rumbo: c.rumbo,
-          actualizadoEn: c.actualizadoEn ?? DateTime.now().toUtc(),
-        );
+      // Sin socket tampoco llegan las posiciones: se toman de GET /choferes. Es un extra: si falla, se
+      // conserva la última posición conocida y el viaje igual se actualiza.
+      try {
+        final c = (await api.choferes()).where((c) => c.id == choferId).firstOrNull;
+        if (c?.posicion != null) {
+          ubicacion = UbicacionChofer(
+            choferId: c!.id,
+            posicion: c.posicion!,
+            rumbo: c.rumbo,
+            actualizadoEn: c.actualizadoEn ?? DateTime.now().toUtc(),
+          );
+        }
+      } on ErrorApi {
+        // Incluye un 401: `ClienteApi` ya avisó la sesión inválida.
       }
     }
     return SeguimientoViaje(viaje: viaje, oferta: actual.oferta, ubicacionChofer: ubicacion);

@@ -137,7 +137,7 @@ void main() {
     await abrir(tester);
     await tester.tap(find.byTooltip('Mis viajes'));
     await tester.pumpAndSettle();
-    expect(find.text('Confirmada · '), findsOneWidget); // la reserva del fixture todavía no tiene chofer
+    expect(find.text('Confirmada'), findsOneWidget); // la reserva del fixture todavía no tiene chofer: sin "·" suelto
 
     await tester.tap(find.byTooltip('Cancelar reserva'));
     await tester.pumpAndSettle();
@@ -154,7 +154,8 @@ void main() {
 
   testWidgets('mis viajes se actualiza con un aviso push', (tester) async {
     e.http.responder('GET', 'viajes', 200, _misViajes(proximas: [_reserva()]));
-    e.http.responder('GET', 'viajes', 200, _misViajes(proximas: [_reserva(estado: 'aceptado')]));
+    final confirmada = _reserva(estado: 'aceptado')..['chofer'] = {'id': 2, 'nombre': 'Carlos Gómez', 'telefono': null};
+    e.http.responder('GET', 'viajes', 200, _misViajes(proximas: [confirmada]));
 
     await abrir(tester);
     await tester.tap(find.byTooltip('Mis viajes'));
@@ -164,7 +165,7 @@ void main() {
     e.puente.controlador.add({'modulo': 'vehiculos_oficiales', 'tipo': 'viaje', 'viaje_id': '2', 'estado': 'aceptado'});
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('Confirmada'), findsOneWidget);
+    expect(find.text('Confirmada · Carlos Gómez'), findsOneWidget);
   });
 
   testWidgets('una reserva rechazada ofrece elegir otro chofer con los mismos datos', (tester) async {

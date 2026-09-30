@@ -139,6 +139,23 @@ void main() {
     });
   });
 
+  test('sin socket, si falla GET /choferes igual se actualiza el viaje', () {
+    fakeAsync((async) {
+      tr = TiempoRealFalso(estado: EstadoConexion.desconectado);
+      api.actual = ViajeActual(viaje: viaje(estado: 'aceptado', conChofer: true));
+      api.fallarChoferes = const SinConexion();
+      final c = crear();
+      async.flushMicrotasks();
+      expect(leer(c).viaje!.estado, EstadoViaje.aceptado);
+
+      api.actual = ViajeActual(viaje: viaje(estado: 'en_camino', conChofer: true));
+      async.elapse(const Duration(seconds: 10));
+
+      expect(leer(c).viaje!.estado, EstadoViaje.enCamino);
+      expect(leer(c).ubicacionChofer, isNull);
+    });
+  });
+
   test('pedir guarda el viaje y lo sigue; cancelar lo deja cancelado; descartar vuelve a cero', () {
     fakeAsync((async) {
       final c = crear();

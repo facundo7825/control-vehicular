@@ -228,16 +228,19 @@ class _PanelPedidoState extends ConsumerState<_PanelPedido> {
                       children: [
                         TextField(
                           controller: _dirOrigen,
+                          maxLength: 255, // límite del backend (ViajeController y ReservaController)
                           decoration: const InputDecoration(labelText: 'Dirección de origen'),
                           onChanged: (t) => notifier.direccion(PuntoPedido.origen, t),
                         ),
                         TextField(
                           controller: _dirDestino,
+                          maxLength: 255,
                           decoration: const InputDecoration(labelText: 'Dirección de destino'),
                           onChanged: (t) => notifier.direccion(PuntoPedido.destino, t),
                         ),
                         TextField(
                           controller: _motivo,
+                          maxLength: 255,
                           decoration: const InputDecoration(labelText: 'Motivo'),
                           onChanged: notifier.motivo,
                         ),

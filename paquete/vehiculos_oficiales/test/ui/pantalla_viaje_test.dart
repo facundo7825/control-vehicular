@@ -96,6 +96,18 @@ void main() {
     expect(find.text('Cancelar viaje'), findsNothing); // spec 5.6: no se cancela en curso
   });
 
+  testWidgets('llamar marca solo dígitos y un + inicial', (tester) async {
+    final conFormato = p.json(p.viajeAceptado)
+      ..['chofer'] = {'id': 2, 'nombre': 'Carlos Gómez', 'telefono': '+54 (381) 555-0000'};
+    e.http.responder('GET', 'viajes/actual', 200, actualCon(jsonEncode(conFormato)));
+    e.http.responder('GET', 'viajes/1/eta', 200, etaJson());
+
+    await abrir(tester);
+    await tester.tap(find.text('Llamar'));
+
+    expect(lanzadas.single.toString(), 'tel:+543815550000');
+  });
+
   testWidgets('con el socket caído avisa y se mantiene al día consultando cada 10 s', (tester) async {
     tr = TiempoRealFalso(estado: EstadoConexion.desconectado);
     e.http.responder('GET', 'viajes/1/eta', 200, etaJson());
@@ -205,13 +217,26 @@ void main() {
       expect(find.text('Ubicación del chofer no disponible'), findsOneWidget);
     });
 
-    testWidgets('mientras carga no muestra la línea', (tester) async {
+    testWidgets('si la ETA falla (500) no muestra la línea', (tester) async {
       e.http.responder('GET', 'viajes/actual', 200, actualCon(viajeJson(estado: 'en_camino')));
       e.http.responder('GET', 'viajes/1/eta', 500, '{"message":"Server Error"}');
       await abrir(tester);
       expect(find.textContaining('Llega en'), findsNothing);
       expect(find.textContaining('no disponible'), findsNothing);
       expect(find.text('El chofer va en camino'), findsWidgets);
+    });
+
+    testWidgets('mientras la ETA no llega no muestra la línea, y al llegar sí', (tester) async {
+      e.http.responder('GET', 'viajes/actual', 200, actualCon(viajeJson(estado: 'en_camino')));
+      final eta = e.http.demorar('GET', 'viajes/1/eta');
+      await abrir(tester);
+      expect(find.text('El chofer va en camino'), findsWidgets);
+      expect(find.textContaining('Llega en'), findsNothing);
+      expect(find.textContaining('no disponible'), findsNothing);
+
+      eta.complete((200, etaJson(segundos: 241)));
+      await esperar(tester);
+      expect(find.text('Llega en ~5 min'), findsOneWidget);
     });
   });
 }
