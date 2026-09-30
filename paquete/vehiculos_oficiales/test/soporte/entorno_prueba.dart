@@ -2,11 +2,13 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
+import 'package:vehiculos_oficiales/src/chofer/almacen_cola.dart';
 import 'package:vehiculos_oficiales/src/entorno.dart';
 import 'package:vehiculos_oficiales/src/sesion/almacen_token.dart';
 import 'package:vehiculos_oficiales/vehiculos_oficiales.dart';
 
 import 'adaptador_falso.dart';
+import 'dobles_chofer.dart';
 
 const configPrueba = VehiculosOficialesConfig(
   apiBaseUrl: 'http://10.0.2.2:8000',
@@ -44,6 +46,7 @@ class EntornoPrueba {
   final PuenteFalso puente;
   final http = AdaptadorFalso();
   AlmacenToken almacen = AlmacenTokenMemoria();
+  AlmacenCola almacenCola = AlmacenColaMemoria();
   int sesionesInvalidas = 0;
 
   EntornoModulo get entorno => EntornoModulo(
@@ -62,6 +65,7 @@ class EntornoPrueba {
   List<Override> overridesDeModulo([List<Override> extra = const []]) => [
     adaptadorHttpProvider.overrideWithValue(http),
     almacenTokenProvider.overrideWithValue(almacen),
+    almacenColaProvider.overrideWithValue(almacenCola),
     ...extra,
   ];
 

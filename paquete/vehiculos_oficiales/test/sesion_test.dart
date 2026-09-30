@@ -11,6 +11,7 @@ import 'package:vehiculos_oficiales/src/sesion/sesion.dart';
 
 import 'fixtures/payloads.dart' as p;
 import 'soporte/dobles.dart';
+import 'soporte/dobles_chofer.dart';
 import 'soporte/entorno_prueba.dart';
 
 /// Espera a que la sesión salga de "iniciando".
@@ -70,6 +71,22 @@ void main() {
     expect(e.sesionesInvalidas, 1);
     expect(c.read(sesionProvider), isA<SesionVencida>());
     expect(await e.almacen.leer('sim|100|Ana Pérez|Secretaria'), isNull);
+  });
+
+  test('un 401 borra la cola de ubicaciones guardada (spec 10)', () async {
+    final cola = AlmacenColaMemoria()
+      ..turnoId = 1
+      ..puntos = [punto(0)];
+    e.almacenCola = cola;
+    e.http.responder('POST', 'auth/intercambio', 200, p.intercambio);
+    e.http.responder('GET', 'viajes/actual', 401, p.noAutenticado);
+    final c = e.contenedor();
+    await sesionResuelta(c);
+
+    await expectLater(c.read(apiProvider).viajeActual(), throwsA(isA<SesionInvalida>()));
+    await Future<void>.delayed(Duration.zero);
+
+    expect(cola.guardado, isFalse);
   });
 
   test('503 sin token guardado: identidad no disponible, y reintentar funciona', () async {

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/errores_api.dart';
+import '../chofer/almacen_cola.dart';
 import '../entorno.dart';
 import '../modelos/modelos.dart';
 import 'almacen_token.dart';
@@ -62,6 +63,7 @@ class SesionNotifier extends Notifier<EstadoSesion> {
     aviso.escuchar(() {
       state = const SesionVencida();
       unawaited(_almacenar('borrar', (a) => a.borrar()));
+      unawaited(_borrarCola());
     });
     Future.microtask(iniciar);
     return const SesionIniciando();
@@ -105,6 +107,15 @@ class SesionNotifier extends Notifier<EstadoSesion> {
     } catch (e) {
       debugPrint('vehiculos_oficiales: no se pudo $accion el token guardado (${e.runtimeType}).');
       return null;
+    }
+  }
+
+  /// Spec 10: al cerrarse la sesión (401) no quedan en el dispositivo ubicaciones del turno sin enviar.
+  Future<void> _borrarCola() async {
+    try {
+      await ref.read(almacenColaProvider).borrar();
+    } catch (e) {
+      debugPrint('vehiculos_oficiales: no se pudo borrar la cola de ubicaciones guardada (${e.runtimeType}).');
     }
   }
 

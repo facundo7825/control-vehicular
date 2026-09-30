@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/errores_api.dart';
@@ -8,6 +9,7 @@ import '../modelos/modelos.dart';
 import '../sesion/sesion.dart';
 import '../ubicacion/ubicador.dart';
 import '../viaje/viaje_actual.dart';
+import 'almacen_cola.dart';
 import 'cola_ubicaciones.dart';
 import 'emisor_ubicacion.dart';
 import 'rastreador_turno.dart';
@@ -70,10 +72,13 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
   Future<Turno?> build() async {
     ref.onDispose(() {
       // Al cerrar el módulo (o recargar el turno) se corta el GPS. En onDispose no se puede usar `ref`.
+      // Lo que no se llegó a guardar se guarda: el turno sigue abierto y se retoma al volver.
       _generacion++;
       final r = _rastreador;
       _rastreador = null;
-      r?.detener();
+      r
+        ?..guardarPendiente()
+        ..detener();
     });
     final yo = ref.read(usuarioProvider).id;
     ref.listen(
@@ -84,12 +89,16 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
     final turno = await ref.read(apiProvider).turnoActual();
     // Se cerró el módulo (o se recargó el turno) mientras tanto: no se pide permiso ni se abre el GPS.
     if (!ref.mounted) return turno;
-    if (turno != null) {
-      // Turno abierto de antes (la app se cerró o se reabrió el módulo): se retoma el rastreo. Si el
-      // permiso ya no está, el GPS falla y el mapa lo avisa.
+    if (turno == null) {
+      await _borrarCola(); // lo guardado es de un turno que ya se cerró (spec 10)
+    } else {
+      // Turno abierto de antes (la app se cerró o se reabrió el módulo): se retoma el rastreo con lo que
+      // quedó sin enviar. Si el permiso ya no está, el GPS falla y el mapa lo avisa.
       await ref.read(ubicadorProvider).pedirPermiso();
       if (!ref.mounted) return turno;
-      await _iniciarRastreo();
+      final pendientes = await _leerCola(turno.id);
+      if (!ref.mounted) return turno;
+      await _iniciarRastreo(turno, pendientes: pendientes);
     }
     return turno;
   }
@@ -103,7 +112,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
     final turno = await ref.read(apiProvider).iniciarTurno(vehiculoId);
     if (!ref.mounted) return permiso;
     state = AsyncData(turno);
-    await _iniciarRastreo();
+    await _iniciarRastreo(turno);
     return permiso;
   }
 
@@ -128,14 +137,17 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
     if (ref.mounted) _rastreador?.reabrirGps();
   }
 
-  Future<void> _iniciarRastreo() async {
+  /// [pendientes]: los puntos guardados del mismo turno, que vuelven a la cola antes de abrir el GPS.
+  Future<void> _iniciarRastreo(Turno turno, {List<PuntoGps> pendientes = const []}) async {
     if (_rastreador != null) return;
     final generacion = _generacion;
     final conf = await ref.read(configuracionProvider.future);
     if (!ref.mounted || generacion != _generacion || _rastreador != null) return;
 
-    final cola = ColaUbicaciones();
+    final cola = ColaUbicaciones()..cargar(pendientes);
     final posicion = ref.read(posicionPropiaProvider.notifier);
+    final almacen = ref.read(almacenColaProvider);
+    final aviso = ref.read(avisoSesionProvider);
     _rastreador = RastreadorTurno(
       ubicador: ref.read(ubicadorProvider),
       cola: cola,
@@ -145,14 +157,43 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
       alPunto: posicion.punto,
       alErrorGps: (_) => posicion.sinGps(),
       alQuedarSinTurno: () => unawaited(_alQuedarSinTurno()),
+      // Después de un 401 la cola ya se borró (SesionNotifier): no se vuelve a escribir.
+      guardar: (puntos) async {
+        if (!aviso.avisado) await almacen.guardar(turno.id, puntos);
+      },
     )..iniciar(enViaje: viajeActivo(ref.read(viajeActualProvider).value?.viaje, ref.read(usuarioProvider).id));
   }
 
+  /// El turno terminó (se finalizó, o el backend dice que no hay): también se borra la cola guardada.
   void _detenerRastreo() {
     _generacion++;
     _rastreador?.detener();
     _rastreador = null;
     ref.read(posicionPropiaProvider.notifier).limpiar();
+    unawaited(_borrarCola());
+  }
+
+  /// Lo guardado para [turnoId]. Si no hay nada (o es de otro turno, o no se puede leer) se borra el
+  /// archivo. Nunca lanza.
+  Future<List<PuntoGps>> _leerCola(int turnoId) async {
+    final almacen = ref.read(almacenColaProvider);
+    try {
+      final puntos = await almacen.leer(turnoId);
+      if (puntos.isEmpty) await almacen.borrar();
+      return puntos;
+    } catch (e) {
+      debugPrint('vehiculos_oficiales: no se pudo leer la cola de ubicaciones guardada (${e.runtimeType}).');
+      return const [];
+    }
+  }
+
+  /// Nunca lanza: un error de disco no puede cortar el cierre del turno.
+  Future<void> _borrarCola() async {
+    try {
+      await ref.read(almacenColaProvider).borrar();
+    } catch (e) {
+      debugPrint('vehiculos_oficiales: no se pudo borrar la cola de ubicaciones guardada (${e.runtimeType}).');
+    }
   }
 
   /// El backend dice que no hay turno (lo cerró un admin, o se cerró en otro dispositivo): se deja de
@@ -164,7 +205,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
       final turno = await ref.read(apiProvider).turnoActual();
       if (!ref.mounted) return;
       state = AsyncData(turno);
-      if (turno != null) await _iniciarRastreo();
+      if (turno != null) await _iniciarRastreo(turno);
     } on ErrorApi {
       if (ref.mounted) state = const AsyncData(null);
     }

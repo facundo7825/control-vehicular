@@ -39,6 +39,8 @@ class RastreadorTurno {
     required this.alErrorGps,
     required this.alQuedarSinTurno,
     this.sinPosicionTras,
+    this.guardar,
+    this.intervaloGuardado = const Duration(seconds: 5),
   });
 
   final Ubicador ubicador;
@@ -60,8 +62,18 @@ class RastreadorTurno {
   /// `max(30 s, 3 × intervaloGps)`.
   final Duration? sinPosicionTras;
 
+  /// Guarda la cola completa en disco (ver `AlmacenCola`), para retomarla si el sistema cierra la app. Se
+  /// llama como mucho una vez cada [intervaloGuardado] mientras entran puntos (lo que protege es este
+  /// guardado periódico: no hay un aviso confiable de que la app se va a cerrar), después de cada envío
+  /// confirmado y con [guardarPendiente]. Sus errores se loguean y no cortan el rastreo.
+  final Future<void> Function(List<PuntoGps> puntos)? guardar;
+  final Duration intervaloGuardado;
+
   StreamSubscription<PuntoGps>? _gps;
   Timer? _envio;
+
+  /// Pendiente mientras hay puntos encolados que todavía no se guardaron.
+  Timer? _guardado;
 
   /// Perro guardián del GPS: se arma al abrir el stream y con cada punto; dispara una sola vez por período
   /// de silencio.
@@ -147,6 +159,7 @@ class RastreadorTurno {
     final desde = ultimo == null ? null : p.registradoEn.difference(ultimo);
     if (desde == null || desde.isNegative || desde >= intervalo - intervaloGps ~/ 2) {
       cola.agregar(p);
+      _guardado ??= Timer(intervaloGuardado, _guardar);
       if (desde == null || !desde.isNegative) _ultimoEncolado = p.registradoEn;
     }
     alPunto(p);
@@ -155,7 +168,9 @@ class RastreadorTurno {
   Future<void> _enviar() async {
     try {
       final resultado = await emisor.enviar();
-      if (resultado == ResultadoEnvio.sinTurno && _activo) {
+      if (!_activo) return;
+      if (resultado == ResultadoEnvio.enviado) _guardar();
+      if (resultado == ResultadoEnvio.sinTurno) {
         detener();
         alQuedarSinTurno();
       }
@@ -166,11 +181,35 @@ class RastreadorTurno {
   }
 
   /// Un intento de mandar todo lo pendiente (antes de finalizar el turno).
-  Future<ResultadoEnvio> vaciar() => emisor.vaciarTodo();
+  Future<ResultadoEnvio> vaciar() async {
+    final resultado = await emisor.vaciarTodo();
+    if (_activo) _guardar(); // si después no se puede cerrar el turno, lo guardado refleja lo que salió
+    return resultado;
+  }
 
-  /// Corta el GPS (y con él la notificación fija de Android) y el envío. Lo pendiente se descarta.
+  /// Guarda ya los puntos encolados que todavía no se guardaron (al cerrar el módulo con el turno abierto).
+  void guardarPendiente() {
+    if (_guardado != null) _guardar();
+  }
+
+  void _guardar() {
+    _guardado?.cancel();
+    _guardado = null;
+    final guardar = this.guardar;
+    if (guardar == null) return;
+    unawaited(
+      Future.sync(() => guardar(cola.puntos)).catchError(
+        (Object e) => debugPrint('vehiculos_oficiales: no se pudo guardar la cola de ubicaciones (${e.runtimeType}).'),
+      ),
+    );
+  }
+
+  /// Corta el GPS (y con él la notificación fija de Android) y el envío. Lo pendiente se descarta (en
+  /// memoria: lo guardado en disco lo borra quien corresponda).
   void detener() {
     _activo = false;
+    _guardado?.cancel();
+    _guardado = null;
     _envio?.cancel();
     _envio = null;
     _silencio?.cancel();

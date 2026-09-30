@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:vehiculos_oficiales/src/api/errores_api.dart';
+import 'package:vehiculos_oficiales/src/chofer/almacen_cola.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
 
 import '../fixtures/payloads.dart' as p;
@@ -142,5 +143,43 @@ class ApiChofer extends ApiFalsa {
     llamadas.add('agenda');
     if (errorAgenda != null) throw errorAgenda!;
     return agendaRespuesta;
+  }
+}
+
+/// [AlmacenCola] en memoria: lo que quedaría en el archivo, y cada escritura que llegó a hacerse.
+class AlmacenColaMemoria implements AlmacenCola {
+  /// Turno de lo guardado; nulo si no hay nada guardado (el archivo no existe).
+  int? turnoId;
+  List<PuntoGps> puntos = [];
+
+  /// Cada `guardar`, con los puntos que recibió.
+  final escrituras = <List<PuntoGps>>[];
+  int borrados = 0;
+
+  /// Si no es nulo, todas las operaciones lo lanzan (un disco lleno, un permiso).
+  Object? error;
+
+  bool get guardado => turnoId != null;
+
+  @override
+  Future<List<PuntoGps>> leer(int turnoId) async {
+    if (error != null) throw error!;
+    return turnoId == this.turnoId ? List.of(puntos) : [];
+  }
+
+  @override
+  Future<void> guardar(int turnoId, List<PuntoGps> puntos) async {
+    if (error != null) throw error!;
+    this.turnoId = turnoId;
+    this.puntos = List.of(puntos);
+    escrituras.add(List.of(puntos));
+  }
+
+  @override
+  Future<void> borrar() async {
+    if (error != null) throw error!;
+    borrados++;
+    turnoId = null;
+    puntos = [];
   }
 }
