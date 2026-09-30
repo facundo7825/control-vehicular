@@ -135,7 +135,7 @@ void main() {
       gps.fallar(Exception('GPS apagado'));
       await tester.pump();
 
-      expect(find.textContaining('No podemos obtener tu ubicación'), findsOneWidget);
+      expect(find.textContaining('Sin señal de GPS por ahora'), findsOneWidget);
       await tester.tap(find.text('Reintentar'));
       await esperar(tester);
       expect(gps.intervalos, hasLength(2));
@@ -146,17 +146,17 @@ void main() {
 
       await montarChofer(tester, e, ubicador: gps);
       expect(find.text('Buscando tu ubicación…'), findsOneWidget);
-      expect(find.textContaining('No podemos obtener tu ubicación'), findsNothing);
+      expect(find.textContaining('Sin señal de GPS por ahora'), findsNothing);
 
       await tester.pump(const Duration(seconds: 30));
-      expect(find.textContaining('No podemos obtener tu ubicación'), findsOneWidget);
+      expect(find.textContaining('Sin señal de GPS por ahora'), findsOneWidget);
       expect(find.text('Buscando tu ubicación…'), findsNothing);
       expect(find.text('Abrir ajustes'), findsOneWidget);
       expect(find.text('Reintentar'), findsOneWidget);
 
       gps.emitir(punto(0));
       await tester.pump();
-      expect(find.textContaining('No podemos obtener tu ubicación'), findsNothing);
+      expect(find.textContaining('Sin señal de GPS por ahora'), findsNothing);
     });
 
     testWidgets('cerrar el módulo con el turno abierto (X o "atrás") pide confirmación', (tester) async {
