@@ -141,6 +141,24 @@ void main() {
       expect(gps.intervalos, hasLength(2));
     });
 
+    testWidgets('si el GPS no entrega posiciones avisa en el mapa y el aviso se va cuando vuelve', (tester) async {
+      final e = entornoChofer();
+
+      await montarChofer(tester, e, ubicador: gps);
+      expect(find.text('Buscando tu ubicación…'), findsOneWidget);
+      expect(find.textContaining('No podemos obtener tu ubicación'), findsNothing);
+
+      await tester.pump(const Duration(seconds: 30));
+      expect(find.textContaining('No podemos obtener tu ubicación'), findsOneWidget);
+      expect(find.text('Buscando tu ubicación…'), findsNothing);
+      expect(find.text('Abrir ajustes'), findsOneWidget);
+      expect(find.text('Reintentar'), findsOneWidget);
+
+      gps.emitir(punto(0));
+      await tester.pump();
+      expect(find.textContaining('No podemos obtener tu ubicación'), findsNothing);
+    });
+
     testWidgets('cerrar el módulo con el turno abierto (X o "atrás") pide confirmación', (tester) async {
       final e = entornoChofer();
 

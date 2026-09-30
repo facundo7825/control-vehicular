@@ -7,6 +7,14 @@ import '../ubicacion/ubicador.dart';
 import 'cola_ubicaciones.dart';
 import 'emisor_ubicacion.dart';
 
+/// El GPS está abierto pero no entrega posiciones (ver `RastreadorTurno._armarSilencio`).
+class SinPosicionGps implements Exception {
+  const SinPosicionGps();
+
+  @override
+  String toString() => 'SinPosicionGps: el GPS no entrega posiciones';
+}
+
 /// Une el GPS del turno con la cola y el emisor (decisiones 4 y 5). Es dueño del stream del GPS y del
 /// timer de envío: [detener] los libera.
 ///
@@ -30,6 +38,7 @@ class RastreadorTurno {
     required this.alPunto,
     required this.alErrorGps,
     required this.alQuedarSinTurno,
+    this.sinPosicionTras,
   });
 
   final Ubicador ubicador;
@@ -47,8 +56,16 @@ class RastreadorTurno {
   /// El backend respondió que no hay turno (o que ya no es chofer). El rastreo ya está detenido.
   final void Function() alQuedarSinTurno;
 
+  /// Tiempo sin puntos del GPS después del cual se avisa con [SinPosicionGps]. Por defecto
+  /// `max(30 s, 3 × intervaloGps)`.
+  final Duration? sinPosicionTras;
+
   StreamSubscription<PuntoGps>? _gps;
   Timer? _envio;
+
+  /// Perro guardián del GPS: se arma al abrir el stream y con cada punto; dispara una sola vez por período
+  /// de silencio.
+  Timer? _silencio;
   bool _activo = false;
   bool _enViaje = false;
 
@@ -62,6 +79,11 @@ class RastreadorTurno {
 
   /// Ritmo del GPS: el más rápido de los dos, fijo durante todo el turno.
   Duration get intervaloGps => intervaloViaje < intervaloTurno ? intervaloViaje : intervaloTurno;
+
+  Duration get _limiteSilencio {
+    final tres = intervaloGps * 3;
+    return sinPosicionTras ?? (tres > const Duration(seconds: 30) ? tres : const Duration(seconds: 30));
+  }
 
   void iniciar({bool enViaje = false}) {
     if (_activo) return;
@@ -88,11 +110,25 @@ class RastreadorTurno {
     // abrir otro. La cancelación suelta el stream en el momento (no hace falta esperar el Future de `cancel`).
     _cancelar(_gps);
     _gps = null;
+    _silencio?.cancel();
+    _silencio = null;
     try {
       _gps = ubicador.seguir(intervaloGps).listen(_alPunto, onError: alErrorGps);
+      _armarSilencio();
     } catch (e) {
       alErrorGps(e); // un plugin que lanza al abrir el stream (p. ej. sin implementación en la plataforma)
     }
+  }
+
+  /// Si la plataforma rechaza el stream al activarlo (p. ej. falta un permiso de Android) Flutter lo manda
+  /// a FlutterError y el stream nunca emite ni llama a `onError`; lo mismo si el GPS deja de entregar a
+  /// mitad del turno. Sin puntos en [_limiteSilencio] se avisa como un error del GPS. No reabre el GPS.
+  void _armarSilencio() {
+    _silencio?.cancel();
+    _silencio = Timer(_limiteSilencio, () {
+      _silencio = null;
+      if (_activo) alErrorGps(const SinPosicionGps());
+    });
   }
 
   void _programarEnvio() {
@@ -106,6 +142,7 @@ class RastreadorTurno {
   /// viejo que el último encolado (el GPS entregó uno atrasado o el reloj del teléfono volvió atrás) entra
   /// igual: la cola lo ordena.
   void _alPunto(PuntoGps p) {
+    _armarSilencio();
     final ultimo = _ultimoEncolado;
     final desde = ultimo == null ? null : p.registradoEn.difference(ultimo);
     if (desde == null || desde.isNegative || desde >= intervalo - intervaloGps ~/ 2) {
@@ -136,6 +173,8 @@ class RastreadorTurno {
     _activo = false;
     _envio?.cancel();
     _envio = null;
+    _silencio?.cancel();
+    _silencio = null;
     _cancelar(_gps);
     _gps = null;
     _ultimoEncolado = null;
