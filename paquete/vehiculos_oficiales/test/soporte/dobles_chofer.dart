@@ -109,7 +109,7 @@ class ApiChofer extends ApiFalsa {
   Future<Viaje> aceptarOferta(int ofertaId) async {
     llamadas.add('aceptar:$ofertaId');
     if (errorOferta != null) throw errorOferta!;
-    return respuestaAceptar ?? viaje(estado: 'aceptado', conChofer: true);
+    return respuestaAceptar ?? Viaje.fromJson(p.json(p.viajeAceptado));
   }
 
   @override
@@ -123,7 +123,12 @@ class ApiChofer extends ApiFalsa {
     llamadas.add('avanzar:$viajeId:${estado.valor}');
     avances.add((viajeId, estado));
     if (errorAvance != null) throw errorAvance!;
-    return respuestaAvance ?? viaje(id: viajeId, estado: estado.valor, conChofer: true);
+    return respuestaAvance ??
+        Viaje.fromJson(
+          p.json(p.viajeAceptado)
+            ..['id'] = viajeId
+            ..['estado'] = estado.valor,
+        );
   }
 
   @override

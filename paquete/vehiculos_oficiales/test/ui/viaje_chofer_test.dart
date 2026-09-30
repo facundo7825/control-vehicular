@@ -200,6 +200,28 @@ void main() {
     expect(find.byType(MapaChofer), findsOneWidget);
   });
 
+  testWidgets('sin socket, cancelado en el servidor: tras el sondeo avisa que se canceló, no vuelve al mapa', (
+    tester,
+  ) async {
+    tr = TiempoRealFalso(estado: EstadoConexion.desconectado);
+    await abrir(tester, viajeJson(), (e) {
+      e.http
+        ..responder('GET', 'viajes/actual', 200, p.viajeActualVacio)
+        ..responder('GET', 'viajes/1', 200, viajeJson(estado: 'cancelado'));
+    });
+    expect(find.text('Voy en camino'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 10));
+    await esperar(tester);
+
+    expect(find.text('El viaje fue cancelado'), findsOneWidget);
+    expect(find.byType(MapaChofer), findsNothing);
+    await tester.tap(find.text('Volver al mapa'));
+    await tester.pumpAndSettle();
+    expect(find.byType(MapaChofer), findsOneWidget);
+    expect(find.text('Tenés un viaje en curso.'), findsNothing);
+  });
+
   testWidgets('reasignado por un administrador', (tester) async {
     await abrir(tester, viajeJson());
 

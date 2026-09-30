@@ -121,6 +121,7 @@ void main() {
 
       expect(leer(c).viaje!.estado, EstadoViaje.sinChofer);
       expect(tr.canalesActivos, isEmpty);
+      expect(api.consultasDetalle, isEmpty); // el solicitante usa el historial, no GET /viajes/{id}
     });
   });
 

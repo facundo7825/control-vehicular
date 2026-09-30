@@ -60,6 +60,18 @@ class ApiFalsa extends ApiVehiculos {
   ErrorApi? fallarEta;
   int consultasEta = 0;
 
+  /// Respuestas de `GET /viajes/{id}` por id; sin respuesta preparada falla con StateError.
+  final detalles = <int, Viaje>{};
+  ErrorApi? errorDetalle;
+  final consultasDetalle = <int>[];
+
+  @override
+  Future<Viaje> viaje(int id) async {
+    consultasDetalle.add(id);
+    if (errorDetalle != null) throw errorDetalle!;
+    return detalles[id] ?? (throw StateError('Sin detalle preparado para el viaje $id'));
+  }
+
   @override
   Future<Eta> eta(int viajeId) async {
     consultasEta++;
@@ -89,13 +101,17 @@ class ApiFalsa extends ApiVehiculos {
   Future<Viaje> pedirViaje(PedidoViaje pedido) async {
     pedidos.add(pedido);
     if (errorPedido != null) throw errorPedido!;
-    return respuestaPedido ?? viaje();
+    return respuestaPedido ?? Viaje.fromJson(p.json(p.viajeOfrecido));
   }
 
   @override
   Future<Viaje> cancelarViaje(int viajeId, {String? motivo}) async {
     cancelaciones.add((viajeId, motivo));
-    return viaje(id: viajeId, estado: 'cancelado');
+    return Viaje.fromJson(
+      p.json(p.viajeOfrecido)
+        ..['id'] = viajeId
+        ..['estado'] = 'cancelado',
+    );
   }
 }
 

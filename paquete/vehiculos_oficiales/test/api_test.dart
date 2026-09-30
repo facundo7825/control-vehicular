@@ -107,6 +107,25 @@ void main() {
     );
   });
 
+  test(
+    'el detalle de un viaje sale por GET viajes/{id}; un 403 es AccesoDenegado y uno ilegible ErrorServidor',
+    () async {
+      http.responder('GET', 'viajes/7', 200, p.viajeAceptado.replaceFirst('"id":1,', '"id":7,'));
+      http.responder('GET', 'viajes/8', 403, '{"message":"Este viaje no es tuyo."}');
+      http.responder('GET', 'viajes/9', 200, p.viajeAceptado.replaceFirst('"aceptado"', '"volando"'));
+
+      final v = await api.viaje(7);
+
+      expect(v.id, 7);
+      expect(v.chofer!.id, 2);
+      await expectLater(
+        api.viaje(8),
+        throwsA(isA<AccesoDenegado>().having((e) => e.mensaje, 'mensaje', 'Este viaje no es tuyo.')),
+      );
+      await expectLater(api.viaje(9), throwsA(isA<ErrorServidor>()));
+    },
+  );
+
   test('sin red es SinConexion; un 500 o una respuesta que no es JSON es ErrorServidor', () async {
     http.sinRed('GET', 'choferes');
     http.responder('GET', 'viajes/actual', 500, '{"message":"Server Error"}');
