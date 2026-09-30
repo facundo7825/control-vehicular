@@ -113,6 +113,11 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
       if (version != _version) return true;
       // Sin socket, un viaje asignado sin oferta aparece recién acá.
       if (nuevo.viaje case final v? when _llegoSinOferta(antes, v)) nuevo = nuevo.conAsignado(true);
+      // La consulta no trae la marca: la de un viaje que sigue siendo el mismo se conserva hasta que el
+      // chofer lo vea (un push o el respaldo justo después del evento no la borran).
+      if (antes != null && antes.asignadoSinOferta && nuevo.viaje != null && antes.viaje?.id == nuevo.viaje?.id) {
+        nuevo = nuevo.conAsignado(true);
+      }
       state = AsyncData(nuevo);
       _seguir(nuevo.viaje);
     } on SesionInvalida {
@@ -165,7 +170,11 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
     _aceptandoViajeId = oferta.viaje.id;
     try {
       final v = await ref.read(apiProvider).aceptarOferta(oferta.id);
-      if (ref.mounted) _aplicarViaje(v);
+      if (!ref.mounted) return;
+      _aplicarViaje(v);
+      // Ya es el viaje actual: un evento "aceptado" que llegue después lo encuentra. Si más adelante se lo
+      // vuelven a asignar sin oferta (lo canceló y un administrador se lo da), sí es un viaje asignado.
+      _aceptandoViajeId = null;
     } on ErrorApi catch (e) {
       _aceptandoViajeId = null;
       if (e is ErrorNegocio) _quitarOferta(oferta.id);
@@ -202,6 +211,7 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
 
   /// El usuario ya vio el estado final (finalizado, cancelado, sin chofer): se vuelve al mapa.
   void descartar() {
+    _aceptandoViajeId = null;
     _fijar(const SeguimientoViaje());
     _seguir(null);
   }

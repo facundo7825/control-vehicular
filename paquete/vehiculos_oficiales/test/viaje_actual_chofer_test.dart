@@ -223,6 +223,64 @@ void main() {
       });
     });
 
+    test('un refresco por push justo después del evento no borra la marca', () {
+      fakeAsync((async) {
+        final c = crear();
+        async.flushMicrotasks();
+
+        final asignado = viaje(id: 3, estado: 'aceptado', obligatorio: true, conChofer: true);
+        tr.emitir('chofer.2', Eventos.viajeActualizado, jsonViaje(asignado));
+        api.actual = ViajeActual(viaje: asignado);
+        c.read(viajeActualProvider.notifier).refrescar();
+        async.flushMicrotasks();
+
+        expect(leer(c).viaje!.id, 3);
+        expect(leer(c).asignadoSinOferta, isTrue);
+
+        c.read(viajeActualProvider.notifier).verViajeAsignado();
+        expect(leer(c).asignadoSinOferta, isFalse);
+        c.read(viajeActualProvider.notifier).refrescar();
+        async.flushMicrotasks();
+        expect(leer(c).asignadoSinOferta, isFalse);
+      });
+    });
+
+    test('sin socket, dos consultas seguidas conservan la marca', () {
+      fakeAsync((async) {
+        tr = TiempoRealFalso(estado: EstadoConexion.desconectado);
+        final c = crear();
+        async.flushMicrotasks();
+
+        api.actual = ViajeActual(viaje: viaje(id: 4, estado: 'aceptado', conChofer: true));
+        async.elapse(const Duration(seconds: 10));
+        expect(leer(c).asignadoSinOferta, isTrue);
+        async.elapse(const Duration(seconds: 20));
+        expect(leer(c).asignadoSinOferta, isTrue);
+      });
+    });
+
+    test('una oferta aceptada y después cancelada no impide marcar el mismo viaje si se lo asignan', () {
+      fakeAsync((async) {
+        api.actual = ViajeActual.fromJson(p.json(p.viajeActualChofer));
+        final c = crear();
+        async.flushMicrotasks();
+
+        c.read(viajeActualProvider.notifier).aceptarOferta();
+        async.flushMicrotasks();
+        c.read(viajeActualProvider.notifier).cancelar(motivo: 'Se rompió el auto');
+        async.flushMicrotasks();
+        c.read(viajeActualProvider.notifier).descartar();
+
+        tr.emitir(
+          'chofer.2',
+          Eventos.viajeActualizado,
+          jsonViaje(viaje(estado: 'aceptado', obligatorio: true, conChofer: true)),
+        );
+        expect(leer(c).viaje!.id, 1);
+        expect(leer(c).asignadoSinOferta, isTrue);
+      });
+    });
+
     test('el viaje que había al abrir no se marca', () {
       fakeAsync((async) {
         api.actual = ViajeActual(viaje: viaje(estado: 'aceptado', conChofer: true));
