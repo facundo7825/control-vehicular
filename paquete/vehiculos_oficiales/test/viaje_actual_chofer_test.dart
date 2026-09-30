@@ -439,6 +439,33 @@ void main() {
       });
     });
 
+    test('una sesión inválida en la consulta conserva el viaje, sin errores', () {
+      fakeAsync((async) {
+        final c = desaparecido(async);
+        api.errorDetalle = const SesionInvalida();
+
+        async.elapse(const Duration(seconds: 10));
+
+        expect(c.read(viajeActualProvider).hasError, isFalse);
+        expect(leer(c).viaje!.estado, EstadoViaje.enCamino);
+      });
+    });
+
+    test('si el notifier se descarta mientras se consulta, no hay errores sin capturar', () {
+      fakeAsync((async) {
+        final c = desaparecido(async);
+        api.detalles[1] = viaje(estado: 'cancelado', conChofer: true);
+        api.demoraActual = Completer<void>();
+
+        async.elapse(const Duration(seconds: 10)); // el sondeo queda esperando viajes/actual
+        c.dispose();
+        api.demoraActual!.complete();
+        async.flushMicrotasks();
+
+        expect(api.consultasDetalle, isEmpty);
+      });
+    });
+
     for (final error in [const SinConexion(), const ErrorServidor(), const NoEncontrado()]) {
       test('${error.runtimeType} en la consulta: queda sin viaje, sin errores', () {
         fakeAsync((async) {

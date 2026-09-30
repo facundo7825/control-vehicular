@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../api/api_vehiculos.dart';
 import '../api/errores_api.dart';
 import '../entorno.dart';
 import '../modelos/modelos.dart';
@@ -235,13 +236,15 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
       viaje = historial.where((v) => v.id == previo.id).firstOrNull;
     }
     // El chofer lo busca por su id (el historial no trae viajes que ya no son suyos).
-    if (viaje == null && previo != null && !previo.estado.terminado && _esSuyo(previo)) {
-      viaje = await _comoTermino(previo);
+    if (viaje == null && previo != null && !previo.estado.terminado && _esSuyo(previo) && ref.mounted) {
+      viaje = await _comoTermino(api, previo);
     }
     // Un viaje ya terminado (o, para el chofer, que ya no es suyo) se queda en pantalla hasta que el
     // usuario lo descarte.
     if (viaje == null && previo != null && (previo.estado.terminado || _yaNoEsSuyo(previo))) viaje = previo;
     _recordarFinal(viaje);
+    // Descartado mientras se consultaba: quien llamó ya no usa el resultado (y el estado no se puede leer).
+    if (!ref.mounted) return SeguimientoViaje(viaje: viaje, oferta: actual.oferta);
 
     UbicacionChofer? ubicacion = viaje?.chofer?.id == state.value?.viaje?.chofer?.id
         ? state.value?.ubicacionChofer
@@ -276,9 +279,9 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
   /// Chofer: el viaje que seguía ya no está en `viajes/actual` (terminó o se lo sacaron mientras no había
   /// socket). Devuelve cómo quedó para mostrar su pantalla de fin, o `null` si no se puede saber (se vuelve
   /// al mapa, como sin esta consulta). Un 403 es "ya no es tuyo": el mismo viaje, sin chofer.
-  Future<Viaje?> _comoTermino(Viaje previo) async {
+  Future<Viaje?> _comoTermino(ApiVehiculos api, Viaje previo) async {
     try {
-      final v = await ref.read(apiProvider).viaje(previo.id);
+      final v = await api.viaje(previo.id);
       if (_revive(v)) return null;
       return v.estado.terminado || _yaNoEsSuyo(v) ? v : null;
     } on SesionInvalida {
