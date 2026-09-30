@@ -98,15 +98,6 @@ class _Buscando extends ConsumerWidget {
   }
 }
 
-/// Teléfono para `tel:`: solo dígitos y un `+` inicial (llega como texto libre, p. ej. "+54 (381) 555-0000").
-/// Nulo si no queda ningún dígito.
-String? telefonoMarcable(String? telefono) {
-  if (telefono == null) return null;
-  final digitos = telefono.replaceAll(RegExp(r'\D'), '');
-  if (digitos.isEmpty) return null;
-  return telefono.trimLeft().startsWith('+') ? '+$digitos' : digitos;
-}
-
 /// Línea de llegada estimada, o nada si todavía no hay ETA o el chofer ya está en el origen (`segundos == 0`).
 @visibleForTesting
 String? textoEta(Eta? eta) {

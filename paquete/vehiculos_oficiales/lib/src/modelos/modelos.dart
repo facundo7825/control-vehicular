@@ -1,3 +1,4 @@
+export 'chofer.dart';
 export 'chofer_mapa.dart';
 export 'comunes.dart';
 export 'configuracion.dart';

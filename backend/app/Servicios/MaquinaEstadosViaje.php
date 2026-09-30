@@ -14,7 +14,7 @@ use Illuminate\Support\Facades\DB;
 /** Única puerta para cambiar el estado de un viaje (spec 5.1). */
 class MaquinaEstadosViaje
 {
-    public function __construct(private CalculadorEstadoChofer $estados) {}
+    public function __construct(private AvisoEstadoChofer $aviso) {}
 
     private const PERMITIDAS = [
         'buscando' => [E::Ofrecido, E::Aceptado, E::SinChofer, E::Cancelado],
@@ -155,6 +155,6 @@ class MaquinaEstadosViaje
     private function emitirEstadoChofer(int $choferId): void
     {
         $chofer = \App\Models\Usuario::find($choferId);
-        EstadoChoferActualizado::dispatch($choferId, $this->estados->estado($chofer)->value);
+        $this->aviso->publicarSiCambio($chofer);
     }
 }

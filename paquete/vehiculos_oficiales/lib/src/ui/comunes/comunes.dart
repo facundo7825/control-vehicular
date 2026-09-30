@@ -18,6 +18,15 @@ final lanzadorUrlProvider = Provider<LanzadorUrl>(
       (uri) => launchUrl(uri, mode: LaunchMode.externalApplication),
 );
 
+/// Teléfono para `tel:`: solo dígitos y un `+` inicial (llega como texto libre, p. ej. "+54 (381) 555-0000").
+/// Nulo si no queda ningún dígito.
+String? telefonoMarcable(String? telefono) {
+  if (telefono == null) return null;
+  final digitos = telefono.replaceAll(RegExp(r'\D'), '');
+  if (digitos.isEmpty) return null;
+  return telefono.trimLeft().startsWith('+') ? '+$digitos' : digitos;
+}
+
 /// Distancia en línea recta (haversine), en metros.
 double distanciaMetros(Coordenada a, Coordenada b) {
   const radio = 6371000.0;

@@ -89,3 +89,95 @@ it('un Reverb caído no hace fallar el request: el evento va a la cola', functio
     Queue::assertPushed(Illuminate\Broadcasting\BroadcastEvent::class,
         fn ($job) => $job->event instanceof UbicacionChoferActualizada);
 });
+
+it('avisa estado libre una sola vez cuando empieza a llegar la ubicación de un chofer sin señal', function () {
+    $chofer = choferEnTurno(minutos: 10);
+    app(App\Servicios\AvisoEstadoChofer::class)->publicarSiCambio($chofer);
+    Event::fake([EstadoChoferActualizado::class]);
+
+    $punto = fn () => ['lat' => -34.6, 'lng' => -58.38, 'registrado_en' => now()->toIso8601String()];
+    app(ServicioUbicacion::class)->registrar($chofer, [$punto()]);
+    $this->travel(10)->seconds();
+    app(ServicioUbicacion::class)->registrar($chofer, [$punto()]);
+
+    Event::assertDispatchedTimes(EstadoChoferActualizado::class, 1);
+    Event::assertDispatched(EstadoChoferActualizado::class,
+        fn ($e) => $e->choferId === $chofer->id && $e->estado === 'libre');
+});
+
+it('el comando por minuto avisa sin_senal cuando la ubicación se vuelve vieja, y no lo repite', function () {
+    $this->travelTo(now()->startOfMinute());
+    $chofer = choferEnTurno();
+    $this->artisan('vehiculos:publicar-estados-chofer')->assertSuccessful();
+    Event::fake([EstadoChoferActualizado::class]);
+
+    $this->travel(3)->minutes();
+    $this->artisan('vehiculos:publicar-estados-chofer')->assertSuccessful();
+    $this->travel(1)->minutes();
+    $this->artisan('vehiculos:publicar-estados-chofer')->assertSuccessful();
+
+    Event::assertDispatchedTimes(EstadoChoferActualizado::class, 1);
+    Event::assertDispatched(EstadoChoferActualizado::class,
+        fn ($e) => $e->choferId === $chofer->id && $e->estado === 'sin_senal');
+});
+
+it('el comando avisa reservado_pronto al entrar la reserva en la ventana', function () {
+    $this->travelTo(now()->startOfMinute());
+    $chofer = choferEnTurno();
+    $this->artisan('vehiculos:publicar-estados-chofer')->assertSuccessful();
+    reservaAceptada($chofer, now()->addMinutes(60));
+    Event::fake([EstadoChoferActualizado::class]);
+
+    $this->artisan('vehiculos:publicar-estados-chofer');
+    Event::assertNotDispatched(EstadoChoferActualizado::class);
+
+    $this->travel(20)->minutes();
+    $chofer->ubicacion()->update(['actualizado_en' => now()]);
+    $this->artisan('vehiculos:publicar-estados-chofer');
+    Event::assertDispatched(EstadoChoferActualizado::class, fn ($e) => $e->estado === 'reservado_pronto');
+});
+
+it('no emite nada si el estado no cambió', function () {
+    $chofer = choferEnTurno();
+    $aviso = app(App\Servicios\AvisoEstadoChofer::class);
+    $aviso->publicarSiCambio($chofer);
+    Event::fake([EstadoChoferActualizado::class]);
+
+    $aviso->publicarSiCambio($chofer);
+    $this->artisan('vehiculos:publicar-estados-chofer');
+
+    Event::assertNotDispatched(EstadoChoferActualizado::class);
+});
+
+it('si la transacción se revierte no se guarda ni se emite el estado', function () {
+    $chofer = choferEnTurno();
+    Event::fake([EstadoChoferActualizado::class]);
+
+    try {
+        Illuminate\Support\Facades\DB::transaction(function () use ($chofer) {
+            app(App\Servicios\AvisoEstadoChofer::class)->publicarSiCambio($chofer);
+            throw new RuntimeException('rollback');
+        });
+    } catch (RuntimeException) {
+    }
+
+    expect(Illuminate\Support\Facades\Cache::has("estado_chofer_publicado:{$chofer->id}"))->toBeFalse();
+    Event::assertNotDispatched(EstadoChoferActualizado::class);
+
+    Illuminate\Support\Facades\DB::transaction(fn () => app(App\Servicios\AvisoEstadoChofer::class)->publicarSiCambio($chofer));
+
+    expect(Illuminate\Support\Facades\Cache::get("estado_chofer_publicado:{$chofer->id}"))->toBe('libre');
+    Event::assertDispatchedTimes(EstadoChoferActualizado::class, 1);
+});
+
+it('el comando sigue con los demás choferes si uno falla', function () {
+    $a = choferEnTurno();
+    $b = choferEnTurno();
+    Event::fake([EstadoChoferActualizado::class]);
+    $this->mock(App\Servicios\AvisoEstadoChofer::class, function ($m) use ($a, $b) {
+        $m->shouldReceive('publicarSiCambio')->with(Mockery::on(fn ($c) => $c->id === $a->id))->andThrow(new RuntimeException('x'));
+        $m->shouldReceive('publicarSiCambio')->with(Mockery::on(fn ($c) => $c->id === $b->id))->once();
+    });
+
+    $this->artisan('vehiculos:publicar-estados-chofer')->assertSuccessful();
+});

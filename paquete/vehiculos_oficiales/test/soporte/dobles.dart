@@ -138,12 +138,49 @@ class TiempoRealFalso implements TiempoReal {
   void cerrar() {}
 }
 
+/// Ubicador sin geolocator: la posición actual es fija y el GPS del turno emite los puntos que el test
+/// mande con [emitir] (o un error con [fallar]).
 class UbicadorFalso implements Ubicador {
   UbicadorFalso([this.posicion]);
 
   /// Nula = permiso denegado o GPS apagado.
   Coordenada? posicion;
 
+  /// Lo que responde [pedirPermiso].
+  PermisoUbicacion permiso = PermisoUbicacion.concedido;
+  int pedidosDePermiso = 0;
+  final ajustesAbiertos = <PermisoUbicacion>[];
+
+  /// Intervalo de cada `seguir()`, en orden.
+  final intervalos = <Duration>[];
+  StreamController<PuntoGps>? _gps;
+
+  /// Hay alguien escuchando el GPS del turno.
+  bool get siguiendo => _gps?.hasListener ?? false;
+
+  void emitir(PuntoGps p) => _gps?.add(p);
+
+  void fallar(Object error) => _gps?.addError(error);
+
   @override
   Future<Coordenada?> actual() async => posicion;
+
+  @override
+  Future<PermisoUbicacion> pedirPermiso() async {
+    pedidosDePermiso++;
+    return permiso;
+  }
+
+  @override
+  Stream<PuntoGps> seguir(Duration intervalo) {
+    intervalos.add(intervalo);
+    final gps = _gps = StreamController<PuntoGps>(sync: true);
+    gps.onCancel = () {
+      if (identical(_gps, gps)) _gps = null;
+    };
+    return gps.stream;
+  }
+
+  @override
+  Future<void> abrirAjustes(PermisoUbicacion motivo) async => ajustesAbiertos.add(motivo);
 }

@@ -12,6 +12,8 @@ use App\Support\HoraLocal;
 
 class ServicioUbicacion
 {
+    public function __construct(private AvisoEstadoChofer $aviso) {}
+
     /** @param array<int, array{lat: float, lng: float, rumbo?: ?float, velocidad?: ?float, registrado_en: string}> $puntos */
     public function registrar(Usuario $chofer, array $puntos): void
     {
@@ -44,12 +46,21 @@ class ServicioUbicacion
             );
         }
 
+        $this->aviso->publicarSiCambio($chofer);
+
         $enCurso = Viaje::where('chofer_id', $chofer->id)->where('estado', EstadoViaje::EnCurso)->first();
         if ($enCurso) {
-            $puntos->filter(fn ($p) => $p['momento']->gte($enCurso->iniciado_en))
-                ->each(fn ($p) => PuntoRecorrido::create([
+            // Idempotente: un lote reenviado (la app no recibió el 204) no duplica puntos. El índice único
+            // (viaje_id, registrado_en) descarta los que ya estaban, también dentro del mismo lote.
+            $filas = $puntos->filter(fn ($p) => $p['momento']->gte($enCurso->iniciado_en))
+                ->map(fn ($p) => [
                     'viaje_id' => $enCurso->id, 'lat' => $p['lat'], 'lng' => $p['lng'], 'registrado_en' => $p['momento'],
-                ]));
+                ])
+                ->values()
+                ->all();
+            if ($filas !== []) {
+                PuntoRecorrido::insertOrIgnore($filas);
+            }
         }
     }
 }

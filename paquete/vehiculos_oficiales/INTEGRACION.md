@@ -1,0 +1,166 @@
+# Integrar Vehículos Oficiales en la app del PJ
+
+Qué tiene que hacer la app principal para embeber el módulo. `host_prueba/` (en este repo) es una app mínima que ya lo hace: ante la duda, copiar de ahí.
+
+## 1. Versiones
+
+- Flutter **3.41** o más nuevo, Dart **3.11** o más nuevo (`environment` de `pubspec.yaml` del paquete).
+- El módulo usa **Riverpod 3** (`flutter_riverpod ^3.3.2`), `go_router ^17.5.0`, `dio ^5.11.1`, `geolocator ^14.1.1`, `google_maps_flutter ^2.18.1`, `url_launcher ^6.3.2`, `flutter_secure_storage ^11.2.0` y `dart_pusher_channels ^1.3.1`. Si la app principal usa alguno, tiene que poder resolver esas versiones (en particular, no puede seguir en Riverpod 2).
+- El módulo arma su propio `ProviderScope` y su propio router: no hace falta envolverlo en nada.
+
+Dependencia (ruta o git, según cómo se distribuya):
+
+```yaml
+dependencies:
+  vehiculos_oficiales:
+    path: ../paquete/vehiculos_oficiales
+```
+
+## 2. Abrir el módulo
+
+Único punto de entrada: `VehiculosOficiales.abrir` (lo exporta `package:vehiculos_oficiales/vehiculos_oficiales.dart`). Abre el módulo encima de la navegación de la app y el `Future` termina cuando el usuario lo cierra.
+
+```dart
+VehiculosOficiales.abrir(
+  context,
+  sesion: SesionPJ(tokenDeSesionDelPJ),
+  push: puenteFcm, // una sola instancia para toda la app (ver 3)
+  onSesionInvalida: () => volverAlLogin(aviso: 'Tu sesión venció. Volvé a ingresar.'),
+  config: const VehiculosOficialesConfig(
+    apiBaseUrl: 'https://vehiculos.pj.gob.ar', // sin /api
+    reverbHost: 'vehiculos.pj.gob.ar',
+    reverbKey: '<REVERB_APP_KEY>',
+    reverbPort: 443,
+    reverbScheme: 'https',
+    centroMapaLat: -26.8241, // donde se centra el mapa si todavía no hay posición
+    centroMapaLng: -65.2226,
+  ),
+);
+```
+
+- `sesion`: el token de sesión del PJ; el backend lo valida contra el servicio de identidad.
+- `onSesionInvalida`: se llama **una sola vez** si el backend responde 401 (token vencido o inválido). La app decide qué hacer (normalmente, cerrar sesión y volver a su login).
+- `googleMapsApiKey` de la configuración es solo informativa: la clave real va en el manifiesto de Android y en el `AppDelegate` de iOS (ver 4 y 5).
+
+## 3. Notificaciones push (FCM)
+
+La app principal es dueña de Firebase. El módulo solo necesita un `PuenteNotificaciones`:
+
+```dart
+class PuenteFcm implements PuenteNotificaciones {
+  // Tiene que ser broadcast: el módulo lo escucha en cada apertura.
+  final _mensajes = StreamController<Map<String, dynamic>>.broadcast();
+
+  PuenteFcm() {
+    FirebaseMessaging.onMessage.listen((m) => _mensajes.add(m.data));
+    FirebaseMessaging.onMessageOpenedApp.listen((m) => _mensajes.add(m.data));
+  }
+
+  @override
+  Future<String?> token() => FirebaseMessaging.instance.getToken();
+
+  @override
+  Stream<Map<String, dynamic>> get mensajes => _mensajes.stream;
+}
+```
+
+- `token()`: token FCM del dispositivo (o `null`). El módulo lo registra en el backend al abrirse. Si falla, sigue sin push.
+- `mensajes`: el `data` de cada mensaje recibido, **como stream broadcast** (`StreamController.broadcast()`). Un stream de una sola escucha falla desde la segunda apertura del módulo.
+- Los mensajes del módulo traen en `data` (todo string): `modulo = vehiculos_oficiales`, `tipo` (`oferta`, `oferta_reserva`, `viaje`, `recordatorio_reserva`, `alerta_reserva`) y, según el tipo, `viaje_id`, `oferta_id` y `estado`. Los que no tienen `modulo = vehiculos_oficiales` el módulo los ignora, así que se le pueden reenviar todos.
+- El backend manda cada push con `notification` (título y texto) y prioridad alta en Android: con la app en segundo plano la notificación la muestra el sistema. Qué hacer al tocarla (por ejemplo, abrir el módulo) lo decide la app principal.
+- En Android 13 o más nuevo, **la app tiene que pedir `POST_NOTIFICATIONS` en tiempo de ejecución** (por ejemplo con `FirebaseMessaging.instance.requestPermission()`): sin ese permiso no se ven ni los push ni la notificación fija del turno del chofer. El módulo no lo pide.
+
+## 4. Android
+
+`android/app/src/main/AndroidManifest.xml`, dentro de `<manifest>`:
+
+```xml
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+<!-- El GPS del turno mantiene el procesador despierto (enableWakeLock): sin este permiso Android rechaza el stream. -->
+<uses-permission android:name="android.permission.WAKE_LOCK" />
+<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+<!-- Opcional, según la política de ubicación en segundo plano de Google Play que acepte el PJ: -->
+<uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+```
+
+Dentro de `<application>`, la clave de Google Maps:
+
+```xml
+<meta-data
+    android:name="com.google.android.geo.API_KEY"
+    android:value="${MAPS_API_KEY}" />
+```
+
+(En `host_prueba` sale de `android/secretos.properties`, que no se versiona, con `manifestPlaceholders["MAPS_API_KEY"]` en `app/build.gradle.kts`.)
+
+Dentro de `<queries>` (Android 11+), para "Llamar" y "Navegar" con Google Maps o Waze:
+
+```xml
+<intent>
+    <action android:name="android.intent.action.DIAL" />
+    <data android:scheme="tel" />
+</intent>
+<intent>
+    <action android:name="android.intent.action.VIEW" />
+    <data android:scheme="https" />
+</intent>
+<intent>
+    <action android:name="android.intent.action.VIEW" />
+    <data android:scheme="google.navigation" />
+</intent>
+<intent>
+    <action android:name="android.intent.action.VIEW" />
+    <data android:scheme="waze" />
+</intent>
+```
+
+`minSdk` **24** o más (lo exige `flutter_secure_storage`; es el valor por defecto de Flutter 3.41).
+
+El GPS del turno corre en un **servicio en primer plano de tipo `location`** (geolocator) con la notificación fija "Turno activo – compartiendo ubicación" en el canal "Ubicación del turno". Se inicia con la app en primer plano, así que alcanza el permiso "mientras se usa la app"; `ACCESS_BACKGROUND_LOCATION` no hace falta para eso.
+
+## 5. iOS
+
+`ios/Runner/Info.plist`:
+
+```xml
+<key>NSLocationWhenInUseUsageDescription</key>
+<string>Para marcar tu ubicación como origen del viaje y, si sos chofer, compartirla durante el turno.</string>
+<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+<string>Mientras tu turno de chofer está abierto, la app comparte tu ubicación aunque esté en segundo plano.</string>
+<key>UIBackgroundModes</key>
+<array>
+    <string>location</string>
+</array>
+<key>LSApplicationQueriesSchemes</key>
+<array>
+    <string>tel</string>
+    <string>comgooglemaps</string>
+    <string>waze</string>
+</array>
+<key>GMSApiKey</key>
+<string>$(MAPS_API_KEY)</string>
+```
+
+(Si la app ya usa `UIBackgroundModes` para otra cosa, por ejemplo `remote-notification`, se agrega `location` al mismo arreglo.)
+
+`ios/Runner/AppDelegate.swift`, antes de `super.application(...)`:
+
+```swift
+import GoogleMaps
+
+if let clave = Bundle.main.object(forInfoDictionaryKey: "GMSApiKey") as? String, !clave.isEmpty {
+  GMSServices.provideAPIKey(clave)
+}
+```
+
+## 6. Comportamiento que conviene saber
+
+- **El GPS del chofer vive con el módulo abierto.** Mientras el módulo está abierto sigue compartiendo la ubicación con la app en segundo plano; si el chofer **cierra el módulo** con el turno abierto, el GPS se corta hasta que lo vuelva a abrir (el turno sigue abierto y el backend lo marca "sin señal"). Por eso el módulo pide confirmación al cerrarlo con el turno abierto. Si el PJ necesita que siga con el módulo cerrado, el rastreo tiene que pasar a un servicio de la app principal (pendiente de definir con el equipo de la app).
+- El GPS se abre una sola vez por turno y no se reinicia al empezar o terminar un viaje: reabrirlo con la app en segundo plano puede fallar en Android 12+ e iOS. Si el GPS falla (permiso revocado, ubicación apagada), el mapa del chofer lo avisa con "Abrir ajustes" y "Reintentar".
+- Con permiso "mientras se usa la app" en iOS el sistema puede cortar la ubicación con la pantalla bloqueada; "Siempre" (`NSLocationAlwaysAndWhenInUseUsageDescription`) es lo que la garantiza.
+- Los puntos que no se pudieron mandar (sin red) se guardan en memoria mientras el módulo está abierto y salen en orden al volver la conexión; no se persisten en disco.
+- Toda la comunicación es con el backend de Vehículos Oficiales (`/api` y Reverb); el módulo no usa otros servicios de la app principal.

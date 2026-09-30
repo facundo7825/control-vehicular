@@ -1,4 +1,7 @@
+import 'package:clock/clock.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
+import 'package:http_parser/http_parser.dart';
 
 import '../modelos/json.dart';
 import 'errores_api.dart';
@@ -25,6 +28,10 @@ class ClienteApi {
 
   /// Token Sanctum. Nulo hasta el intercambio.
   String? token;
+
+  /// Reloj del servidor menos reloj del dispositivo, según el encabezado `Date` de la última respuesta
+  /// que lo trajo (cero hasta entonces). Lo usa `RelojServidor` para las cuentas regresivas.
+  Duration desfaseReloj = Duration.zero;
 
   Future<Object?> get(String ruta, {Map<String, dynamic>? query}) =>
       _enviar(() => _dio.get<Object?>(ruta, queryParameters: query, options: _opciones()));
@@ -53,9 +60,27 @@ class ClienteApi {
   Future<Object?> _enviar(Future<Response<Object?>> Function() pedido) async {
     try {
       final r = await pedido();
+      _leerReloj(r);
       return r.statusCode == 204 ? null : r.data;
     } on DioException catch (e) {
+      if (e.response case final r?) _leerReloj(r);
       throw _traducir(e);
+    }
+  }
+
+  /// `Date` tiene precisión de segundos y se escribe antes de viajar: el desfase puede quedar corto por
+  /// ~1 s más la latencia, y la cuenta regresiva mostrar ese tiempo de más. Si el chofer acepta en ese
+  /// margen, el backend responde "La oferta ya no está vigente." y la pantalla lo muestra.
+  /// Un encabezado ausente, vacío o inválido no cambia nada; uno repetido (un proxy que lo agrega otra vez)
+  /// se lee por el primero. Nunca lanza: leer el reloj no puede hacer fallar un pedido que salió bien.
+  void _leerReloj(Response<Object?> r) {
+    try {
+      final fecha = r.headers['date']?.firstOrNull;
+      if (fecha == null) return;
+      desfaseReloj = parseHttpDate(fecha).difference(clock.now().toUtc());
+    } catch (e) {
+      // Se conserva el desfase anterior.
+      debugPrint('vehiculos_oficiales: encabezado Date ignorado (${e.runtimeType}).');
     }
   }
 

@@ -58,6 +58,49 @@ class ApiVehiculos {
     await cliente.post('push/token', datos: {'token': token});
   }
 
+  // --- Chofer (rol:chofer en routes/api.php) ---
+
+  Future<List<Vehiculo>> vehiculosDisponibles() =>
+      _leer(() async => leerLista(await cliente.get('vehiculos/disponibles')).map(Vehiculo.fromJson).toList());
+
+  /// `{"turno": null}` sin turno abierto.
+  Future<Turno?> turnoActual() => _leer(() async {
+    final j = await cliente.getMapa('turnos/actual');
+    return j['turno'] == null ? null : Turno.fromJson(leerMapa(j['turno']));
+  });
+
+  Future<Turno> iniciarTurno(int vehiculoId) =>
+      _leer(() async => Turno.fromJson(await cliente.postMapa('turnos', datos: {'vehiculo_id': vehiculoId})));
+
+  Future<Turno> finalizarTurno() =>
+      _leer(() async => Turno.fromJson(await cliente.postMapa('turnos/actual/finalizar')));
+
+  /// 204. Hasta 500 puntos por pedido (lo que valida `UbicacionController`).
+  Future<void> enviarUbicacion(List<PuntoGps> puntos) async {
+    await cliente.post(
+      'ubicacion',
+      datos: {
+        'puntos': [for (final p in puntos) p.toJson()],
+      },
+    );
+  }
+
+  /// Devuelve el viaje ya asignado. 422 "La oferta ya no está vigente." si venció o ya se respondió.
+  Future<Viaje> aceptarOferta(int ofertaId) =>
+      _leer(() async => Viaje.fromJson(await cliente.postMapa('ofertas/$ofertaId/aceptar')));
+
+  /// 204.
+  Future<void> rechazarOferta(int ofertaId) async {
+    await cliente.post('ofertas/$ofertaId/rechazar');
+  }
+
+  /// `en_camino`, `llego`, `en_curso` o `finalizado`.
+  Future<Viaje> avanzarViaje(int viajeId, EstadoViaje estado) => _leer(
+    () async => Viaje.fromJson(await cliente.postMapa('viajes/$viajeId/estado', datos: {'estado': estado.valor})),
+  );
+
+  Future<Agenda> agenda() => _leer(() async => Agenda.fromJson(await cliente.getMapa('agenda')));
+
   /// Firma de un canal privado (`private-...`) para el socket [socketId]. Devuelve `auth`.
   Future<String> autorizarCanal({required String socketId, required String canal}) => _leer(() async {
     final j = leerMapa(

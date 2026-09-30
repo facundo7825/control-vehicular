@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:http_parser/http_parser.dart';
 
 class PedidoRegistrado {
   PedidoRegistrado(this.metodo, this.uri, this.headers, this.cuerpo);
@@ -19,6 +20,13 @@ class AdaptadorFalso implements HttpClientAdapter {
   final Map<String, List<(int, String?)>> _respuestas = {};
   final Map<String, Completer<(int, String?)>> _demorados = {};
   final List<PedidoRegistrado> pedidos = [];
+
+  /// Si no es nula, cada respuesta lleva el encabezado `Date` con esta hora (reloj del servidor).
+  DateTime? fechaServidor;
+
+  /// Si no es nulo, reemplaza al anterior: el encabezado `Date` lleva exactamente estos valores (p. ej. dos
+  /// repetidos, como los deja un proxy mal configurado).
+  List<String>? encabezadoDate;
 
   /// Encola una respuesta. Si queda una sola, se repite en los pedidos siguientes.
   void responder(String metodo, String ruta, int estado, [String? cuerpo]) =>
@@ -59,6 +67,10 @@ class AdaptadorFalso implements HttpClientAdapter {
       estado,
       headers: {
         Headers.contentTypeHeader: ['application/json'],
+        if (encabezadoDate != null)
+          'date': encabezadoDate!
+        else if (fechaServidor != null)
+          'date': [formatHttpDate(fechaServidor!)],
       },
     );
   }
