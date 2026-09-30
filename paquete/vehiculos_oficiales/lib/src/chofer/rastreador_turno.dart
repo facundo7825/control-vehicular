@@ -210,7 +210,7 @@ class RastreadorTurno {
     final numero = ++_guardados;
     unawaited(
       Future.sync(() => guardar(puntos))
-          .then((_) {
+          .then<void>((_) {
             // Solo si terminó bien y no se pidió otro guardado después (que pudo tener puntos).
             if (puntos.isEmpty && numero == _guardados) _vacioGuardado = true;
           })
