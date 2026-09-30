@@ -1,5 +1,6 @@
 import 'package:clock/clock.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http_parser/http_parser.dart';
 import 'package:vehiculos_oficiales/src/api/api_vehiculos.dart';
 import 'package:vehiculos_oficiales/src/api/cliente_api.dart';
 import 'package:vehiculos_oficiales/src/api/errores_api.dart';
@@ -51,6 +52,31 @@ void main() {
     await withClock(Clock.fixed(ahora), () async {
       await expectLater(api.aceptarOferta(1), throwsA(isA<ErrorNegocio>()));
       expect(api.cliente.desfaseReloj, const Duration(seconds: -30));
+    });
+  });
+
+  test('un Date repetido no rompe el pedido: se usa el primero', () async {
+    http.responder('GET', 'configuracion', 200, p.configuracion);
+    final servidor = formatHttpDate(ahora.add(const Duration(seconds: 60)));
+    http.encabezadoDate = [servidor, servidor];
+
+    await withClock(Clock.fixed(ahora), () async {
+      await api.configuracion();
+      expect(api.cliente.desfaseReloj, const Duration(seconds: 60));
+    });
+  });
+
+  test('un Date que no se puede leer no rompe el pedido y conserva el desfase anterior', () async {
+    http.responder('GET', 'configuracion', 200, p.configuracion);
+    http.fechaServidor = ahora.add(const Duration(seconds: 60));
+
+    await withClock(Clock.fixed(ahora), () async {
+      await api.configuracion();
+      http.encabezadoDate = ['ayer a la tarde'];
+      await api.configuracion();
+      http.encabezadoDate = [];
+      await api.configuracion();
+      expect(api.cliente.desfaseReloj, const Duration(seconds: 60));
     });
   });
 

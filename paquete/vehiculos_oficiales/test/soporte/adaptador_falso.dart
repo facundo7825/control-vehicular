@@ -24,6 +24,10 @@ class AdaptadorFalso implements HttpClientAdapter {
   /// Si no es nula, cada respuesta lleva el encabezado `Date` con esta hora (reloj del servidor).
   DateTime? fechaServidor;
 
+  /// Si no es nulo, reemplaza al anterior: el encabezado `Date` lleva exactamente estos valores (p. ej. dos
+  /// repetidos, como los deja un proxy mal configurado).
+  List<String>? encabezadoDate;
+
   /// Encola una respuesta. Si queda una sola, se repite en los pedidos siguientes.
   void responder(String metodo, String ruta, int estado, [String? cuerpo]) =>
       (_respuestas['$metodo $ruta'] ??= []).add((estado, cuerpo));
@@ -63,7 +67,10 @@ class AdaptadorFalso implements HttpClientAdapter {
       estado,
       headers: {
         Headers.contentTypeHeader: ['application/json'],
-        if (fechaServidor != null) 'date': [formatHttpDate(fechaServidor!)],
+        if (encabezadoDate != null)
+          'date': encabezadoDate!
+        else if (fechaServidor != null)
+          'date': [formatHttpDate(fechaServidor!)],
       },
     );
   }

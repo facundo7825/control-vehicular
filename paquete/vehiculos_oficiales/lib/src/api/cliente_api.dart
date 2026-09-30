@@ -1,5 +1,6 @@
 import 'package:clock/clock.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:http_parser/http_parser.dart';
 
 import '../modelos/json.dart';
@@ -70,14 +71,16 @@ class ClienteApi {
   /// `Date` tiene precisión de segundos y se escribe antes de viajar: el desfase puede quedar corto por
   /// ~1 s más la latencia, y la cuenta regresiva mostrar ese tiempo de más. Si el chofer acepta en ese
   /// margen, el backend responde "La oferta ya no está vigente." y la pantalla lo muestra.
-  /// Un encabezado ausente o inválido no cambia nada.
+  /// Un encabezado ausente, vacío o inválido no cambia nada; uno repetido (un proxy que lo agrega otra vez)
+  /// se lee por el primero. Nunca lanza: leer el reloj no puede hacer fallar un pedido que salió bien.
   void _leerReloj(Response<Object?> r) {
-    final fecha = r.headers.value('date');
-    if (fecha == null) return;
     try {
+      final fecha = r.headers['date']?.firstOrNull;
+      if (fecha == null) return;
       desfaseReloj = parseHttpDate(fecha).difference(clock.now().toUtc());
-    } on FormatException {
+    } catch (e) {
       // Se conserva el desfase anterior.
+      debugPrint('vehiculos_oficiales: encabezado Date ignorado (${e.runtimeType}).');
     }
   }
 
