@@ -35,7 +35,7 @@ class ChoferesMapaNotifier extends AsyncNotifier<List<ChoferEnMapa>> {
       final lista = await ref.read(apiProvider).choferes();
       if (ref.mounted) state = AsyncData(lista);
     } on SesionInvalida {
-      rethrow;
+      return; // ClienteApi ya avisó el 401; acá no se debe escapar un error sin capturar.
     } on ErrorApi {
       // Se conserva la última lista; el respaldo reintenta.
     } finally {

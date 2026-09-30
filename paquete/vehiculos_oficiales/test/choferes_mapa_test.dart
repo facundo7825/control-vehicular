@@ -1,6 +1,7 @@
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:vehiculos_oficiales/src/api/errores_api.dart';
 import 'package:vehiculos_oficiales/src/entorno.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
 import 'package:vehiculos_oficiales/src/solicitante/choferes_mapa.dart';
@@ -96,6 +97,21 @@ void main() {
       final consultas = api.consultasChoferes;
       async.elapse(const Duration(seconds: 60));
       expect(api.consultasChoferes, consultas);
+    });
+  });
+
+  test('un 401 durante el sondeo no produce un error sin capturar y se conserva la lista', () {
+    fakeAsync((async) {
+      final c = crear();
+      async.flushMicrotasks();
+
+      tr.cambiar(EstadoConexion.desconectado);
+      api.fallarConsultas = const SesionInvalida();
+      async.elapse(const Duration(seconds: 20));
+      async.flushMicrotasks();
+
+      expect(api.consultasChoferes, 3);
+      expect(leer(c).single.nombre, 'Carlos Gómez');
     });
   });
 }
