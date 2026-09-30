@@ -12,3 +12,5 @@ Artisan::command('inspire', function () {
 \Illuminate\Support\Facades\Schedule::command('vehiculos:alertar-sin-senal')->everyMinute()->withoutOverlapping();
 
 \Illuminate\Support\Facades\Schedule::command('vehiculos:publicar-estados-chofer')->everyMinute()->withoutOverlapping();
+
+\Illuminate\Support\Facades\Schedule::command('sanctum:prune-expired --hours=24')->dailyAt('03:30');
