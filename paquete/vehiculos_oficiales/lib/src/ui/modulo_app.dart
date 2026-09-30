@@ -10,6 +10,7 @@ import '../sesion/sesion.dart';
 import 'chofer/inicio_chofer.dart';
 import 'sesion/pantalla_inicio.dart';
 import 'solicitante/inicio_solicitante.dart';
+import 'solicitante/pantalla_viaje.dart';
 
 /// Cierra el módulo y vuelve a la app principal. Lo define [ModuloVehiculos].
 final cerrarModuloProvider = Provider<VoidCallback>((ref) => () {});
@@ -81,7 +82,11 @@ class _RaizModuloState extends ConsumerState<_RaizModulo> {
         ShellRoute(
           builder: (_, _, child) => _ConSesion(child: child),
           routes: [
-            GoRoute(path: Rutas.solicitante, builder: (_, _) => const InicioSolicitante()),
+            GoRoute(
+              path: Rutas.solicitante,
+              builder: (_, _) => const InicioSolicitante(),
+              routes: [GoRoute(path: 'viaje', builder: (_, _) => const PantallaViaje())],
+            ),
             GoRoute(path: Rutas.chofer, builder: (_, _) => const InicioChofer()),
           ],
         ),
