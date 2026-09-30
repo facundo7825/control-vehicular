@@ -95,6 +95,7 @@ void main() {
       api: ApiVehiculos(cliente),
       conexion: () => ConexionFalsa(servidor),
       esperaReconexion: const Duration(milliseconds: 10),
+      esperasReintentoCanal: const [Duration(milliseconds: 10)],
     );
   });
 
@@ -188,5 +189,57 @@ void main() {
       'event': 'pusher:unsubscribe',
       'data': {'channel': 'private-chofer.2'},
     });
+  });
+
+  test('si falla la autorización con el socket arriba, informa desconectado y reintenta hasta suscribirse', () async {
+    http.responder('POST', 'broadcasting/auth', 500, '{"message":"Server Error"}');
+    http.responder('POST', 'broadcasting/auth', 200, p.autorizacionCanal);
+    final estados = <EstadoConexion>[];
+    tr.estados.listen(estados.add);
+    final eventos = <EventoTiempoReal>[];
+    Iterable<Map<String, dynamic>> suscripciones() => servidor.recibidos.where((e) => e['event'] == 'pusher:subscribe');
+
+    tr.conectar();
+    tr.canal(Canales.viaje(1)).listen(eventos.add);
+    await vaciar();
+
+    // Sin suscripción no llegan eventos: quien usa el canal tiene que consultar la API (Respaldo).
+    expect(http.pedidos, hasLength(1));
+    expect(suscripciones(), isEmpty);
+    expect(tr.estado, EstadoConexion.desconectado);
+
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    await vaciar();
+
+    expect(http.pedidos, hasLength(2));
+    expect(suscripciones(), hasLength(1));
+    expect(tr.estado, EstadoConexion.conectado);
+    expect(
+      estados,
+      containsAllInOrder([
+        EstadoConexion.conectando,
+        EstadoConexion.conectado,
+        EstadoConexion.desconectado,
+        EstadoConexion.conectado,
+      ]),
+    );
+
+    servidor.actual.emitir('private-viaje.1', Eventos.viajeActualizado, p.viajeAceptado);
+    await vaciar();
+    expect(eventos, hasLength(1));
+  });
+
+  test('deja de reintentar la autorización cuando nadie escucha el canal', () async {
+    http.responder('POST', 'broadcasting/auth', 500, '{"message":"Server Error"}');
+
+    tr.conectar();
+    final s = tr.canal(Canales.viaje(1)).listen((_) {});
+    await vaciar();
+    await s.cancel();
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    await vaciar();
+
+    expect(http.pedidos, hasLength(1));
+    expect(tr.estado, EstadoConexion.conectado);
   });
 }

@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:dart_pusher_channels/dart_pusher_channels.dart';
+import 'package:flutter/foundation.dart';
 
 import '../api/api_vehiculos.dart';
 import '../config.dart';
@@ -14,6 +16,7 @@ class AutorizacionCanalApi
 
   final ApiVehiculos _api;
 
+  /// El fallo también llega al canal como `pusher:subscription_error`; ahí lo maneja [TiempoRealPusher].
   @override
   EndpointAuthFailedCallback? get onAuthFailed => null;
 
@@ -25,12 +28,24 @@ class AutorizacionCanalApi
 }
 
 /// [TiempoReal] sobre `dart_pusher_channels` (Dart puro: Android, iOS y web) contra Laravel Reverb.
+///
+/// Si la suscripción a un canal falla (p. ej. `/broadcasting/auth` responde 500) con el socket conectado,
+/// se reintenta con esperas crecientes ([esperasReintentoCanal]; la última se repite) mientras alguien
+/// escuche el canal. Hasta que se suscriba, [estado] se informa como `desconectado`: sin suscripción no
+/// llegan eventos, así que quien usa el canal consulta la API (`Respaldo`); al suscribirse vuelve a
+/// `conectado` y `Respaldo` pide el estado completo.
 class TiempoRealPusher implements TiempoReal {
   TiempoRealPusher({
     required VehiculosOficialesConfig config,
     required ApiVehiculos api,
     PusherChannelsConnection Function()? conexion,
     Duration esperaReconexion = const Duration(seconds: 3),
+    this.esperasReintentoCanal = const [
+      Duration(seconds: 2),
+      Duration(seconds: 5),
+      Duration(seconds: 10),
+      Duration(seconds: 30),
+    ],
   }) : _autorizacion = AutorizacionCanalApi(api) {
     final opciones = PusherChannelsOptions.fromHost(
       scheme: config.reverbWsScheme,
@@ -41,7 +56,7 @@ class TiempoRealPusher implements TiempoReal {
       metadata: PusherChannelsOptionsMetadata.byDefault(),
     );
     void alFallar(Object? error, StackTrace traza, void Function() reintentar) {
-      _cambiar(EstadoConexion.desconectado);
+      _cambiarSocket(EstadoConexion.desconectado);
       reintentar(); // el cliente espera minimumReconnectDelayDuration entre intentos
     }
 
@@ -61,16 +76,16 @@ class TiempoRealPusher implements TiempoReal {
       _cliente.lifecycleStream.listen((ciclo) {
         switch (ciclo) {
           case PusherChannelsClientLifeCycleState.establishedConnection:
-            _cambiar(EstadoConexion.conectado);
+            _cambiarSocket(EstadoConexion.conectado);
           case PusherChannelsClientLifeCycleState.pendingConnection:
-            _cambiar(EstadoConexion.conectando);
+            _cambiarSocket(EstadoConexion.conectando);
           // Tras una caída la librería pasa directo a reconnecting: el socket ya no está.
           case PusherChannelsClientLifeCycleState.reconnecting ||
               PusherChannelsClientLifeCycleState.connectionError ||
               PusherChannelsClientLifeCycleState.disconnected ||
               PusherChannelsClientLifeCycleState.gotPusherError ||
               PusherChannelsClientLifeCycleState.disposed:
-            _cambiar(EstadoConexion.desconectado);
+            _cambiarSocket(EstadoConexion.desconectado);
           case PusherChannelsClientLifeCycleState.inactive:
             break;
         }
@@ -86,11 +101,17 @@ class TiempoRealPusher implements TiempoReal {
     );
   }
 
+  /// Esperas entre reintentos de suscripción a un canal que falló; la última se repite.
+  final List<Duration> esperasReintentoCanal;
+
   late final PusherChannelsClient _cliente;
   final AutorizacionCanalApi _autorizacion;
   final _estados = StreamController<EstadoConexion>.broadcast();
   final _canales = <String, _CanalActivo>{};
   final _suscripciones = <StreamSubscription<Object?>>[];
+
+  /// Estado del WebSocket. [_estado] es lo que se informa: además tiene en cuenta los canales fallidos.
+  EstadoConexion _socket = EstadoConexion.desconectado;
   EstadoConexion _estado = EstadoConexion.desconectado;
 
   @override
@@ -99,15 +120,23 @@ class TiempoRealPusher implements TiempoReal {
   @override
   Stream<EstadoConexion> get estados => _estados.stream;
 
-  void _cambiar(EstadoConexion nuevo) {
-    if (nuevo == _estado) return;
+  void _cambiarSocket(EstadoConexion nuevo) {
+    _socket = nuevo;
+    _publicar();
+  }
+
+  /// Con el socket arriba pero algún canal sin poder suscribirse, para quien escucha es como no tener socket.
+  void _publicar() {
+    final hayFallidos = _canales.values.any((c) => c.fallos > 0);
+    final nuevo = _socket == EstadoConexion.conectado && hayFallidos ? EstadoConexion.desconectado : _socket;
+    if (nuevo == _estado || _estados.isClosed) return;
     _estado = nuevo;
     _estados.add(nuevo);
   }
 
   @override
   void conectar() {
-    _cambiar(EstadoConexion.conectando);
+    _cambiarSocket(EstadoConexion.conectando);
     unawaited(_cliente.connect());
   }
 
@@ -122,6 +151,8 @@ class TiempoRealPusher implements TiempoReal {
     final controlador = StreamController<EventoTiempoReal>.broadcast(
       onListen: () {
         escucha = privado.bindToAll().listen((e) {
+          if (e.name == Channel.subscriptionSucceededEventName) return _alSuscribirse(activo);
+          if (e.name == Channel.subscriptionErrorEventName) return _alFallarSuscripcion(nombre, activo);
           if (e.name.startsWith('pusher:') || e.name.startsWith('pusher_internal:')) return;
           final datos = e.tryGetDataAsMap();
           if (datos != null) activo.eventos.add(EventoTiempoReal(nombre, e.name, datos));
@@ -131,12 +162,33 @@ class TiempoRealPusher implements TiempoReal {
       onCancel: () {
         unawaited(escucha?.cancel());
         privado.unsubscribe();
+        activo.reintento?.cancel();
         _canales.remove(nombre);
+        _publicar();
       },
     );
     activo = _CanalActivo(privado, controlador);
     _canales[nombre] = activo;
     return controlador.stream;
+  }
+
+  void _alSuscribirse(_CanalActivo activo) {
+    activo.reintento?.cancel();
+    activo.fallos = 0;
+    _publicar();
+  }
+
+  void _alFallarSuscripcion(String nombre, _CanalActivo activo) {
+    final espera = esperasReintentoCanal[min(activo.fallos, esperasReintentoCanal.length - 1)];
+    activo.fallos++;
+    debugPrint('vehiculos_oficiales: no se pudo suscribir a $nombre; se reintenta en ${espera.inSeconds} s.');
+    _publicar();
+    activo.reintento?.cancel();
+    activo.reintento = Timer(espera, () {
+      if (_canales[nombre] != activo) return; // ya nadie lo escucha
+      // Sin socket no se reintenta acá: al reconectar se vuelve a suscribir solo (onConnectionEstablished).
+      if (_socket == EstadoConexion.conectado) activo.canal.subscribeIfNotUnsubscribed();
+    });
   }
 
   @override
@@ -145,11 +197,12 @@ class TiempoRealPusher implements TiempoReal {
       unawaited(s.cancel());
     }
     for (final c in _canales.values) {
+      c.reintento?.cancel();
       unawaited(c.eventos.close());
     }
     _canales.clear();
     _cliente.dispose();
-    _cambiar(EstadoConexion.desconectado);
+    _cambiarSocket(EstadoConexion.desconectado);
     unawaited(_estados.close());
   }
 }
@@ -159,4 +212,8 @@ class _CanalActivo {
 
   final PrivateChannel canal;
   final StreamController<EventoTiempoReal> eventos;
+
+  /// Suscripciones fallidas seguidas (0 = suscripto o esperando la primera respuesta).
+  int fallos = 0;
+  Timer? reintento;
 }
