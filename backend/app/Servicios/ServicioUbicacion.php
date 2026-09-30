@@ -12,6 +12,8 @@ use App\Support\HoraLocal;
 
 class ServicioUbicacion
 {
+    public function __construct(private AvisoEstadoChofer $aviso) {}
+
     /** @param array<int, array{lat: float, lng: float, rumbo?: ?float, velocidad?: ?float, registrado_en: string}> $puntos */
     public function registrar(Usuario $chofer, array $puntos): void
     {
@@ -44,7 +46,7 @@ class ServicioUbicacion
             );
         }
 
-        app(AvisoEstadoChofer::class)->publicarSiCambio($chofer);
+        $this->aviso->publicarSiCambio($chofer);
 
         $enCurso = Viaje::where('chofer_id', $chofer->id)->where('estado', EstadoViaje::EnCurso)->first();
         if ($enCurso) {

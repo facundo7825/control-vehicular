@@ -15,7 +15,7 @@ use Illuminate\Support\Facades\DB;
 
 class ServicioTurnos
 {
-    public function __construct(private CalculadorEstadoChofer $estados) {}
+    public function __construct(private AvisoEstadoChofer $aviso) {}
 
     public function iniciar(Usuario $chofer, int $vehiculoId, OrigenTurno $origen = OrigenTurno::Manual): Turno
     {
@@ -45,7 +45,7 @@ class ServicioTurnos
             ]);
         }, attempts: 3);
 
-        app(AvisoEstadoChofer::class)->publicarSiCambio($chofer);
+        $this->aviso->publicarSiCambio($chofer);
 
         return $turno;
     }
@@ -70,7 +70,7 @@ class ServicioTurnos
             return $turno;
         }, attempts: 3);
 
-        app(AvisoEstadoChofer::class)->publicarSiCambio($chofer);
+        $this->aviso->publicarSiCambio($chofer);
 
         return $turno;
     }

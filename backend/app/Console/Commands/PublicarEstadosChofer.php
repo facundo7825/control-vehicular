@@ -17,7 +17,13 @@ class PublicarEstadosChofer extends Command
     {
         Usuario::where('rol', RolUsuario::Chofer)
             ->whereHas('turnoAbierto')
-            ->each(fn (Usuario $chofer) => $aviso->publicarSiCambio($chofer));
+            ->each(function (Usuario $chofer) use ($aviso) {
+                try {
+                    $aviso->publicarSiCambio($chofer);
+                } catch (\Throwable $e) {
+                    report($e);
+                }
+            });
 
         return self::SUCCESS;
     }

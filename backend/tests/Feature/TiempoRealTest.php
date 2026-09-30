@@ -148,3 +148,36 @@ it('no emite nada si el estado no cambió', function () {
 
     Event::assertNotDispatched(EstadoChoferActualizado::class);
 });
+
+it('si la transacción se revierte no se guarda ni se emite el estado', function () {
+    $chofer = choferEnTurno();
+    Event::fake([EstadoChoferActualizado::class]);
+
+    try {
+        Illuminate\Support\Facades\DB::transaction(function () use ($chofer) {
+            app(App\Servicios\AvisoEstadoChofer::class)->publicarSiCambio($chofer);
+            throw new RuntimeException('rollback');
+        });
+    } catch (RuntimeException) {
+    }
+
+    expect(Illuminate\Support\Facades\Cache::has("estado_chofer_publicado:{$chofer->id}"))->toBeFalse();
+    Event::assertNotDispatched(EstadoChoferActualizado::class);
+
+    Illuminate\Support\Facades\DB::transaction(fn () => app(App\Servicios\AvisoEstadoChofer::class)->publicarSiCambio($chofer));
+
+    expect(Illuminate\Support\Facades\Cache::get("estado_chofer_publicado:{$chofer->id}"))->toBe('libre');
+    Event::assertDispatchedTimes(EstadoChoferActualizado::class, 1);
+});
+
+it('el comando sigue con los demás choferes si uno falla', function () {
+    $a = choferEnTurno();
+    $b = choferEnTurno();
+    Event::fake([EstadoChoferActualizado::class]);
+    $this->mock(App\Servicios\AvisoEstadoChofer::class, function ($m) use ($a, $b) {
+        $m->shouldReceive('publicarSiCambio')->with(Mockery::on(fn ($c) => $c->id === $a->id))->andThrow(new RuntimeException('x'));
+        $m->shouldReceive('publicarSiCambio')->with(Mockery::on(fn ($c) => $c->id === $b->id))->once();
+    });
+
+    $this->artisan('vehiculos:publicar-estados-chofer')->assertSuccessful();
+});
