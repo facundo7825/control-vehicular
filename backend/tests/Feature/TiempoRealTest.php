@@ -89,3 +89,62 @@ it('un Reverb caído no hace fallar el request: el evento va a la cola', functio
     Queue::assertPushed(Illuminate\Broadcasting\BroadcastEvent::class,
         fn ($job) => $job->event instanceof UbicacionChoferActualizada);
 });
+
+it('avisa estado libre una sola vez cuando empieza a llegar la ubicación de un chofer sin señal', function () {
+    $chofer = choferEnTurno(minutos: 10);
+    app(App\Servicios\AvisoEstadoChofer::class)->publicarSiCambio($chofer);
+    Event::fake([EstadoChoferActualizado::class]);
+
+    $punto = fn () => ['lat' => -34.6, 'lng' => -58.38, 'registrado_en' => now()->toIso8601String()];
+    app(ServicioUbicacion::class)->registrar($chofer, [$punto()]);
+    $this->travel(10)->seconds();
+    app(ServicioUbicacion::class)->registrar($chofer, [$punto()]);
+
+    Event::assertDispatchedTimes(EstadoChoferActualizado::class, 1);
+    Event::assertDispatched(EstadoChoferActualizado::class,
+        fn ($e) => $e->choferId === $chofer->id && $e->estado === 'libre');
+});
+
+it('el comando por minuto avisa sin_senal cuando la ubicación se vuelve vieja, y no lo repite', function () {
+    $this->travelTo(now()->startOfMinute());
+    $chofer = choferEnTurno();
+    $this->artisan('vehiculos:publicar-estados-chofer')->assertSuccessful();
+    Event::fake([EstadoChoferActualizado::class]);
+
+    $this->travel(3)->minutes();
+    $this->artisan('vehiculos:publicar-estados-chofer')->assertSuccessful();
+    $this->travel(1)->minutes();
+    $this->artisan('vehiculos:publicar-estados-chofer')->assertSuccessful();
+
+    Event::assertDispatchedTimes(EstadoChoferActualizado::class, 1);
+    Event::assertDispatched(EstadoChoferActualizado::class,
+        fn ($e) => $e->choferId === $chofer->id && $e->estado === 'sin_senal');
+});
+
+it('el comando avisa reservado_pronto al entrar la reserva en la ventana', function () {
+    $this->travelTo(now()->startOfMinute());
+    $chofer = choferEnTurno();
+    $this->artisan('vehiculos:publicar-estados-chofer')->assertSuccessful();
+    reservaAceptada($chofer, now()->addMinutes(60));
+    Event::fake([EstadoChoferActualizado::class]);
+
+    $this->artisan('vehiculos:publicar-estados-chofer');
+    Event::assertNotDispatched(EstadoChoferActualizado::class);
+
+    $this->travel(20)->minutes();
+    $chofer->ubicacion()->update(['actualizado_en' => now()]);
+    $this->artisan('vehiculos:publicar-estados-chofer');
+    Event::assertDispatched(EstadoChoferActualizado::class, fn ($e) => $e->estado === 'reservado_pronto');
+});
+
+it('no emite nada si el estado no cambió', function () {
+    $chofer = choferEnTurno();
+    $aviso = app(App\Servicios\AvisoEstadoChofer::class);
+    $aviso->publicarSiCambio($chofer);
+    Event::fake([EstadoChoferActualizado::class]);
+
+    $aviso->publicarSiCambio($chofer);
+    $this->artisan('vehiculos:publicar-estados-chofer');
+
+    Event::assertNotDispatched(EstadoChoferActualizado::class);
+});

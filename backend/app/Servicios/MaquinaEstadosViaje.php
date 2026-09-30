@@ -155,6 +155,6 @@ class MaquinaEstadosViaje
     private function emitirEstadoChofer(int $choferId): void
     {
         $chofer = \App\Models\Usuario::find($choferId);
-        EstadoChoferActualizado::dispatch($choferId, $this->estados->estado($chofer)->value);
+        app(AvisoEstadoChofer::class)->publicarSiCambio($chofer);
     }
 }

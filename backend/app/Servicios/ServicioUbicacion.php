@@ -44,6 +44,8 @@ class ServicioUbicacion
             );
         }
 
+        app(AvisoEstadoChofer::class)->publicarSiCambio($chofer);
+
         $enCurso = Viaje::where('chofer_id', $chofer->id)->where('estado', EstadoViaje::EnCurso)->first();
         if ($enCurso) {
             // Idempotente: un lote reenviado (la app no recibió el 204) no duplica puntos. El índice único

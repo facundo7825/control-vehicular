@@ -45,7 +45,7 @@ class ServicioTurnos
             ]);
         }, attempts: 3);
 
-        \App\Events\EstadoChoferActualizado::dispatch($chofer->id, $this->estados->estado($chofer)->value);
+        app(AvisoEstadoChofer::class)->publicarSiCambio($chofer);
 
         return $turno;
     }
@@ -70,7 +70,7 @@ class ServicioTurnos
             return $turno;
         }, attempts: 3);
 
-        \App\Events\EstadoChoferActualizado::dispatch($chofer->id, \App\Enums\EstadoChofer::FueraDeTurno->value);
+        app(AvisoEstadoChofer::class)->publicarSiCambio($chofer);
 
         return $turno;
     }

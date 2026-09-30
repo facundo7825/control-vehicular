@@ -10,3 +10,5 @@ Artisan::command('inspire', function () {
 \Illuminate\Support\Facades\Schedule::command('vehiculos:purgar-recorridos')->dailyAt('03:00');
 
 \Illuminate\Support\Facades\Schedule::command('vehiculos:alertar-sin-senal')->everyMinute()->withoutOverlapping();
+
+\Illuminate\Support\Facades\Schedule::command('vehiculos:publicar-estados-chofer')->everyMinute()->withoutOverlapping();
