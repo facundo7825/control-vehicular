@@ -36,6 +36,13 @@ class InicioSolicitante extends ConsumerWidget {
           tooltip: 'Cerrar',
           onPressed: ref.read(cerrarModuloProvider),
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.history),
+            tooltip: 'Mis viajes',
+            onPressed: () => context.push(Rutas.misViajes),
+          ),
+        ],
       ),
       body: Column(
         children: [
@@ -251,12 +258,19 @@ class _PanelPedidoState extends ConsumerState<_PanelPedido> {
                 ),
               ),
             ),
-            // Fuera del desplazamiento: el botón principal siempre queda a la vista.
+            // Fuera del desplazamiento: los botones siempre quedan a la vista.
             Padding(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
               child: FilledButton(
                 onPressed: b.completo && !_enviando ? _pedir : null,
                 child: Text(b.chofer == null ? 'Pedir el más cercano' : 'Pedir a ${b.chofer!.nombre}'),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: TextButton(
+                onPressed: b.completo && !_enviando ? () => context.push(Rutas.reservar) : null,
+                child: const Text('Reservar para más tarde'),
               ),
             ),
           ],

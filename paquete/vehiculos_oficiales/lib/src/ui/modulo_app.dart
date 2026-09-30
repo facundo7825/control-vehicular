@@ -10,6 +10,8 @@ import '../sesion/sesion.dart';
 import 'chofer/inicio_chofer.dart';
 import 'sesion/pantalla_inicio.dart';
 import 'solicitante/inicio_solicitante.dart';
+import 'solicitante/mis_viajes.dart';
+import 'solicitante/pantalla_reserva.dart';
 import 'solicitante/pantalla_viaje.dart';
 
 /// Cierra el módulo y vuelve a la app principal. Lo define [ModuloVehiculos].
@@ -85,7 +87,14 @@ class _RaizModuloState extends ConsumerState<_RaizModulo> {
             GoRoute(
               path: Rutas.solicitante,
               builder: (_, _) => const InicioSolicitante(),
-              routes: [GoRoute(path: 'viaje', builder: (_, _) => const PantallaViaje())],
+              routes: [
+                GoRoute(path: 'viaje', builder: (_, _) => const PantallaViaje()),
+                GoRoute(
+                  path: 'reservar',
+                  builder: (_, estado) => PantallaReserva(fechaInicial: estado.extra as DateTime?),
+                ),
+                GoRoute(path: 'mis-viajes', builder: (_, _) => const MisViajesPantalla()),
+              ],
             ),
             GoRoute(path: Rutas.chofer, builder: (_, _) => const InicioChofer()),
           ],
