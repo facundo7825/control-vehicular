@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../api/errores_api.dart';
 import '../entorno.dart';
 import '../modelos/modelos.dart';
+import '../sesion/sesion.dart';
 import '../ubicacion/ubicador.dart';
 import '../viaje/viaje_actual.dart';
 import 'cola_ubicaciones.dart';
@@ -50,8 +51,9 @@ class PosicionPropiaNotifier extends Notifier<PosicionPropia> {
   void limpiar() => state = const PosicionPropia();
 }
 
-/// Un viaje activo (aceptado a en curso) cambia el ritmo del GPS (spec 5.7).
-bool viajeActivo(Viaje? v) => v != null && v.estado.conChofer;
+/// Un viaje activo (aceptado a en curso) del chofer [choferId] cambia el ritmo de envío (spec 5.7). Uno
+/// que se reasignó a otro chofer, o que terminó y sigue en pantalla, no cuenta.
+bool viajeActivo(Viaje? v, int choferId) => v != null && v.estado.conChofer && v.chofer?.id == choferId;
 
 final turnoProvider = AsyncNotifierProvider<TurnoNotifier, Turno?>(TurnoNotifier.new);
 
@@ -73,16 +75,20 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
       _rastreador = null;
       r?.detener();
     });
+    final yo = ref.read(usuarioProvider).id;
     ref.listen(
-      viajeActualProvider.select((s) => viajeActivo(s.value?.viaje)),
+      viajeActualProvider.select((s) => viajeActivo(s.value?.viaje, yo)),
       (_, activo) => _rastreador?.enViaje(activo),
     );
 
     final turno = await ref.read(apiProvider).turnoActual();
+    // Se cerró el módulo (o se recargó el turno) mientras tanto: no se pide permiso ni se abre el GPS.
+    if (!ref.mounted) return turno;
     if (turno != null) {
       // Turno abierto de antes (la app se cerró o se reabrió el módulo): se retoma el rastreo. Si el
       // permiso ya no está, el GPS falla y el mapa lo avisa.
       await ref.read(ubicadorProvider).pedirPermiso();
+      if (!ref.mounted) return turno;
       await _iniciarRastreo();
     }
     return turno;
@@ -92,7 +98,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
   /// del backend (422 "El vehículo está en uso por otro chofer.") llegan a la pantalla.
   Future<PermisoUbicacion> iniciar(int vehiculoId) async {
     final permiso = await ref.read(ubicadorProvider).pedirPermiso();
-    if (permiso != PermisoUbicacion.concedido) return permiso;
+    if (permiso != PermisoUbicacion.concedido || !ref.mounted) return permiso;
 
     final turno = await ref.read(apiProvider).iniciarTurno(vehiculoId);
     if (!ref.mounted) return permiso;
@@ -102,9 +108,13 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
   }
 
   /// Primero intenta mandar lo pendiente, después cierra el turno. Un 422 ("Finalizá el viaje en curso
-  /// antes de cerrar el turno.") llega a la pantalla y el turno y el rastreo siguen como estaban.
+  /// antes de cerrar el turno.") llega a la pantalla y el turno y el rastreo siguen como estaban. Si al
+  /// vaciar la cola el backend ya dice que no hay turno (lo cerró un administrador), no se pide cerrarlo:
+  /// se deja de rastrear y se vuelve a preguntar el turno.
   Future<void> finalizar() async {
-    await _rastreador?.vaciar();
+    final vaciado = await _rastreador?.vaciar();
+    if (!ref.mounted) return;
+    if (vaciado == ResultadoEnvio.sinTurno) return _alQuedarSinTurno();
     await ref.read(apiProvider).finalizarTurno();
     if (!ref.mounted) return;
     _detenerRastreo();
@@ -135,7 +145,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
       alPunto: posicion.punto,
       alErrorGps: (_) => posicion.sinGps(),
       alQuedarSinTurno: () => unawaited(_alQuedarSinTurno()),
-    )..iniciar(enViaje: viajeActivo(ref.read(viajeActualProvider).value?.viaje));
+    )..iniciar(enViaje: viajeActivo(ref.read(viajeActualProvider).value?.viaje, ref.read(usuarioProvider).id));
   }
 
   void _detenerRastreo() {

@@ -40,6 +40,9 @@ class ApiChofer extends ApiFalsa {
   /// Si no es nulo, `enviarUbicacion` espera a que el test lo complete.
   Completer<void>? demoraUbicacion;
 
+  /// Si no es nulo, `turnoActual` espera a que el test lo complete.
+  Completer<void>? demoraTurno;
+
   /// Si no es nulo, `viajeActual` espera a que el test lo complete (una consulta que tarda).
   Completer<void>? demoraActual;
 
@@ -74,6 +77,7 @@ class ApiChofer extends ApiFalsa {
   @override
   Future<Turno?> turnoActual() async {
     llamadas.add('turnoActual');
+    if (demoraTurno != null) await demoraTurno!.future;
     if (errorTurnoActual != null) throw errorTurnoActual!;
     return turno;
   }

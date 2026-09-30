@@ -208,6 +208,12 @@ void main() {
     await esperar(tester);
 
     expect(find.text('El viaje se reasignó a otro chofer'), findsOneWidget);
+
+    // "Atrás" sin descartarlo: el mapa no lo ofrece como viaje en curso (ya no es suyo).
+    await tester.binding.handlePopRoute();
+    await esperar(tester);
+    expect(find.byType(MapaChofer), findsOneWidget);
+    expect(find.text('Tenés un viaje en curso.'), findsNothing);
   });
 
   testWidgets('"atrás" vuelve al mapa, que ofrece volver al viaje', (tester) async {

@@ -34,7 +34,8 @@ class MapaChofer extends ConsumerWidget {
     final config = ref.watch(entornoProvider).config;
     final aqui = posicion.punto?.posicion;
     final texto = Theme.of(context).textTheme;
-    final hayViaje = ref.watch(viajeActualProvider).value?.viaje != null;
+    // Solo uno activo y suyo: uno terminado o reasignado que todavía no descartó no es "en curso".
+    final hayViaje = viajeActivo(ref.watch(viajeActualProvider).value?.viaje, usuario.id);
     // La agenda llega ordenada por fecha: la primera reserva confirmada es la próxima.
     final proxima = ref.watch(agendaProvider).value?.reservas.firstOrNull;
 

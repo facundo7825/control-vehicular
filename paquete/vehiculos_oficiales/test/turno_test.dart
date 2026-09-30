@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -132,6 +134,26 @@ void main() {
     });
   });
 
+  test('un viaje reasignado a otro chofer no cuenta como viaje activo', () {
+    fakeAsync((async) {
+      api.turno = turnoDePrueba();
+      api.actual = ViajeActual(viaje: viaje(estado: 'aceptado', conChofer: true));
+      crear();
+      async.flushMicrotasks();
+
+      final reasignado = jsonViaje(viaje(estado: 'aceptado', conChofer: true))
+        ..['chofer'] = {'id': 9, 'nombre': 'Otro', 'telefono': null};
+      tr.emitir('chofer.2', Eventos.viajeActualizado, reasignado);
+      async.flushMicrotasks();
+
+      gps.emitir(punto(0));
+      async.elapse(const Duration(seconds: 5));
+      expect(envios(), 0);
+      async.elapse(const Duration(seconds: 5));
+      expect(envios(), 1);
+    });
+  });
+
   test('los intervalos salen de GET /configuracion', () {
     fakeAsync((async) {
       api.turno = turnoDePrueba();
@@ -219,6 +241,64 @@ void main() {
       gps.emitir(punto(20));
       async.elapse(const Duration(seconds: 10));
       expect(envios(), 1);
+    });
+  });
+
+  test('si al vaciar la cola el backend dice que no hay turno, no se pide finalizar y se deja de rastrear', () {
+    fakeAsync((async) {
+      api.turno = turnoDePrueba();
+      final c = crear();
+      async.flushMicrotasks();
+
+      api
+        ..turno = null
+        ..erroresUbicacion.add(const ErrorNegocio('Iniciá un turno para compartir tu ubicación.'));
+      gps.emitir(punto(0));
+      Object? error;
+      c.read(turnoProvider.notifier).finalizar().catchError((Object e) => error = e);
+      async.flushMicrotasks();
+
+      expect(error, isNull);
+      expect(api.llamadas, isNot(contains('finalizar')));
+      expect(api.llamadas.where((l) => l == 'turnoActual'), hasLength(2));
+      expect(c.read(turnoProvider).value, isNull);
+      expect(gps.siguiendo, isFalse);
+    });
+  });
+
+  test('cerrar el módulo mientras se lee el turno no pide permiso ni abre el GPS', () {
+    fakeAsync((async) {
+      api
+        ..turno = turnoDePrueba()
+        ..demoraTurno = Completer<void>();
+      final c = crear();
+      async.flushMicrotasks();
+
+      c.dispose();
+      api.demoraTurno!.complete();
+      async.flushMicrotasks();
+      async.elapse(const Duration(minutes: 1));
+
+      expect(gps.pedidosDePermiso, 0);
+      expect(gps.intervalos, isEmpty);
+    });
+  });
+
+  test('"Reintentar" mientras se lee el turno: la lectura vieja no pide permiso', () {
+    fakeAsync((async) {
+      api
+        ..turno = turnoDePrueba()
+        ..demoraTurno = Completer<void>();
+      final c = crear();
+      async.flushMicrotasks();
+
+      c.invalidate(turnoProvider);
+      async.flushMicrotasks();
+      api.demoraTurno!.complete();
+      async.flushMicrotasks();
+
+      expect(gps.pedidosDePermiso, 1);
+      expect(gps.intervalos, hasLength(1));
     });
   });
 
