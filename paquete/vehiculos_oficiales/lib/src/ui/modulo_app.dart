@@ -27,7 +27,11 @@ abstract final class Rutas {
 }
 
 /// Raíz del módulo: su propio `ProviderScope` y su propio router (no toca los de la app principal).
-class ModuloVehiculos extends StatelessWidget {
+///
+/// Se queda con el [entorno], [alCerrar] y [overrides] de la primera construcción: la app principal puede
+/// reconstruir la ruta (cambio de tema, de idioma…) y un entorno nuevo reiniciaría todo el módulo
+/// (cliente HTTP sin token, sesión otra vez "iniciando", otro socket). Del contexto solo toma el tema.
+class ModuloVehiculos extends StatefulWidget {
   const ModuloVehiculos({super.key, required this.entorno, required this.alCerrar, this.overrides = const []});
 
   final EntornoModulo entorno;
@@ -38,16 +42,23 @@ class ModuloVehiculos extends StatelessWidget {
   final List<Override> overrides;
 
   @override
+  State<ModuloVehiculos> createState() => _ModuloVehiculosState();
+}
+
+class _ModuloVehiculosState extends State<ModuloVehiculos> {
+  late final List<Override> _overrides = [
+    entornoProvider.overrideWithValue(widget.entorno),
+    cerrarModuloProvider.overrideWithValue(widget.alCerrar),
+    ...widget.overrides,
+  ];
+
+  @override
   Widget build(BuildContext context) {
     return ProviderScope(
       // Riverpod 3 reintenta por defecto los providers que fallan; acá los errores se muestran y se
       // reintentan a mano o por el respaldo de 10 s.
       retry: (_, _) => null,
-      overrides: [
-        entornoProvider.overrideWithValue(entorno),
-        cerrarModuloProvider.overrideWithValue(alCerrar),
-        ...overrides,
-      ],
+      overrides: _overrides,
       child: _RaizModulo(tema: Theme.of(context)),
     );
   }

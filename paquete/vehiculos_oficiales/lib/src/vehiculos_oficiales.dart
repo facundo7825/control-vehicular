@@ -21,13 +21,23 @@ abstract final class VehiculosOficiales {
     required VehiculosOficialesConfig config,
   }) {
     final navegador = Navigator.of(context);
-    return navegador.push<void>(
-      MaterialPageRoute(
-        builder: (_) => ModuloVehiculos(
-          entorno: EntornoModulo(config: config, sesion: sesion, push: push, onSesionInvalida: onSesionInvalida),
-          alCerrar: () => navegador.pop(), // pop (no maybePop): el PopScope del módulo bloquea maybePop
-        ),
-      ),
+    // Se arman una sola vez: la app principal puede reconstruir la ruta (tema, idioma) y el módulo no se
+    // tiene que reiniciar.
+    final entorno = EntornoModulo(config: config, sesion: sesion, push: push, onSesionInvalida: onSesionInvalida);
+    late final MaterialPageRoute<void> ruta;
+    void alCerrar() {
+      // Cierra la ruta del módulo, no la que esté arriba. pop (no maybePop): el PopScope del módulo
+      // bloquea maybePop. Si la app principal abrió algo encima, se la saca sin animación.
+      if (ruta.isCurrent) {
+        navegador.pop();
+      } else if (ruta.isActive) {
+        navegador.removeRoute(ruta);
+      }
+    }
+
+    ruta = MaterialPageRoute(
+      builder: (_) => ModuloVehiculos(entorno: entorno, alCerrar: alCerrar),
     );
+    return navegador.push<void>(ruta);
   }
 }
