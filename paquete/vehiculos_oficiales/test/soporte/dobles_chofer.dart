@@ -14,6 +14,11 @@ PuntoGps punto(int segundo, {double lat = -26.83}) => PuntoGps(
   registradoEn: DateTime.utc(2026, 10, 1, 12).add(Duration(seconds: segundo)),
 );
 
+/// Segundos de cada punto desde las 12:00 (la hora de [punto]).
+List<int> segundos(List<PuntoGps> puntos) => [
+  for (final p in puntos) p.registradoEn.difference(DateTime.utc(2026, 10, 1, 12)).inSeconds,
+];
+
 /// [ApiFalsa] con los endpoints del chofer. Registra lo que se llama y en qué orden ([llamadas]).
 class ApiChofer extends ApiFalsa {
   final llamadas = <String>[];
