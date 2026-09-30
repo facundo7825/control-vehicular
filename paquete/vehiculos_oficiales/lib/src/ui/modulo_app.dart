@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../entorno.dart';
 import '../push/push_modulo.dart';
 import '../sesion/sesion.dart';
+import 'chofer/agenda.dart';
 import 'chofer/inicio_chofer.dart';
 import 'chofer/pantalla_oferta.dart';
 import 'chofer/viaje_asignado.dart';
@@ -30,6 +31,7 @@ abstract final class Rutas {
   static const viajeChofer = '/chofer/viaje';
   static const ofertaChofer = '/chofer/oferta';
   static const viajeAsignado = '/chofer/asignado';
+  static const agenda = '/chofer/agenda';
 }
 
 /// Raíz del módulo: su propio `ProviderScope` y su propio router (no toca los de la app principal).
@@ -120,6 +122,7 @@ class _RaizModuloState extends ConsumerState<_RaizModulo> {
                 GoRoute(path: 'viaje', builder: (_, _) => const ViajeChofer()),
                 GoRoute(path: 'oferta', builder: (_, _) => const PantallaOferta()),
                 GoRoute(path: 'asignado', builder: (_, _) => const ViajeAsignado()),
+                GoRoute(path: 'agenda', builder: (_, _) => const AgendaPantalla()),
               ],
             ),
           ],

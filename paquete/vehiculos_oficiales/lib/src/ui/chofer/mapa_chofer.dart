@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../api/errores_api.dart';
+import '../../chofer/agenda.dart';
 import '../../chofer/turno.dart';
 import '../../entorno.dart';
 import '../../mapa/mapa.dart';
@@ -13,9 +14,11 @@ import '../../ubicacion/ubicador.dart';
 import '../../viaje/viaje_actual.dart';
 import '../comunes/comunes.dart';
 import '../modulo_app.dart';
+import 'agenda.dart';
 import 'inicio_chofer.dart';
 
-/// Spec 7, chofer 2 y 6: su posición, su estado, el vehículo del turno y "Finalizar turno".
+/// Spec 7, chofer 2 y 6: su posición, su estado, el vehículo del turno, la próxima reserva
+/// confirmada, el acceso a la agenda y "Finalizar turno".
 class MapaChofer extends ConsumerWidget {
   const MapaChofer({super.key, required this.turno});
 
@@ -32,9 +35,17 @@ class MapaChofer extends ConsumerWidget {
     final aqui = posicion.punto?.posicion;
     final texto = Theme.of(context).textTheme;
     final hayViaje = ref.watch(viajeActualProvider).value?.viaje != null;
+    // La agenda llega ordenada por fecha: la primera reserva confirmada es la próxima.
+    final proxima = ref.watch(agendaProvider).value?.reservas.firstOrNull;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Vehículos oficiales'), leading: const BotonCerrarModulo()),
+      appBar: AppBar(
+        title: const Text('Vehículos oficiales'),
+        leading: const BotonCerrarModulo(),
+        actions: [
+          IconButton(icon: const Icon(Icons.event), tooltip: 'Agenda', onPressed: () => context.push(Rutas.agenda)),
+        ],
+      ),
       body: Column(
         children: [
           const BannerConexion(),
@@ -73,6 +84,7 @@ class MapaChofer extends ConsumerWidget {
               ),
             ),
           ),
+          if (proxima != null && !hayViaje) TarjetaReserva(reserva: proxima, titulo: 'Próxima reserva'),
           Material(
             elevation: 8,
             child: Padding(

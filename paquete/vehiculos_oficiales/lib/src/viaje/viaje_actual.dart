@@ -147,6 +147,14 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
     if (ref.mounted) _aplicarViaje(v);
   }
 
+  /// Chofer: "Voy en camino" hacia una reserva confirmada de la agenda (spec 5.4, paso 7). Con la respuesta
+  /// la reserva pasa a ser el viaje actual. El 422 ("Podés salir hacia esta reserva a partir de las 11:15.")
+  /// llega a la pantalla.
+  Future<void> salirHaciaReserva(Viaje reserva) async {
+    final v = await ref.read(apiProvider).avanzarViaje(reserva.id, EstadoViaje.enCamino);
+    if (ref.mounted) _aplicarViaje(v);
+  }
+
   /// Chofer: acepta la oferta pendiente (spec 5.1). Con la respuesta queda el viaje y se va la oferta. Si
   /// ya no está vigente (422) también se va, y el error llega a la pantalla.
   Future<void> aceptarOferta() async {
