@@ -100,6 +100,25 @@ void main() {
     expect(consultasAgenda(), antes + 2);
   });
 
+  testWidgets('si una recarga falla se sigue viendo la agenda anterior, con un aviso', (tester) async {
+    e.http.sinRed('GET', 'agenda'); // después de la primera respuesta
+
+    await abrirAgenda(tester);
+    e.puente.controlador.add({'modulo': 'vehiculos_oficiales', 'tipo': 'oferta_reserva', 'oferta_id': '4'});
+    await esperar(tester);
+
+    expect(find.text('Voy en camino'), findsOneWidget);
+    expect(find.text('Aceptar'), findsOneWidget);
+    expect(find.text('No se pudo actualizar la agenda.'), findsOneWidget);
+
+    final antes = consultasAgenda();
+    await tester.fling(find.text('Solicitudes'), const Offset(0, 300), 1000); // tirar para refrescar, sin red
+    await esperar(tester);
+    expect(consultasAgenda(), antes + 1);
+    expect(find.text('Voy en camino'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('el mapa destaca la próxima reserva; "Voy en camino" antes de tiempo muestra el 422', (tester) async {
     e.http.responder('POST', 'viajes/2/estado', 422, c.reservaAntesDeTiempo);
 

@@ -16,11 +16,29 @@ class AgendaPantalla extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Agenda')),
+      // Con una agenda ya cargada, una recarga (o una recarga que falló) la sigue mostrando.
       body: switch (agenda) {
-        AsyncData(:final value) => RefreshIndicator(
-          onRefresh: () => ref.refresh(agendaProvider.future),
+        AsyncValue(:final value?) => RefreshIndicator(
+          onRefresh: () async {
+            try {
+              ref.invalidate(agendaProvider);
+              await ref.read(agendaProvider.future);
+            } on ErrorApi {
+              // El error queda en el estado y se avisa arriba de la lista.
+            }
+          },
           child: ListView(
             children: [
+              if (agenda.error case final error?)
+                ListTile(
+                  leading: const Icon(Icons.cloud_off),
+                  title: const Text('No se pudo actualizar la agenda.'),
+                  subtitle: Text(mensajeDeError(error)),
+                  trailing: TextButton(
+                    onPressed: () => ref.invalidate(agendaProvider),
+                    child: const Text('Reintentar'),
+                  ),
+                ),
               const _Titulo('Solicitudes'),
               if (value.solicitudes.isEmpty) const ListTile(title: Text('No tenés solicitudes pendientes.')),
               for (final s in value.solicitudes) _Solicitud(solicitud: s),
