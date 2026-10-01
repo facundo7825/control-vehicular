@@ -18,7 +18,11 @@ const intercambioInvalido = r'''{"message":"Sesión inválida."}''';
 const noAutenticado = r'''{"message":"Unauthenticated."}''';
 
 // GET /api/configuracion -> 200
-const configuracion = r'''{"gps_turno_seg":10,"gps_viaje_seg":5,"oferta_segundos":30}''';
+const configuracion = r'''{"gps_turno_seg":10,"gps_viaje_seg":5,"oferta_segundos":30,"lugares_autocompletar":true}''';
+
+// GET /api/configuracion -> 200 con LUGARES_DRIVER=nominatim: la búsqueda de lugares es al confirmar.
+const configuracionSinAutocompletar =
+    r'''{"gps_turno_seg":10,"gps_viaje_seg":5,"oferta_segundos":30,"lugares_autocompletar":false}''';
 
 // GET /api/choferes -> 200
 const choferes =

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../chofer/turno.dart' show configuracionProvider;
 import '../../modelos/modelos.dart';
 import '../../solicitante/borrador_pedido.dart';
 import '../../solicitante/busqueda_lugares.dart';
@@ -42,6 +43,8 @@ class _BuscadorLugarState extends ConsumerState<BuscadorLugar> {
     ref.listen(busquedaLugaresProvider, (_, s) {
       if (s.texto.isEmpty && _texto.text.trim().isNotEmpty) _texto.clear();
     });
+    // Si se puede buscar mientras se escribe (`GET /configuracion`): se carga ya, antes de la primera letra.
+    ref.watch(configuracionProvider);
     final busqueda = ref.watch(busquedaLugaresProvider);
     final punto = busqueda.punto ?? ref.watch(borradorPedidoProvider.select((b) => b.marcando));
 
@@ -56,12 +59,18 @@ class _BuscadorLugarState extends ConsumerState<BuscadorLugar> {
           decoration: InputDecoration(
             labelText: punto == PuntoPedido.origen ? '¿Desde dónde salís?' : '¿A dónde vas?',
             hintText: 'Escribí una dirección o un lugar',
-            prefixIcon: const Icon(Icons.search),
+            // Con Nominatim es la única forma de buscar (además de la tecla "buscar"); si no, busca ya.
+            prefixIcon: IconButton(
+              icon: const Icon(Icons.search),
+              tooltip: 'Buscar',
+              onPressed: ref.read(busquedaLugaresProvider.notifier).buscarAhora,
+            ),
             suffixIcon: busqueda.texto.isEmpty
                 ? null
                 : IconButton(icon: const Icon(Icons.clear), tooltip: 'Borrar', onPressed: _limpiar),
           ),
           onChanged: ref.read(busquedaLugaresProvider.notifier).escribir,
+          onSubmitted: (_) => ref.read(busquedaLugaresProvider.notifier).buscarAhora(),
         ),
         ...switch (busqueda.estado) {
           EstadoBusqueda.inactiva => const <Widget>[],

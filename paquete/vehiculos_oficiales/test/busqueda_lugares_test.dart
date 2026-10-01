@@ -4,6 +4,7 @@ import 'package:fake_async/fake_async.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vehiculos_oficiales/src/api/errores_api.dart';
+import 'package:vehiculos_oficiales/src/chofer/turno.dart' show configuracionProvider;
 import 'package:vehiculos_oficiales/src/entorno.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
 import 'package:vehiculos_oficiales/src/solicitante/borrador_pedido.dart';
@@ -29,10 +30,15 @@ void main() {
     ubicador = UbicadorFalso(_aqui);
   });
 
-  ProviderContainer crear() {
+  ProviderContainer crear({bool autocompletar = true}) {
     final c = EntornoPrueba().contenedor([
       apiProvider.overrideWithValue(api),
       ubicadorProvider.overrideWithValue(ubicador),
+      configuracionProvider.overrideWithValue(
+        AsyncData(
+          Configuracion(gpsTurnoSeg: 10, gpsViajeSeg: 5, ofertaSegundos: 30, lugaresAutocompletar: autocompletar),
+        ),
+      ),
     ]);
     c.listen(busquedaLugaresProvider, (_, _) {});
     return c;
@@ -126,6 +132,77 @@ void main() {
 
       expect(leer(c).estado, EstadoBusqueda.lista);
       expect(leer(c).resultados, isEmpty);
+    });
+  });
+
+  test('con autocompletar, buscar ya no espera los 400 ms', () {
+    fakeAsync((async) {
+      final c = crear();
+      escribir(c, 'tribu');
+      c.read(busquedaLugaresProvider.notifier).buscarAhora();
+      async.flushMicrotasks();
+
+      expect(api.busquedas.map((b) => b.$1), ['tribu']);
+      expect(leer(c).estado, EstadoBusqueda.lista);
+      async.elapse(const Duration(seconds: 1));
+      expect(api.busquedas, hasLength(1));
+    });
+  });
+
+  group('sin autocompletar (Nominatim)', () {
+    test('escribir no consulta; buscar sí, y muestra los resultados', () {
+      fakeAsync((async) {
+        final c = crear(autocompletar: false);
+        escribir(c, 'tribu');
+        async.elapse(const Duration(seconds: 2));
+        expect(api.busquedas, isEmpty);
+        expect(leer(c).estado, EstadoBusqueda.inactiva);
+        expect(leer(c).texto, 'tribu');
+        expect(leer(c).punto, PuntoPedido.destino);
+
+        api.demorarLugares = Completer();
+        c.read(busquedaLugaresProvider.notifier).buscarAhora();
+        expect(leer(c).estado, EstadoBusqueda.buscando);
+        api.demorarLugares!.complete();
+        async.flushMicrotasks();
+
+        expect(api.busquedas.map((b) => b.$1), ['tribu']);
+        expect(leer(c).estado, EstadoBusqueda.lista);
+        expect(leer(c).resultados, [_tribunales]);
+
+        // Seguir escribiendo deja los resultados viejos de lado hasta volver a buscar.
+        escribir(c, 'tribuna');
+        async.elapse(const Duration(seconds: 1));
+        expect(api.busquedas, hasLength(1));
+        expect(leer(c).estado, EstadoBusqueda.inactiva);
+      });
+    });
+
+    test('buscar con menos de 3 letras no consulta', () {
+      fakeAsync((async) {
+        final c = crear(autocompletar: false);
+        escribir(c, 'tr');
+        c.read(busquedaLugaresProvider.notifier).buscarAhora();
+        async.flushMicrotasks();
+
+        expect(api.busquedas, isEmpty);
+        expect(leer(c).estado, EstadoBusqueda.inactiva);
+      });
+    });
+
+    test('si la configuración no llegó, no autocompleta', () {
+      fakeAsync((async) {
+        final c = EntornoPrueba().contenedor([
+          apiProvider.overrideWithValue(api),
+          ubicadorProvider.overrideWithValue(ubicador),
+          configuracionProvider.overrideWithValue(const AsyncLoading()),
+        ]);
+        c.listen(busquedaLugaresProvider, (_, _) {});
+        escribir(c, 'tribu');
+        async.elapse(const Duration(seconds: 1));
+
+        expect(api.busquedas, isEmpty);
+      });
     });
   });
 

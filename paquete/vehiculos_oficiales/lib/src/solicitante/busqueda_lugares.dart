@@ -3,11 +3,13 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../chofer/turno.dart' show configuracionProvider;
 import '../entorno.dart';
 import '../modelos/modelos.dart';
 import 'borrador_pedido.dart';
 
-/// `inactiva`: menos de [BusquedaLugaresNotifier.minimo] letras; `buscando`: esperando que deje de
+/// `inactiva`: menos de [BusquedaLugaresNotifier.minimo] letras o, sin autocompletar, todavía no se pidió
+/// buscar; `buscando`: esperando que deje de
 /// escribir o la respuesta; `lista`: llegaron los [BusquedaLugares.resultados] (vacíos = "Sin resultados").
 enum EstadoBusqueda { inactiva, buscando, lista }
 
@@ -33,7 +35,8 @@ final busquedaLugaresProvider = NotifierProvider.autoDispose<BusquedaLugaresNoti
 );
 
 /// Sugerencias para el campo de dirección del solicitante (`GET /lugares`), sesgadas a su ubicación.
-/// Consulta una sola vez cuando deja de escribir durante [espera].
+/// Si el backend lo permite (`Configuracion.lugaresAutocompletar`), consulta una sola vez cuando deja de
+/// escribir durante [espera]; si no (Nominatim, o la configuración no llegó), solo con [buscarAhora].
 class BusquedaLugaresNotifier extends Notifier<BusquedaLugares> {
   static const espera = Duration(milliseconds: 400);
 
@@ -55,13 +58,24 @@ class BusquedaLugaresNotifier extends Notifier<BusquedaLugares> {
     _espera?.cancel();
     final t = texto.trim();
     final punto = t.isEmpty ? null : state.punto ?? ref.read(borradorPedidoProvider).marcando;
-    if (t.length < minimo) {
+    if (t.length < minimo || !_autocompletar) {
       state = BusquedaLugares(texto: t, punto: punto);
       return;
     }
     state = BusquedaLugares(texto: t, estado: EstadoBusqueda.buscando, punto: punto);
     _espera = Timer(espera, () => _buscar(t));
   }
+
+  /// Busca ya lo escrito (tecla "buscar" del teclado o el botón del campo), sin esperar.
+  void buscarAhora() {
+    _espera?.cancel();
+    final t = state.texto;
+    if (t.length < minimo) return;
+    state = BusquedaLugares(texto: t, estado: EstadoBusqueda.buscando, punto: state.punto);
+    unawaited(_buscar(t));
+  }
+
+  bool get _autocompletar => ref.read(configuracionProvider).value?.lugaresAutocompletar ?? false;
 
   void limpiar() {
     _espera?.cancel();

@@ -7,6 +7,7 @@ import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
 import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real.dart';
 
 import '../fixtures/payloads.dart' as p;
+import '../soporte/adaptador_falso.dart';
 import '../soporte/dobles.dart';
 import '../soporte/entorno_prueba.dart';
 import '../soporte/montar.dart';
@@ -21,15 +22,22 @@ void main() {
   late EntornoPrueba e;
   late UbicadorFalso ubicador;
 
+  /// Lo que responde `GET /configuracion` al abrir (por defecto, autocompleta mientras se escribe).
+  late String configuracion;
+
   setUp(() {
     e = EntornoPrueba();
     e.http.responder('POST', 'auth/intercambio', 200, p.intercambio);
     e.http.responder('GET', 'viajes/actual', 200, p.viajeActualVacio);
     e.http.responder('GET', 'choferes', 200, p.choferes);
     ubicador = UbicadorFalso(const Coordenada(-26.8241, -65.2226));
+    configuracion = p.configuracion;
   });
 
-  Future<void> abrir(WidgetTester tester) => montarModulo(tester, e, ubicador: ubicador);
+  Future<void> abrir(WidgetTester tester) {
+    e.http.responder('GET', 'configuracion', 200, configuracion);
+    return montarModulo(tester, e, ubicador: ubicador);
+  }
 
   Map<String, dynamic> ultimoCuerpo() => jsonDecode(e.http.pedidos.last.cuerpo) as Map<String, dynamic>;
 
@@ -301,6 +309,54 @@ void main() {
       expect(find.text('origen: Origen'), findsNothing);
       expect(find.widgetWithText(TextField, '¿Desde dónde salís?'), findsOneWidget); // ahora, el origen
     });
+  });
+
+  group('sin autocompletar (Nominatim)', () {
+    final campo = find.byKey(const Key('buscar-lugar'));
+    List<PedidoRegistrado> busquedas() => e.http.pedidos.where((x) => x.uri.path == '/api/lugares').toList();
+
+    setUp(() => configuracion = p.configuracionSinAutocompletar);
+
+    testWidgets('escribir no busca; el botón de buscar sí, con "Buscando…" y los resultados', (tester) async {
+      final respuesta = e.http.demorar('GET', 'lugares');
+      await abrir(tester);
+      await tester.enterText(campo, 'tribu');
+      await tester.pump(const Duration(seconds: 2));
+      expect(busquedas(), isEmpty);
+      expect(find.text('Buscando…'), findsNothing);
+
+      await tester.tap(find.byTooltip('Buscar'));
+      await tester.pump();
+      expect(find.text('Buscando…'), findsOneWidget);
+      respuesta.complete((200, _sugerencias));
+      await esperar(tester);
+
+      expect(busquedas().single.uri.queryParameters['q'], 'tribu');
+      expect(find.text('Tribunales'), findsOneWidget);
+    });
+
+    testWidgets('la tecla "buscar" del teclado busca; sin resultados lo dice', (tester) async {
+      e.http.responder('GET', 'lugares', 200, '[]');
+      await abrir(tester);
+      await tester.showKeyboard(campo);
+      await tester.enterText(campo, 'xyzw');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await esperar(tester);
+
+      expect(busquedas(), hasLength(1));
+      expect(find.text('Sin resultados'), findsOneWidget);
+    });
+  });
+
+  testWidgets('con autocompletar también se puede buscar ya con el botón', (tester) async {
+    e.http.responder('GET', 'lugares', 200, _sugerencias);
+    await abrir(tester);
+    await tester.enterText(find.byKey(const Key('buscar-lugar')), 'tribu');
+    await tester.tap(find.byTooltip('Buscar'));
+    await esperar(tester);
+
+    expect(e.http.pedidos.where((x) => x.uri.path == '/api/lugares'), hasLength(1));
+    expect(find.text('Tribunales'), findsOneWidget);
   });
 
   testWidgets('si la búsqueda falla se ve "Sin resultados"', (tester) async {
