@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../api/errores_api.dart';
+import '../../chofer/guia_ruta.dart';
 import '../../chofer/pasos_viaje.dart';
 import '../../chofer/turno.dart';
 import '../../mapa/mapa.dart';
@@ -141,31 +142,41 @@ class _EnCursoState extends ConsumerState<_EnCurso> {
     final mapa = ref.watch(constructorMapaProvider);
     final texto = Theme.of(context).textTheme;
     final notifier = ref.read(viajeActualProvider.notifier);
+    final ruta = ref.watch(rutaChoferProvider);
+    final guia = ref.watch(guiaRutaProvider);
 
     return Column(
       children: [
         Expanded(
-          child: mapa(
-            context,
-            DatosMapa(
-              centro: aqui ?? viaje.haciaDonde.coordenada,
-              marcadores: [
-                MarcadorMapa(
-                  id: 'origen',
-                  posicion: viaje.origen.coordenada,
-                  tipo: TipoMarcador.origen,
-                  titulo: 'Origen',
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: mapa(
+                  context,
+                  DatosMapa(
+                    centro: aqui ?? viaje.haciaDonde.coordenada,
+                    lineas: [if (ruta != null) LineaMapa.recorrido(ruta.puntos)],
+                    marcadores: [
+                      MarcadorMapa(
+                        id: 'origen',
+                        posicion: viaje.origen.coordenada,
+                        tipo: TipoMarcador.origen,
+                        titulo: 'Origen',
+                      ),
+                      MarcadorMapa(
+                        id: 'destino',
+                        posicion: viaje.destino.coordenada,
+                        tipo: TipoMarcador.destino,
+                        titulo: 'Destino',
+                      ),
+                      if (aqui != null)
+                        MarcadorMapa(id: 'yo', posicion: aqui, tipo: TipoMarcador.choferAsignado, titulo: 'Vos'),
+                    ],
+                  ),
                 ),
-                MarcadorMapa(
-                  id: 'destino',
-                  posicion: viaje.destino.coordenada,
-                  tipo: TipoMarcador.destino,
-                  titulo: 'Destino',
-                ),
-                if (aqui != null)
-                  MarcadorMapa(id: 'yo', posicion: aqui, tipo: TipoMarcador.choferAsignado, titulo: 'Vos'),
-              ],
-            ),
+              ),
+              if (guia != null) Positioned(top: 8, left: 8, right: 8, child: _CartelGuia(guia: guia)),
+            ],
           ),
         ),
         Padding(
@@ -189,7 +200,8 @@ class _EnCursoState extends ConsumerState<_EnCurso> {
               Row(
                 children: [
                   Expanded(
-                    child: OutlinedButton.icon(
+                    // Para guiar con voz (Google Maps o Waze): bien visible junto al cartel de la app.
+                    child: FilledButton.tonalIcon(
                       icon: const Icon(Icons.navigation),
                       label: const Text('Navegar'),
                       onPressed: _navegar,
@@ -216,6 +228,57 @@ class _EnCursoState extends ConsumerState<_EnCurso> {
     );
   }
 }
+
+/// Arriba del mapa: la flecha de la próxima maniobra, la indicación y lo que falta ("4,1 km · 9 min").
+class _CartelGuia extends StatelessWidget {
+  const _CartelGuia({required this.guia});
+
+  final GuiaRuta guia;
+
+  @override
+  Widget build(BuildContext context) {
+    final tema = Theme.of(context);
+    final colores = tema.colorScheme;
+    return Card(
+      color: colores.primaryContainer,
+      elevation: 4,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            Icon(iconoManiobra(guia.tipo), size: 40, color: colores.onPrimaryContainer),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(guia.texto, style: tema.textTheme.titleMedium?.copyWith(color: colores.onPrimaryContainer)),
+                  Text(guia.resumen, style: tema.textTheme.bodyMedium?.copyWith(color: colores.onPrimaryContainer)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// La flecha de cada `tipo` de maniobra de `GET /ruta`.
+IconData iconoManiobra(String tipo) => switch (tipo) {
+  'derecha' => Icons.turn_right,
+  'izquierda' => Icons.turn_left,
+  'leve_derecha' => Icons.turn_slight_right,
+  'leve_izquierda' => Icons.turn_slight_left,
+  'cerrado_derecha' => Icons.turn_sharp_right,
+  'cerrado_izquierda' => Icons.turn_sharp_left,
+  'retorno' => Icons.u_turn_left,
+  'rotonda' => Icons.roundabout_right,
+  'llegada' => Icons.flag,
+  'salida' || 'recto' => Icons.straight,
+  _ => Icons.navigation,
+};
 
 /// Pide el motivo (obligatorio para el chofer, `ViajeController::cancelar`).
 class _DialogoCancelar extends StatefulWidget {
