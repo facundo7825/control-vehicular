@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
+import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
-import 'package:flutter/widgets.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../modelos/comunes.dart';
@@ -20,6 +22,94 @@ class MapaGoogle extends StatefulWidget {
     TipoMarcador.origen => BitmapDescriptor.hueOrange,
     TipoMarcador.destino => BitmapDescriptor.hueRed,
   };
+
+  /// Con qué ícono y qué anclaje se dibuja un marcador de [tipo]. El auto y el punto van centrados en
+  /// la posición; mientras [iconos] no los tiene (todavía no se dibujaron, o falló el dibujo), y para el
+  /// destino, se usa el pin de color por defecto con la punta sobre la posición.
+  static ({BitmapDescriptor icono, Offset ancla}) aparienciaDe(
+    TipoMarcador tipo,
+    Map<TipoMarcador, BitmapDescriptor> iconos,
+  ) {
+    final icono = tipo.forma == FormaMarcador.pin ? null : iconos[tipo];
+    if (icono == null) return (icono: BitmapDescriptor.defaultMarkerWithHue(_tono(tipo)), ancla: const Offset(0.5, 1));
+    return (icono: icono, ancla: const Offset(0.5, 0.5));
+  }
+
+  /// Densidad a la que se dibujan los íconos: se muestran a [FormaMarcador.lado] píxeles lógicos.
+  static const _densidad = 3.0;
+
+  /// Dibuja (a PNG) el auto o el punto de cada tipo que no es un pin.
+  static Future<Map<TipoMarcador, BitmapDescriptor>> dibujarIconos() async => {
+    for (final t in TipoMarcador.values)
+      if (t.forma != FormaMarcador.pin)
+        t: BitmapDescriptor.bytes(await _dibujar(t), width: t.forma.lado, height: t.forma.lado),
+  };
+
+  static Future<Uint8List> _dibujar(TipoMarcador tipo) async {
+    final forma = tipo.forma;
+    final lado = forma.lado;
+    final grabador = ui.PictureRecorder();
+    final lienzo = Canvas(grabador)..scale(_densidad);
+    final centro = Offset(lado / 2, lado / 2);
+    final borde = forma == FormaMarcador.auto ? 2.0 : 3.0;
+    // Lugar para la sombra dentro del cuadro.
+    final radio = lado / 2 - 1.5;
+    lienzo
+      ..drawCircle(
+        centro.translate(0, 1),
+        radio,
+        Paint()
+          ..color = Colors.black38
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.5),
+      )
+      ..drawCircle(centro, radio, Paint()..color = Colors.white)
+      ..drawCircle(centro, radio - borde, Paint()..color = tipo.color);
+    if (forma == FormaMarcador.auto) {
+      const icono = Icons.directions_car;
+      final texto = TextPainter(
+        text: TextSpan(
+          text: String.fromCharCode(icono.codePoint),
+          style: TextStyle(
+            fontFamily: icono.fontFamily,
+            package: icono.fontPackage,
+            fontSize: lado * 0.6,
+            color: Colors.white,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      texto
+        ..paint(lienzo, centro - Offset(texto.width / 2, texto.height / 2))
+        ..dispose();
+    }
+    final dibujo = grabador.endRecording();
+    final pixeles = (lado * _densidad).round();
+    final ui.Image imagen;
+    try {
+      imagen = await dibujo.toImage(pixeles, pixeles);
+    } finally {
+      dibujo.dispose();
+    }
+    try {
+      final datos = await imagen.toByteData(format: ui.ImageByteFormat.png);
+      if (datos == null) throw StateError('no se pudo codificar el ícono');
+      return datos.buffer.asUint8List();
+    } finally {
+      imagen.dispose();
+    }
+  }
+
+  /// Los íconos se dibujan una sola vez para toda la app. Si falla, se reintenta con el próximo mapa.
+  static Future<Map<TipoMarcador, BitmapDescriptor>>? _iconosCompartidos;
+
+  static Future<Map<TipoMarcador, BitmapDescriptor>> _iconos() => _iconosCompartidos ??= () async {
+    try {
+      return await dibujarIconos();
+    } catch (_) {
+      _iconosCompartidos = null;
+      rethrow;
+    }
+  }();
 
   static LatLng _latLng(Coordenada c) => LatLng(c.lat, c.lng);
 
@@ -62,6 +152,24 @@ class MapaGoogle extends StatefulWidget {
 class _MapaGoogleState extends State<MapaGoogle> {
   final _seguidor = SeguidorEnfoque();
   GoogleMapController? _controlador;
+
+  /// Vacío hasta que se dibujan los autos y puntos: mientras tanto, pines de color.
+  Map<TipoMarcador, BitmapDescriptor> _iconos = const {};
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_cargarIconos());
+  }
+
+  Future<void> _cargarIconos() async {
+    try {
+      final iconos = await MapaGoogle._iconos();
+      if (mounted) setState(() => _iconos = iconos);
+    } catch (e) {
+      debugPrint('No se pudieron dibujar los íconos del mapa (${e.runtimeType}).');
+    }
+  }
 
   void _alCrear(GoogleMapController controlador) {
     _controlador = controlador;
@@ -110,19 +218,21 @@ class _MapaGoogleState extends State<MapaGoogle> {
       myLocationButtonEnabled: false,
       mapToolbarEnabled: false,
       onTap: alTocar == null ? null : (p) => alTocar(Coordenada(p.latitude, p.longitude)),
-      markers: {
-        for (final m in datos.marcadores)
-          Marker(
-            markerId: MarkerId(m.id),
-            position: LatLng(m.posicion.lat, m.posicion.lng),
-            infoWindow: InfoWindow(title: m.titulo),
-            // Spec 7 pide gris para los no disponibles: los marcadores por defecto no tienen gris,
-            // se usan desvaídos hasta tener íconos propios.
-            alpha: m.tipo == TipoMarcador.choferNoDisponible ? 0.45 : 1,
-            icon: BitmapDescriptor.defaultMarkerWithHue(MapaGoogle._tono(m.tipo)),
-            onTap: m.alTocar,
-          ),
-      },
+      markers: {for (final m in datos.marcadores) _marcador(m)},
+    );
+  }
+
+  Marker _marcador(MarcadorMapa m) {
+    final (:icono, :ancla) = MapaGoogle.aparienciaDe(m.tipo, _iconos);
+    return Marker(
+      markerId: MarkerId(m.id),
+      position: LatLng(m.posicion.lat, m.posicion.lng),
+      infoWindow: InfoWindow(title: m.titulo),
+      // Los no disponibles van desvaídos (ver TipoMarcador.opacidad).
+      alpha: m.tipo.opacidad,
+      icon: icono,
+      anchor: ancla,
+      onTap: m.alTocar,
     );
   }
 }

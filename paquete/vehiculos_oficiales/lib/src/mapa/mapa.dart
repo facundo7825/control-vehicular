@@ -9,7 +9,51 @@ import '../modelos/comunes.dart';
 import 'mapa_google.dart';
 import 'mapa_osm.dart';
 
-enum TipoMarcador { choferLibre, choferNoDisponible, choferAsignado, origen, destino }
+/// Cómo se dibuja un marcador, igual en [MapaOsm] y [MapaGoogle].
+enum FormaMarcador {
+  /// Un auto blanco sobre un círculo del color del tipo, con borde blanco; centrado en la posición.
+  auto(36),
+
+  /// Un punto del color del tipo, con borde blanco; centrado en la posición.
+  punto(20),
+
+  /// Un pin con la punta sobre la posición.
+  pin(40);
+
+  const FormaMarcador(this.lado);
+
+  /// Ancho y alto del marcador, en píxeles lógicos.
+  final double lado;
+}
+
+enum TipoMarcador {
+  choferLibre,
+  choferNoDisponible,
+  choferAsignado,
+
+  /// Donde está el usuario (el que pidió el viaje).
+  origen,
+  destino;
+
+  /// Los choferes se ven como un auto, el usuario como un punto y el destino como un pin.
+  FormaMarcador get forma => switch (this) {
+    choferLibre || choferNoDisponible || choferAsignado => FormaMarcador.auto,
+    origen => FormaMarcador.punto,
+    destino => FormaMarcador.pin,
+  };
+
+  /// Los mismos tonos que los pines por defecto de Google.
+  Color get color => switch (this) {
+    choferLibre => Colors.green,
+    choferNoDisponible => Colors.amber,
+    choferAsignado => Colors.lightBlue,
+    origen => Colors.orange,
+    destino => Colors.red,
+  };
+
+  /// Spec 7 pide gris para los no disponibles; van desvaídos en su color.
+  double get opacidad => this == choferNoDisponible ? 0.45 : 1;
+}
 
 class MarcadorMapa {
   const MarcadorMapa({

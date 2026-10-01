@@ -142,10 +142,14 @@ void main() {
       expect(teselas.pedidas, greaterThan(0));
 
       // Colores según el tipo; los no disponibles, desvaídos.
-      Icon icono(String id) =>
-          tester.widget<Icon>(find.descendant(of: find.byKey(Key('marcador-$id')), matching: find.byType(Icon)));
-      expect(icono('c1').color, MapaOsm.colorDe(TipoMarcador.choferLibre));
-      expect(icono('o').color, MapaOsm.colorDe(TipoMarcador.origen));
+      Color? fondo(String id) =>
+          ((tester.widget<Container>(
+                    find.descendant(of: find.byKey(Key('marcador-$id')), matching: find.byType(Container)).first,
+                  )).decoration
+                  as BoxDecoration?)
+              ?.color;
+      expect(fondo('c1'), MapaOsm.colorDe(TipoMarcador.choferLibre));
+      expect(fondo('o'), MapaOsm.colorDe(TipoMarcador.origen));
       expect(
         tester
             .widget<Opacity>(find.descendant(of: find.byKey(const Key('marcador-c2')), matching: find.byType(Opacity)))
@@ -170,6 +174,49 @@ void main() {
       await tester.tap(find.textContaining('OpenStreetMap'));
       await tester.pump(const Duration(milliseconds: 500));
       expect(abiertas, [Uri.parse('https://www.openstreetmap.org/copyright')]);
+    });
+
+    testWidgets('los choferes son un auto y el usuario un punto, centrados; el destino es un pin', (tester) async {
+      // Todos en el centro del mapa: el centro de la vista (400, 400).
+      const centro = Coordenada(-26.8241, -65.2226);
+      await montar(
+        tester,
+        const DatosMapa(
+          centro: centro,
+          marcadores: [
+            MarcadorMapa(id: 'libre', posicion: centro, tipo: TipoMarcador.choferLibre, titulo: 'Libre'),
+            MarcadorMapa(id: 'ocupado', posicion: centro, tipo: TipoMarcador.choferNoDisponible, titulo: 'Ocupado'),
+            MarcadorMapa(id: 'asignado', posicion: centro, tipo: TipoMarcador.choferAsignado, titulo: 'Asignado'),
+            MarcadorMapa(id: 'o', posicion: centro, tipo: TipoMarcador.origen, titulo: 'Origen'),
+            MarcadorMapa(id: 'd', posicion: centro, tipo: TipoMarcador.destino, titulo: 'Destino'),
+          ],
+        ),
+      );
+
+      Finder iconos(String id) => find.descendant(of: find.byKey(Key('marcador-$id')), matching: find.byType(Icon));
+      const posicion = Offset(400, 400);
+
+      for (final id in ['libre', 'ocupado', 'asignado']) {
+        expect(tester.widget<Icon>(iconos(id)).icon, Icons.directions_car, reason: id);
+        expect(tester.getCenter(find.byKey(Key('marcador-$id'))), posicion, reason: '$id centrado');
+      }
+      expect(
+        tester
+            .widget<Opacity>(
+              find.descendant(of: find.byKey(const Key('marcador-ocupado')), matching: find.byType(Opacity)),
+            )
+            .opacity,
+        lessThan(1),
+        reason: 'el no disponible sigue desvaído',
+      );
+
+      expect(iconos('o'), findsNothing, reason: 'el usuario es un punto, no un pin');
+      final punto = tester.getRect(find.byKey(const Key('marcador-o')));
+      expect(punto.center, posicion);
+      expect(punto.width, lessThan(30), reason: 'un punto chico');
+
+      expect(tester.widget<Icon>(iconos('d')).icon, Icons.location_on);
+      expect(tester.getRect(find.byKey(const Key('marcador-d'))).bottomCenter, posicion, reason: 'punta abajo');
     });
 
     testWidgets('sin alTocarMapa, tocar el mapa no hace nada', (tester) async {
@@ -375,6 +422,63 @@ void main() {
           MapaGoogle.aplicar(Enfoque.punto(a), mover: (_) async => throw Exception('sin mapa'), zoom: () async => 15),
           throwsException,
         );
+      });
+    });
+
+    group('íconos', () {
+      const tonos = {
+        TipoMarcador.choferLibre: gm.BitmapDescriptor.hueGreen,
+        TipoMarcador.choferNoDisponible: gm.BitmapDescriptor.hueYellow,
+        TipoMarcador.choferAsignado: gm.BitmapDescriptor.hueAzure,
+        TipoMarcador.origen: gm.BitmapDescriptor.hueOrange,
+        TipoMarcador.destino: gm.BitmapDescriptor.hueRed,
+      };
+
+      test('choferes como auto, el usuario como punto, el destino como pin', () {
+        expect(TipoMarcador.choferLibre.forma, FormaMarcador.auto);
+        expect(TipoMarcador.choferNoDisponible.forma, FormaMarcador.auto);
+        expect(TipoMarcador.choferAsignado.forma, FormaMarcador.auto);
+        expect(TipoMarcador.origen.forma, FormaMarcador.punto);
+        expect(TipoMarcador.destino.forma, FormaMarcador.pin);
+      });
+
+      test('mientras no hay íconos dibujados, pines de color con la punta en la posición', () {
+        for (final t in TipoMarcador.values) {
+          final a = MapaGoogle.aparienciaDe(t, const {});
+          expect(a.icono.toJson(), gm.BitmapDescriptor.defaultMarkerWithHue(tonos[t]!).toJson(), reason: '$t');
+          expect(a.ancla, const Offset(0.5, 1), reason: '$t');
+        }
+      });
+
+      test('con los íconos dibujados, auto y punto van centrados; el destino sigue siendo un pin', () {
+        final iconos = {
+          for (final t in TipoMarcador.values)
+            if (t.forma != FormaMarcador.pin) t: gm.BitmapDescriptor.bytes(_pngVacio, width: t.forma.lado),
+        };
+        for (final t in [TipoMarcador.choferLibre, TipoMarcador.choferNoDisponible, TipoMarcador.origen]) {
+          final a = MapaGoogle.aparienciaDe(t, iconos);
+          expect(a.icono, same(iconos[t]), reason: '$t');
+          expect(a.ancla, const Offset(0.5, 0.5), reason: '$t');
+        }
+        final destino = MapaGoogle.aparienciaDe(TipoMarcador.destino, iconos);
+        expect(destino.icono.toJson(), gm.BitmapDescriptor.defaultMarkerWithHue(gm.BitmapDescriptor.hueRed).toJson());
+        expect(destino.ancla, const Offset(0.5, 1));
+      });
+
+      testWidgets('dibuja un PNG para cada auto y punto', (tester) async {
+        final iconos = (await tester.runAsync(MapaGoogle.dibujarIconos))!;
+        expect(iconos.keys.toSet(), {
+          TipoMarcador.choferLibre,
+          TipoMarcador.choferNoDisponible,
+          TipoMarcador.choferAsignado,
+          TipoMarcador.origen,
+        });
+        for (final MapEntry(key: t, value: icono) in iconos.entries) {
+          expect(icono, isA<gm.BytesMapBitmap>(), reason: '$t');
+          icono as gm.BytesMapBitmap;
+          expect(icono.byteData.sublist(1, 4), 'PNG'.codeUnits, reason: '$t es un PNG');
+          expect(icono.width, t.forma.lado, reason: '$t');
+        }
       });
     });
 

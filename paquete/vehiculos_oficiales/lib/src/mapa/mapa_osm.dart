@@ -26,15 +26,7 @@ class MapaOsm extends ConsumerStatefulWidget {
   static final _derechos = Uri.parse('https://www.openstreetmap.org/copyright');
 
   /// Los mismos tonos que los marcadores de [MapaGoogle].
-  static Color colorDe(TipoMarcador t) => switch (t) {
-    TipoMarcador.choferLibre => Colors.green,
-    TipoMarcador.choferNoDisponible => Colors.amber,
-    TipoMarcador.choferAsignado => Colors.lightBlue,
-    TipoMarcador.origen => Colors.orange,
-    TipoMarcador.destino => Colors.red,
-  };
-
-  static const _tamano = 40.0;
+  static Color colorDe(TipoMarcador t) => t.color;
 
   static LatLng _latLng(Coordenada c) => LatLng(c.lat, c.lng);
 
@@ -115,10 +107,10 @@ class _MapaOsmState extends ConsumerState<MapaOsm> {
             for (final m in datos.marcadores)
               Marker(
                 point: LatLng(m.posicion.lat, m.posicion.lng),
-                width: MapaOsm._tamano,
-                height: MapaOsm._tamano,
-                // La punta del ícono queda sobre la posición.
-                alignment: Alignment.topCenter,
+                width: m.tipo.forma.lado,
+                height: m.tipo.forma.lado,
+                // El pin, con la punta sobre la posición; el auto y el punto, centrados en ella.
+                alignment: m.tipo.forma == FormaMarcador.pin ? Alignment.topCenter : Alignment.center,
                 child: _Marcador(key: Key('marcador-${m.id}'), marcador: m),
               ),
           ],
@@ -145,10 +137,28 @@ class _Marcador extends StatelessWidget {
         onTap: marcador.alTocar,
         child: Opacity(
           // Como en MapaGoogle: los no disponibles van desvaídos.
-          opacity: marcador.tipo == TipoMarcador.choferNoDisponible ? 0.45 : 1,
-          child: Icon(Icons.location_on, size: MapaOsm._tamano, color: MapaOsm.colorDe(marcador.tipo)),
+          opacity: marcador.tipo.opacidad,
+          child: _forma(marcador.tipo),
         ),
       ),
+    );
+  }
+
+  static Widget _forma(TipoMarcador tipo) {
+    final forma = tipo.forma;
+    if (forma == FormaMarcador.pin) return Icon(Icons.location_on, size: forma.lado, color: tipo.color);
+    return Container(
+      width: forma.lado,
+      height: forma.lado,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: tipo.color,
+        border: Border.all(color: Colors.white, width: forma == FormaMarcador.auto ? 2 : 3),
+        boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 3, offset: Offset(0, 1))],
+      ),
+      child: forma == FormaMarcador.auto
+          ? Icon(Icons.directions_car, size: forma.lado * 0.6, color: Colors.white)
+          : null,
     );
   }
 }
