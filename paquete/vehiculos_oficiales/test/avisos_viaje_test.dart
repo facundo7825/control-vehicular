@@ -3,12 +3,14 @@ import 'package:fake_async/fake_async.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:vehiculos_oficiales/src/api/errores_api.dart';
 import 'package:vehiculos_oficiales/src/avisos/avisos_viaje.dart';
 import 'package:vehiculos_oficiales/src/avisos/reproductor_sonidos.dart';
 import 'package:vehiculos_oficiales/src/chofer/turno.dart';
 import 'package:vehiculos_oficiales/src/entorno.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
 import 'package:vehiculos_oficiales/src/sesion/sesion.dart';
+import 'package:vehiculos_oficiales/src/solicitante/mis_viajes.dart';
 import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real.dart';
 import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real_provider.dart';
 import 'package:vehiculos_oficiales/src/ubicacion/ubicador.dart';
@@ -186,6 +188,51 @@ void main() {
       });
     });
 
+    group('reservas en "Mis viajes"', () {
+      MisViajes conReserva(String estado) => MisViajes(
+        proximas: [viaje(id: 5, estado: estado, tipo: 'reserva', conChofer: estado == 'aceptado')],
+        historial: [],
+      );
+
+      test('una reserva que pasa de pendiente a aceptada entre dos cargas suena una vez', () {
+        fakeAsync((async) {
+          api.mis = conReserva('ofrecido');
+          final c = crear(solicitante);
+          c.listen(misViajesProvider, (_, _) {});
+          async.flushMicrotasks();
+          expect(sonados(), isEmpty);
+
+          api.mis = conReserva('aceptado');
+          c.refresh(misViajesProvider);
+          async.flushMicrotasks();
+          expect(sonados(), [Sonido.aceptado]);
+
+          c.refresh(misViajesProvider);
+          async.flushMicrotasks();
+          e.puente.controlador.add({
+            'modulo': 'vehiculos_oficiales',
+            'tipo': 'viaje',
+            'viaje_id': '5',
+            'estado': 'aceptado',
+          }); // el push de la misma reserva: ya se avisó
+          async.flushMicrotasks();
+          expect(sonados(), [Sonido.aceptado]);
+        });
+      });
+
+      test('en la primera carga una reserva ya aceptada no suena', () {
+        fakeAsync((async) {
+          api.mis = conReserva('aceptado');
+          final c = crear(solicitante);
+          c.listen(misViajesProvider, (_, _) {});
+          async.flushMicrotasks();
+
+          expect(c.read(misViajesProvider).requireValue.proximas.single.estado, EstadoViaje.aceptado);
+          expect(sonados(), isEmpty);
+        });
+      });
+    });
+
     group('en segundo plano', () {
       test('además del sonido sale la notificación en español', () {
         fakeAsync((async) {
@@ -204,6 +251,17 @@ void main() {
           ]);
           expect(e.notificaciones.mostradas.first.$2, 'Te busca Carlos Gómez.');
           expect(e.notificaciones.mostradas[1].$2, 'Te está esperando en Plaza Independencia.');
+        });
+      });
+
+      test('inactiva (p. ej. con el panel de notificaciones abierto) cuenta como primer plano', () {
+        fakeAsync((async) {
+          buscando(async);
+          binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+          emitir('aceptado');
+
+          expect(sonados(), [Sonido.aceptado]);
+          expect(e.notificaciones.mostradas, isEmpty);
         });
       });
 
@@ -259,6 +317,60 @@ void main() {
         c.read(viajeActualProvider.notifier).aceptarOferta();
         async.flushMicrotasks();
         expect(e.sonidos.sonados, isEmpty); // el viaje que aceptó no suena como "asignado"
+      });
+    });
+
+    test('una oferta silenciada no vuelve a sonar si una consulta la trae otra vez', () {
+      fakeAsync((async) {
+        final c = libre(async);
+        final datos = oferta();
+        tr.emitir('chofer.2', Eventos.ofertaCreada, datos);
+        c.read(avisosViajeProvider.notifier).silenciarOferta(1);
+
+        api.actual = ViajeActual(oferta: Oferta.fromJson(datos)); // push, reconexión o respaldo
+        c.read(viajeActualProvider.notifier).refrescar();
+        async.flushMicrotasks();
+        tr.emitir('chofer.2', Eventos.ofertaCreada, datos);
+        async.elapse(const Duration(seconds: 4));
+
+        expect(c.read(viajeActualProvider).requireValue.oferta!.id, 1);
+        expect(e.sonidos.bucles, 1);
+        expect(e.sonidos.enBucle, isNull);
+        expect(e.sonidos.vibraciones, 1);
+      });
+    });
+
+    test('si aceptar falla sin red, la oferta sigue en pantalla pero callada', () {
+      fakeAsync((async) {
+        final c = libre(async);
+        final datos = oferta();
+        tr.emitir('chofer.2', Eventos.ofertaCreada, datos);
+        c.read(avisosViajeProvider.notifier).silenciarOferta(1);
+        api.errorOferta = const SinConexion();
+
+        c.read(viajeActualProvider.notifier).aceptarOferta().ignore();
+        async.flushMicrotasks();
+        api.actual = ViajeActual(oferta: Oferta.fromJson(datos));
+        c.read(viajeActualProvider.notifier).refrescar();
+        async.flushMicrotasks();
+
+        expect(c.read(viajeActualProvider).requireValue.oferta!.id, 1);
+        expect(e.sonidos.bucles, 1);
+        expect(e.sonidos.enBucle, isNull);
+      });
+    });
+
+    test('una oferta silenciada que se va y otra nueva: la nueva suena', () {
+      fakeAsync((async) {
+        final c = libre(async);
+        tr.emitir('chofer.2', Eventos.ofertaCreada, oferta());
+        c.read(avisosViajeProvider.notifier).silenciarOferta(1);
+        c.read(viajeActualProvider.notifier).rechazarOferta();
+        async.flushMicrotasks();
+
+        tr.emitir('chofer.2', Eventos.ofertaCreada, oferta(id: 2));
+        expect(e.sonidos.enBucle, Sonido.oferta);
+        expect(e.sonidos.bucles, 2);
       });
     });
 

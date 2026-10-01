@@ -44,46 +44,104 @@ final reproductorSonidosProvider = Provider<ReproductorSonidos>((ref) {
   return r;
 });
 
+/// Un reproductor de audio (costura sobre `AudioPlayer`, para probar el orden de las operaciones).
+abstract class JugadorSonido {
+  Future<void> detener();
+
+  /// Configura el contexto de audio y el modo, y empieza a sonar [archivo]. Termina cuando ya suena.
+  Future<void> tocar(String archivo, {required bool enBucle, required AudioContext contexto});
+
+  Future<void> liberar();
+}
+
+class _JugadorAudioplayers implements JugadorSonido {
+  final _p = AudioPlayer()..audioCache = AudioCache(prefix: ReproductorAudioplayers.prefijo);
+
+  @override
+  Future<void> detener() => _p.stop();
+
+  @override
+  Future<void> tocar(String archivo, {required bool enBucle, required AudioContext contexto}) async {
+    await _p.setAudioContext(contexto);
+    await _p.setReleaseMode(enBucle ? ReleaseMode.loop : ReleaseMode.stop);
+    await _p.play(AssetSource(archivo));
+  }
+
+  @override
+  Future<void> liberar() => _p.dispose();
+}
+
 /// [ReproductorSonidos] real. Los reproductores se crean recién al primer sonido.
 class ReproductorAudioplayers implements ReproductorSonidos {
+  ReproductorAudioplayers({JugadorSonido Function()? crearJugador}) : _crear = crearJugador ?? _JugadorAudioplayers.new;
+
   /// Los assets de un paquete se publican con este prefijo (Android, iOS y web).
   static const prefijo = 'packages/vehiculos_oficiales/assets/sonidos/';
 
-  AudioPlayer? _unaVez;
-  AudioPlayer? _bucle;
+  /// El timbre de la oferta sigue el volumen del tono de llamada (no el multimedia) y baja la música.
+  static final contextoBucle = _contexto(AndroidUsageType.notificationRingtone);
 
-  AudioPlayer _crear() => AudioPlayer()..audioCache = AudioCache(prefix: prefijo);
+  /// Los avisos de una vez siguen el volumen de las notificaciones.
+  static final contextoAviso = _contexto(AndroidUsageType.notification);
+
+  static AudioContext _contexto(AndroidUsageType uso) => AudioContext(
+    android: AudioContextAndroid(
+      usageType: uso,
+      contentType: AndroidContentType.sonification,
+      audioFocus: AndroidAudioFocus.gainTransientMayDuck,
+    ),
+    iOS: AudioContextIOS(
+      category: AVAudioSessionCategory.playback,
+      options: const {AVAudioSessionOptions.mixWithOthers, AVAudioSessionOptions.duckOthers},
+    ),
+  );
+
+  final JugadorSonido Function() _crear;
+  JugadorSonido? _unaVez;
+  JugadorSonido? _bucle;
+
+  /// Cambia con cada arranque o corte del bucle. Un arranque que todavía estaba preparando el sonido
+  /// (el nativo tarda) cuando llegó el corte, al terminar se calla: el timbre nunca queda sonando solo.
+  int _generacionBucle = 0;
 
   @override
   Future<void> reproducir(Sonido sonido) => _intentar(() async {
     final p = _unaVez ??= _crear();
-    await p.stop();
-    await p.setReleaseMode(ReleaseMode.stop);
-    await p.play(AssetSource(sonido.archivo));
+    await p.detener();
+    await p.tocar(sonido.archivo, enBucle: false, contexto: contextoAviso);
   });
 
   @override
   Future<void> repetir(Sonido sonido) => _intentar(() async {
+    final generacion = ++_generacionBucle;
     final p = _bucle ??= _crear();
-    await p.stop();
-    await p.setReleaseMode(ReleaseMode.loop);
-    await p.play(AssetSource(sonido.archivo));
+    await p.detener();
+    if (generacion != _generacionBucle) return;
+    try {
+      await p.tocar(sonido.archivo, enBucle: true, contexto: contextoBucle);
+    } finally {
+      if (generacion != _generacionBucle) await p.detener();
+    }
   });
 
   @override
-  Future<void> detenerBucle() => _intentar(() async => _bucle?.stop());
+  Future<void> detenerBucle() {
+    _generacionBucle++;
+    return _intentar(() async => _bucle?.detener());
+  }
 
   @override
   Future<void> vibrar() => _intentar(HapticFeedback.vibrate);
 
   @override
   Future<void> liberar() async {
+    _generacionBucle++;
     final unaVez = _unaVez;
     final bucle = _bucle;
     _unaVez = null;
     _bucle = null;
-    await _intentar(() async => unaVez?.dispose());
-    await _intentar(() async => bucle?.dispose());
+    await _intentar(() async => unaVez?.liberar());
+    await _intentar(() async => bucle?.liberar());
   }
 
   static Future<void> _intentar(Future<void> Function() accion) async {

@@ -26,8 +26,15 @@ class AvisosViaje extends Notifier<void> {
   Timer? _vibracion;
   Timer? _vencimiento;
 
-  /// Solicitante: reservas cuya aceptación ya se avisó (llegan por push, que puede repetirse).
+  /// Ofertas que el chofer ya respondió (o empezó a responder): no vuelven a sonar aunque una consulta,
+  /// un push o la reconexión las traigan otra vez, ni si la respuesta falla. Se olvidan cuando la oferta se va.
+  final _silenciadas = <int>{};
+
+  /// Solicitante: reservas cuya aceptación ya se avisó (por push o por "Mis viajes").
   final _reservasAvisadas = <int>{};
+
+  /// Solicitante: estado de cada próxima reserva en la última carga de "Mis viajes" (nulo: todavía no se cargó).
+  Map<int, EstadoViaje>? _reservasVistas;
 
   late Usuario _usuario;
 
@@ -45,7 +52,26 @@ class AvisosViaje extends Notifier<void> {
   /// Chofer: tocó "Aceptar" o "Rechazar" en la oferta [ofertaId]; el timbre se corta ya, sin esperar la
   /// respuesta. Si ya suena otra oferta, no la toca.
   void silenciarOferta(int ofertaId) {
+    _silenciadas.add(ofertaId);
     if (_ofertaSonando == ofertaId) _cortarBucle();
+  }
+
+  /// Solicitante: "Mis viajes" se cargó. Una reserva que en la carga anterior estaba pendiente y ahora está
+  /// aceptada suena (una vez, junto con el push). La primera carga solo se recuerda.
+  void alCargarMisViajes(MisViajes mis) {
+    if (_usuario.esChofer) return;
+    final reservas = {
+      for (final v in mis.proximas)
+        if (v.tipo == TipoViaje.reserva) v.id: v.estado,
+    };
+    final antes = _reservasVistas;
+    _reservasVistas = reservas;
+    if (antes == null) return;
+    for (final MapEntry(key: id, value: estado) in reservas.entries) {
+      final previo = antes[id];
+      final pendiente = previo != null && (previo.buscandoChofer || previo == EstadoViaje.sinChofer);
+      if (pendiente && estado == EstadoViaje.aceptado) _avisarReserva(id);
+    }
   }
 
   void _alCambiar(SeguimientoViaje? antes, SeguimientoViaje? ahora) {
@@ -94,15 +120,20 @@ class AvisosViaje extends Notifier<void> {
     if (aviso.tipo != 'viaje' || aviso.estado != EstadoViaje.aceptado.valor || id == null) return;
     // El viaje actual se avisa con su transición (el push solo lo hace refrescar).
     if (ref.read(viajeActualProvider).value?.viaje?.id == id) return;
+    _avisarReserva(id);
+  }
+
+  void _avisarReserva(int id) {
     if (!_reservasAvisadas.add(id)) return;
     _avisar(Sonido.aceptado, 'Tu reserva fue aceptada', 'Ya tenés chofer para la reserva.');
   }
 
   /// Chofer: una oferta nueva suena en bucle, con vibración cada 2 s, hasta que se responde, vence o se va.
   void _ofertas(Oferta? oferta) {
+    _silenciadas.removeWhere((id) => id != oferta?.id);
     if (oferta?.id == _ofertaSonando) return;
     _cortarBucle();
-    if (oferta == null) return;
+    if (oferta == null || _silenciadas.contains(oferta.id)) return;
     final restante = ref.read(relojServidorProvider).restante(oferta.venceEn);
     if (restante <= Duration.zero) return;
 
@@ -134,10 +165,11 @@ class AvisosViaje extends Notifier<void> {
     _notificar(titulo, texto);
   }
 
-  /// La notificación sale solo con la app en segundo plano (cualquier estado distinto de `resumed`).
+  /// La notificación sale solo con la app en segundo plano (`paused`, `hidden` o `detached`). `inactive` es
+  /// primer plano: la app se ve, tapada un momento (panel de notificaciones, diálogo del sistema, llamada).
   void _notificar(String titulo, String texto) {
     final ciclo = WidgetsBinding.instance.lifecycleState;
-    if (ciclo == null || ciclo == AppLifecycleState.resumed) return;
+    if (ciclo == null || ciclo == AppLifecycleState.resumed || ciclo == AppLifecycleState.inactive) return;
     unawaited(ref.read(notificacionesLocalesProvider).mostrar(titulo: titulo, texto: texto));
   }
 }
