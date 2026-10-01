@@ -339,4 +339,49 @@ void main() {
       expect(borrador().direccionDestino.length, 255);
     });
   });
+
+  group('encuadrar el recorrido', () {
+    const ruta = Ruta(
+      distanciaM: 100,
+      duracionS: 60,
+      puntos: [Coordenada(1, 1), Coordenada(1.5, 3), Coordenada(2, 2)],
+      pasos: [],
+    );
+
+    void pedirDeAaB() => notifier()
+      ..fijar(PuntoPedido.origen, const Coordenada(1, 1))
+      ..fijar(PuntoPedido.destino, const Coordenada(2, 2));
+
+    /// Encuadra el recorrido del tramo actual; true si el mapa se movió.
+    bool encuadrar() {
+      final antes = borrador().enfoque;
+      notifier().encuadrarRuta(borrador().tramo!, ruta);
+      return !identical(borrador().enfoque, antes);
+    }
+
+    test('una sola vez por tramo', () {
+      pedirDeAaB();
+      expect(encuadrar(), isTrue);
+      expect(borrador().enfoque!.puntos, contains(const Coordenada(1.5, 3)));
+      expect(encuadrar(), isFalse);
+    });
+
+    test('después de limpiar (pedido hecho), el mismo tramo vuelve a encuadrarse', () {
+      pedirDeAaB();
+      expect(encuadrar(), isTrue);
+
+      notifier().limpiar();
+      pedirDeAaB();
+      expect(encuadrar(), isTrue);
+    });
+
+    test('"Elegir otro" con el mismo tramo vuelve a encuadrarlo', () {
+      final v = viaje(estado: 'sin_chofer');
+      notifier().desdeViaje(v);
+      expect(encuadrar(), isTrue);
+
+      notifier().desdeViaje(v);
+      expect(encuadrar(), isTrue);
+    });
+  });
 }

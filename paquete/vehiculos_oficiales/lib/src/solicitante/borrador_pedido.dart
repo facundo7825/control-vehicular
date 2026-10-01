@@ -190,6 +190,7 @@ class BorradorPedidoNotifier extends Notifier<BorradorPedido> {
     state = state.copiar(enfoque: _enfoque([state.origen!, state.destino!, ...ruta.puntos]));
   }
 
+  /// Se olvida con cada borrador nuevo ([limpiar], [desdeViaje]): pedir otra vez el mismo tramo lo encuadra.
   TramoRuta? _tramoEncuadrado;
 
   void marcarAhora(PuntoPedido punto) => state = state.copiar(marcando: punto);
@@ -208,6 +209,7 @@ class BorradorPedidoNotifier extends Notifier<BorradorPedido> {
   void desdeViaje(Viaje v) {
     final aqui = state.miUbicacion;
     final origen = v.origen.coordenada;
+    _tramoEncuadrado = null;
     state = BorradorPedido(
       origen: origen,
       destino: v.destino.coordenada,
@@ -229,6 +231,7 @@ class BorradorPedidoNotifier extends Notifier<BorradorPedido> {
 
   /// Pedido nuevo; si se conoce la ubicación actual, vuelve a ser el origen.
   void limpiar() {
+    _tramoEncuadrado = null;
     state = BorradorPedido(
       ubicacion: state.ubicacion,
       miUbicacion: state.miUbicacion,
