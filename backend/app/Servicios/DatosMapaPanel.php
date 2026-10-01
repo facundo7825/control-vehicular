@@ -3,12 +3,25 @@
 namespace App\Servicios;
 
 use App\Enums\EstadoChofer;
+use App\Enums\EstadoViaje;
+use App\Excepciones\ReglaNegocio;
+use App\Filament\Resources\Usuarios\UsuarioResource;
+use App\Filament\Resources\Viajes\ViajeResource;
+use App\Mapas\Distancia;
 use App\Mapas\ServicioRutas;
+use App\Models\Turno;
 use App\Models\Viaje;
 use App\Support\HoraLocal;
 use DateTimeInterface;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
+use Throwable;
 
-/** Lo que dibuja el mapa en vivo del panel (spec 8.1): todos los choferes en turno y los viajes activos. */
+/**
+ * Lo que dibuja el mapa en vivo del panel (spec 8.1): todos los choferes en turno y los viajes activos.
+ * Las consultas van agrupadas (una cantidad fija sin importar cuántos choferes haya); lo único por viaje
+ * activo es la llegada estimada, que el estimador cachea.
+ */
 class DatosMapaPanel
 {
     /** Colores del marcador de cada chofer según su estado (spec 4.1). */
@@ -19,25 +32,39 @@ class DatosMapaPanel
         'sin_senal' => '#6b7280',
     ];
 
-    public function __construct(private CalculadorEstadoChofer $estados, private ServicioRutas $rutas) {}
+    public function __construct(
+        private CalculadorEstadoChofer $estados,
+        private ServicioRutas $rutas,
+        private EstimadorLlegada $estimador,
+    ) {}
 
     /**
      * Los choferes que todavía no mandaron ninguna ubicación vienen con lat/lng en null: el mapa no
      * puede ubicarlos y la página los lista aparte.
      *
      * @return array{
-     *     choferes: list<array{id: int, nombre: string, estado: string, estado_etiqueta: string, color: string, lat: ?float, lng: ?float, patente: ?string, actualizado_en: ?string, actualizado_hace: ?string}>,
-     *     viajes: list<array{id: int, estado: string, estado_etiqueta: string, chofer_id: int, chofer: string, origen: array{lat: float, lng: float, direccion: ?string}, destino: array{lat: float, lng: float, direccion: ?string}, recorrido: ?list<array{0: float, 1: float}>}>
+     *     choferes: list<array{id: int, nombre: string, estado: string, estado_etiqueta: string, color: string, lat: ?float, lng: ?float, patente: ?string, actualizado_en: ?string, actualizado_hace: ?string, url: string,
+     *         viaje: ?array{id: int, estado: string, estado_etiqueta: string, solicitante: ?string, hacia: string, hacia_direccion: ?string, llega_en_min: ?int, url: string},
+     *         hoy: array{viajes: int, km: float, turno_desde: ?string}}>,
+     *     viajes: list<array{id: int, estado: string, estado_etiqueta: string, chofer_id: int, chofer: string, origen: array{lat: float, lng: float, direccion: ?string}, destino: array{lat: float, lng: float, direccion: ?string}, recorrido: ?list<array{0: float, 1: float}>, url: string}>
      * }
      */
     public function obtener(): array
     {
-        $choferes = $this->estados->choferesEnTurno()
-            ->map(function (array $f): array {
+        $enTurno = $this->estados->choferesEnTurno();
+        // chofer.ubicacion: el estimador la usa y así no la consulta viaje por viaje.
+        $activos = Viaje::activos()->with(['chofer.ubicacion', 'solicitante'])->orderBy('id')->get();
+        // Si un chofer tuviera más de un viaje activo, el globo muestra el más viejo.
+        $viajePorChofer = $activos->unique('chofer_id')->keyBy('chofer_id');
+        $hoy = $this->hoy($enTurno->map(fn (array $f) => $f['chofer']->id)->all());
+
+        $choferes = $enTurno
+            ->map(function (array $f) use ($viajePorChofer, $hoy): array {
                 /** @var EstadoChofer $estado */
                 $estado = $f['estado'];
                 $chofer = $f['chofer'];
                 $ubicacion = $chofer->ubicacion;
+                $viaje = $viajePorChofer->get($chofer->id);
 
                 return [
                     'id' => $chofer->id,
@@ -50,15 +77,19 @@ class DatosMapaPanel
                     'patente' => $chofer->turnoAbierto?->vehiculo?->patente,
                     'actualizado_en' => $ubicacion ? HoraLocal::formatear($ubicacion->actualizado_en, 'H:i:s') : null,
                     'actualizado_hace' => $ubicacion ? self::hace($ubicacion->actualizado_en) : null,
+                    'url' => UsuarioResource::getUrl('edit', ['record' => $chofer->id]),
+                    'viaje' => $viaje ? $this->viajeDelChofer($viaje) : null,
+                    'hoy' => [
+                        'viajes' => $hoy[$chofer->id]['viajes'] ?? 0,
+                        'km' => round(($hoy[$chofer->id]['metros'] ?? 0) / 1000, 1),
+                        'turno_desde' => self::turnoDesde($chofer->turnoAbierto),
+                    ],
                 ];
             })
             ->values()
             ->all();
 
-        $viajes = Viaje::activos()
-            ->with('chofer')
-            ->orderBy('id')
-            ->get()
+        $viajes = $activos
             ->map(fn (Viaje $v): array => [
                 'id' => $v->id,
                 'estado' => $v->estado->value,
@@ -70,10 +101,97 @@ class DatosMapaPanel
                 // El camino por calles entre origen y destino (cacheado por el servicio); null = sin recorrido, el mapa
                 // une los puntos con una línea recta punteada.
                 'recorrido' => $this->rutas->ruta($v->origen_lat, $v->origen_lng, $v->destino_lat, $v->destino_lng)['puntos'] ?? null,
+                'url' => ViajeResource::getUrl('view', ['record' => $v->id]),
             ])
             ->all();
 
         return ['choferes' => $choferes, 'viajes' => $viajes];
+    }
+
+    /** El viaje actual para el globo del chofer: a quién lleva, hacia dónde va y en cuánto llega. */
+    private function viajeDelChofer(Viaje $viaje): array
+    {
+        $hacia = $viaje->estado === EstadoViaje::EnCurso ? 'destino' : 'origen';
+
+        return [
+            'id' => $viaje->id,
+            'estado' => $viaje->estado->value,
+            'estado_etiqueta' => $viaje->estado->getLabel(),
+            'solicitante' => $viaje->solicitante?->nombre,
+            'hacia' => $hacia,
+            'hacia_direccion' => $hacia === 'origen' ? $viaje->origen_direccion : $viaje->destino_direccion,
+            'llega_en_min' => $this->minutosDeLlegada($viaje),
+            'url' => ViajeResource::getUrl('view', ['record' => $viaje->id]),
+        ];
+    }
+
+    /** Minutos hasta llegar, redondeados hacia arriba; null = sin estimación (sin señal o el estimador falló). */
+    private function minutosDeLlegada(Viaje $viaje): ?int
+    {
+        try {
+            $segundos = $this->estimador->estimar($viaje)['segundos'];
+        } catch (ReglaNegocio) {
+            return null; // el viaje cambió de estado entre la consulta y la estimación
+        } catch (Throwable $e) {
+            report($e); // el servicio de mapas falló: el mapa sigue, sin estimación
+
+            return null;
+        }
+
+        return $segundos === null ? null : (int) ceil($segundos / 60);
+    }
+
+    /**
+     * Viajes finalizados en el día local y metros recorridos en ellos (haversine sobre el recorrido real),
+     * por chofer. Dos consultas para todos los choferes.
+     *
+     * @param  list<int>  $choferIds
+     * @return array<int, array{viajes: int, metros: float}>
+     */
+    private function hoy(array $choferIds): array
+    {
+        $desde = now()->setTimezone(config('vehiculos.zona_horaria'))->startOfDay()->setTimezone(config('app.timezone'));
+        /** @var Collection<int, int> $choferDeViaje viaje_id => chofer_id */
+        $choferDeViaje = Viaje::whereIn('chofer_id', $choferIds)
+            ->where('estado', EstadoViaje::Finalizado)
+            ->where('finalizado_en', '>=', $desde)
+            ->pluck('chofer_id', 'id');
+
+        $resultado = [];
+        foreach ($choferDeViaje as $choferId) {
+            $resultado[$choferId] ??= ['viajes' => 0, 'metros' => 0.0];
+            $resultado[$choferId]['viajes']++;
+        }
+
+        $anterior = null;
+        $puntos = DB::table('recorrido_viaje')
+            ->whereIn('viaje_id', $choferDeViaje->keys()->all())
+            ->orderBy('viaje_id')
+            ->orderBy('registrado_en')
+            ->select(['viaje_id', 'lat', 'lng'])
+            ->cursor();
+        foreach ($puntos as $punto) {
+            if ($anterior !== null && $anterior->viaje_id === $punto->viaje_id) {
+                $resultado[$choferDeViaje[$punto->viaje_id]]['metros'] += Distancia::metros(
+                    (float) $anterior->lat, (float) $anterior->lng, (float) $punto->lat, (float) $punto->lng,
+                );
+            }
+            $anterior = $punto;
+        }
+
+        return $resultado;
+    }
+
+    /** "07:30" si el turno empezó hoy (hora local); "30/09 22:00" si viene de un día anterior. */
+    private static function turnoDesde(?Turno $turno): ?string
+    {
+        if ($turno === null) {
+            return null;
+        }
+        $zona = config('vehiculos.zona_horaria');
+        $deHoy = $turno->inicio->copy()->setTimezone($zona)->isSameDay(now()->setTimezone($zona));
+
+        return HoraLocal::formatear($turno->inicio, $deHoy ? 'H:i' : 'd/m H:i');
     }
 
     /** "hace 5 min", "hace 1 h 15 min": cuánto pasó desde la última ubicación. */

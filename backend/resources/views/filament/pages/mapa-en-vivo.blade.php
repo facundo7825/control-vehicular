@@ -44,6 +44,7 @@
         <p style="margin-top: 0.5rem; font-size: 0.875rem; opacity: 0.75;">
             Choferes en turno (autos): verde libre · azul en viaje · ámbar reservado pronto · gris sin señal.
             Viajes: línea del origen (punto naranja, donde está el usuario) al destino (pin rojo). Se actualiza cada 10 segundos.
+            Tocá un viaje para resaltar su recorrido; un clic en el mapa vacío o Escape lo quita.
         </p>
 
         @if (count($sinUbicacion) > 0)
@@ -116,18 +117,101 @@
                 + 'No se pudo cargar el mapa. Revisá la conexión a internet y recargá la página.</div>';
         };
 
+        // globos:logica-pura (inicio) — sin DOM ni mapa; se prueba aparte con node.
         const escapar = (texto) => String(texto ?? '').replace(/[&<>"']/g, (c) => ({
             '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
         })[c]);
 
-        const globoChofer = (c) => `<strong>${escapar(c.nombre)}</strong><br>`
-            + `Vehículo: ${escapar(c.patente ?? 'sin vehículo')}<br>`
-            + `Estado: ${escapar(c.estado_etiqueta)}<br>`
-            + `Última ubicación: ${escapar(c.actualizado_hace)} (${escapar(c.actualizado_en)})`;
+        // La llegada estimada del viaje actual del chofer (los minutos vienen del servidor, redondeados hacia arriba).
+        const textoLlegada = (viaje) => {
+            if (viaje.estado === 'llego') {
+                return 'ya está en el origen';
+            }
+            if (viaje.llega_en_min == null) {
+                return 'sin estimación';
+            }
 
-        const globoViaje = (v, punto, letra) => `<strong>Viaje #${escapar(v.id)}</strong> · ${escapar(v.estado_etiqueta)}<br>`
+            return viaje.llega_en_min < 1 ? 'llega en menos de 1 min' : `llega en ≈ ${viaje.llega_en_min} min`;
+        };
+        const SEPARADOR_GLOBO = '<hr style="margin: 0.4rem 0; opacity: 0.3;">';
+
+        // Nombre, vehículo, estado y última ubicación; el viaje actual (con enlace y "Ver recorrido") y lo que hizo hoy.
+        const globoChofer = (c) => {
+            let html = `<strong>${escapar(c.nombre)}</strong><br>`
+                + `Vehículo: ${escapar(c.patente ?? 'sin vehículo')}<br>`
+                + `Estado: ${escapar(c.estado_etiqueta)}<br>`
+                + `Última ubicación: ${escapar(c.actualizado_hace)} (${escapar(c.actualizado_en)})`;
+            if (c.viaje) {
+                html += SEPARADOR_GLOBO
+                    + `<strong>Viaje #${escapar(c.viaje.id)}</strong> · ${escapar(c.viaje.estado_etiqueta)}`
+                    + ` · <a href="${escapar(c.viaje.url)}">Ver viaje</a><br>`
+                    + `Solicitante: ${escapar(c.viaje.solicitante ?? '—')}<br>`
+                    + `Hacia ${c.viaje.hacia === 'destino' ? 'el destino' : 'el origen'}: ${escapar(c.viaje.hacia_direccion ?? 'sin dirección')}<br>`
+                    + `${escapar(textoLlegada(c.viaje))}<br>`
+                    + `<button type="button" data-resaltar-viaje="${escapar(c.viaje.id)}" style="text-decoration: underline;">Ver recorrido</button>`;
+            }
+            if (c.hoy) {
+                html += SEPARADOR_GLOBO
+                    + `<strong>Hoy:</strong> ${escapar(c.hoy.viajes)} ${c.hoy.viajes === 1 ? 'viaje finalizado' : 'viajes finalizados'}`
+                    + ` · ${escapar(String(c.hoy.km).replace('.', ','))} km<br>`
+                    + (c.hoy.turno_desde ? `En turno desde ${escapar(c.hoy.turno_desde)}<br>` : '');
+            }
+
+            return html + (c.url ? `<a href="${escapar(c.url)}">Ver chofer</a>` : '');
+        };
+
+        const globoViaje = (v, punto, letra) => `<strong>Viaje #${escapar(v.id)}</strong> · ${escapar(v.estado_etiqueta)}`
+            + `${v.url ? ` · <a href="${escapar(v.url)}">Ver viaje</a>` : ''}<br>`
             + `Chofer: ${escapar(v.chofer)}<br>`
             + `${letra === 'O' ? 'Origen' : 'Destino'}: ${escapar(punto.direccion ?? 'sin dirección')}`;
+
+        // Resaltado de un viaje: ese más grueso y opaco, los demás atenuados; sin resaltado, todos normales.
+        const OPACIDAD_VIAJE_ATENUADO = 0.25;
+        const nivelResaltado = (id, resaltadoId) => {
+            if (resaltadoId === null) {
+                return 'normal';
+            }
+
+            return id === resaltadoId ? 'resaltado' : 'atenuado';
+        };
+        // Grosor y opacidad de la línea según el nivel (sirve para Leaflet y para Google).
+        const ajustarEstilo = (grosor, opacidad, nivel) => {
+            if (nivel === 'resaltado') {
+                return { grosor: grosor + 3, opacidad: 1 };
+            }
+
+            return { grosor, opacidad: nivel === 'atenuado' ? Math.min(opacidad, OPACIDAD_VIAJE_ATENUADO) : opacidad };
+        };
+        // En cada actualización el resaltado sigue mientras el viaje siga activo; si ya no está, se quita.
+        const resaltadoVigente = (viajes, resaltadoId) => resaltadoId !== null && viajes.some((v) => v.id === resaltadoId)
+            ? resaltadoId
+            : null;
+        // globos:logica-pura (fin)
+
+        // El viaje resaltado (id o null) y las funciones que pone el mapa cuando está listo.
+        let viajeResaltado = null;
+        let resaltarViaje = null;
+        let quitarResaltado = null;
+        // "Ver recorrido" del globo del chofer. En captura: los globos de Leaflet cortan la propagación del clic.
+        contenedor.addEventListener('click', (evento) => {
+            const boton = evento.target.closest?.('[data-resaltar-viaje]');
+            if (boton) {
+                evento.preventDefault();
+                resaltarViaje?.(Number(boton.dataset.resaltarViaje));
+            }
+        }, true);
+        // Escape quita el resaltado. El listener se quita solo cuando la página ya no está, así no se acumulan.
+        const quitarConEscape = (evento) => {
+            if (! contenedor.isConnected) {
+                document.removeEventListener('keydown', quitarConEscape);
+
+                return;
+            }
+            if (evento.key === 'Escape') {
+                quitarResaltado?.();
+            }
+        };
+        document.addEventListener('keydown', quitarConEscape);
 
         // Íconos SVG (los mismos para Leaflet y Google): el chofer es un auto (Material "directions_car") blanco
         // sobre un círculo del color de su estado; el origen del viaje (el usuario) un punto naranja; el destino un pin rojo.
@@ -279,8 +363,40 @@
             const ESTILO_RECORRIDO = { color: '#2563eb', opacity: 0.8, weight: 4, dashArray: null };
             const ESTILO_RECTA = { color: '#2563eb', opacity: 0.6, weight: 3, dashArray: '6 8' };
 
+            // Aplica el resaltado a todos los viajes dibujados: grosor y opacidad de la línea, y opacidad de sus marcadores.
+            const aplicarResaltado = () => {
+                capasViaje.forEach((capas, id) => {
+                    const nivel = nivelResaltado(id, viajeResaltado);
+                    const { grosor, opacidad } = ajustarEstilo(capas.base.weight, capas.base.opacity, nivel);
+                    capas.linea.setStyle({ ...capas.base, weight: grosor, opacity: opacidad });
+                    if (nivel === 'resaltado') {
+                        capas.linea.bringToFront();
+                    }
+                    [capas.origen, capas.destino].forEach((m) => m.setOpacity(nivel === 'atenuado' ? OPACIDAD_ATENUADO : 1));
+                });
+            };
+            resaltarViaje = (id) => {
+                const capas = capasViaje.get(id);
+                if (! capas) {
+                    return;
+                }
+                viajeResaltado = id;
+                aplicarResaltado();
+                const limites = capas.linea.getBounds().extend(capas.origen.getLatLng()).extend(capas.destino.getLatLng());
+                mapa.fitBounds(limites, { padding: [40, 40], maxZoom: 16 });
+            };
+            quitarResaltado = () => {
+                if (viajeResaltado !== null) {
+                    viajeResaltado = null;
+                    aplicarResaltado();
+                }
+            };
+            // Tocar el mapa vacío quita el resaltado (las líneas y los marcadores no pasan su clic al mapa).
+            mapa.on('click', () => quitarResaltado());
+
             const actualizar = (datos) => {
                 const limites = L.latLngBounds([]);
+                viajeResaltado = resaltadoVigente(datos.viajes, viajeResaltado);
 
                 // Choferes: se mueven los marcadores existentes en lugar de recrearlos; el ícono cambia solo si cambió el color.
                 const choferesVistos = new Set();
@@ -321,26 +437,30 @@
                     limites.extend(destino);
                     let capas = capasViaje.get(v.id);
                     if (! capas) {
+                        const resaltarEste = () => resaltarViaje(v.id);
                         capas = {
-                            linea: L.polyline(camino, estilo)
+                            linea: L.polyline(camino, { ...estilo, bubblingMouseEvents: false })
                                 .bindTooltip('')
+                                .on('click', resaltarEste)
                                 .addTo(mapa),
-                            origen: L.marker(origen, { icon: iconoPunto }).bindPopup('').addTo(mapa),
-                            destino: L.marker(destino, { icon: iconoPin }).bindPopup('').addTo(mapa),
+                            origen: L.marker(origen, { icon: iconoPunto }).bindPopup('').on('click', resaltarEste).addTo(mapa),
+                            destino: L.marker(destino, { icon: iconoPin }).bindPopup('').on('click', resaltarEste).addTo(mapa),
                         };
                         capasViaje.set(v.id, capas);
                     }
-                    capas.linea.setLatLngs(camino).setStyle(estilo);
+                    capas.base = estilo; // el estilo se aplica abajo, junto con el resaltado
+                    capas.linea.setLatLngs(camino);
                     capas.origen.setLatLng(origen).setPopupContent(globoViaje(v, v.origen, 'O'));
                     capas.destino.setLatLng(destino).setPopupContent(globoViaje(v, v.destino, 'D'));
                     capas.linea.setTooltipContent(`Viaje #${escapar(v.id)} · ${escapar(v.estado_etiqueta)}`);
                 });
                 capasViaje.forEach((capas, id) => {
                     if (! viajesVistos.has(id)) {
-                        Object.values(capas).forEach((capa) => capa.remove());
+                        [capas.linea, capas.origen, capas.destino].forEach((capa) => capa.remove());
                         capasViaje.delete(id);
                     }
                 });
+                aplicarResaltado();
 
                 // Encuadra solo la primera vez, para no mover el mapa mientras el admin lo mira.
                 if (! encuadrado && limites.isValid()) {
@@ -398,9 +518,44 @@
                 }
             };
 
+            // Viajes dibujados por id (se rearman en cada actualización): línea, marcadores, estilo base y su encuadre.
+            let viajesDibujados = new Map();
+            const LINEA_PUNTEADA = 'M 0,-1 0,1';
+            const aplicarResaltado = () => {
+                viajesDibujados.forEach((d, id) => {
+                    const nivel = nivelResaltado(id, viajeResaltado);
+                    const { grosor, opacidad } = ajustarEstilo(d.grosor, d.opacidad, nivel);
+                    const zIndex = nivel === 'resaltado' ? 10 : 1;
+                    d.linea.setOptions(d.recta ? {
+                        zIndex,
+                        icons: [{ icon: { path: LINEA_PUNTEADA, strokeColor: '#2563eb', strokeOpacity: opacidad, scale: grosor }, offset: '0', repeat: '12px' }],
+                    } : { zIndex, strokeWeight: grosor, strokeOpacity: opacidad });
+                    d.marcadores.forEach((m) => m.setOpacity(nivel === 'atenuado' ? OPACIDAD_ATENUADO : 1));
+                });
+            };
+            resaltarViaje = (id) => {
+                const d = viajesDibujados.get(id);
+                if (! d) {
+                    return;
+                }
+                viajeResaltado = id;
+                aplicarResaltado();
+                mapa.fitBounds(d.limites);
+            };
+            quitarResaltado = () => {
+                if (viajeResaltado !== null) {
+                    viajeResaltado = null;
+                    aplicarResaltado();
+                }
+            };
+            // Tocar el mapa vacío quita el resaltado (el clic en una línea o un marcador no llega al mapa).
+            mapa.addListener('click', () => quitarResaltado());
+
             const dibujar = (datos) => {
                 dibujados.forEach((d) => d.setMap(null));
                 dibujados = [];
+                viajesDibujados = new Map();
+                viajeResaltado = resaltadoVigente(datos.viajes, viajeResaltado);
                 const limites = new google.maps.LatLngBounds();
 
                 const choferesVistos = new Set();
@@ -437,21 +592,39 @@
 
                 datos.viajes.forEach((v) => {
                     const titulo = `Viaje #${v.id} · ${v.estado_etiqueta} · ${v.chofer}`;
-                    [['Origen', v.origen, iconoPunto], ['Destino', v.destino, iconoPin]].forEach(([nombre, punto, icon]) => {
+                    const delViaje = new google.maps.LatLngBounds();
+                    const marcadores = [['Origen', v.origen, iconoPunto, 'O'], ['Destino', v.destino, iconoPin, 'D']].map(([nombre, punto, icon, letra]) => {
                         limites.extend(punto);
-                        dibujados.push(new google.maps.Marker({
+                        delViaje.extend(punto);
+                        const marcador = new google.maps.Marker({
                             map: mapa, position: punto, icon, title: `${titulo} · ${nombre}: ${punto.direccion ?? 'sin dirección'}`,
-                        }));
+                        });
+                        // Tocar el origen o el destino resalta el viaje y muestra su globo (anclado al punto: el
+                        // marcador se rearma en cada actualización).
+                        marcador.addListener('click', () => {
+                            resaltarViaje(v.id);
+                            globo.setContent(globoViaje(v, punto, letra));
+                            globo.setPosition({ lat: punto.lat, lng: punto.lng });
+                            globo.open({ map: mapa });
+                            idConGlobo = null;
+                        });
+                        dibujados.push(marcador);
+
+                        return marcador;
                     });
-                    // El recorrido por calles; sin recorrido, una línea recta punteada.
-                    dibujados.push(new google.maps.Polyline(v.recorrido ? {
-                        map: mapa, path: v.recorrido.map(([lat, lng]) => ({ lat, lng })),
-                        strokeColor: '#2563eb', strokeOpacity: 0.8, strokeWeight: 4,
-                    } : {
-                        map: mapa, path: [v.origen, v.destino], strokeOpacity: 0,
-                        icons: [{ icon: { path: 'M 0,-1 0,1', strokeColor: '#2563eb', strokeOpacity: 0.6, scale: 3 }, offset: '0', repeat: '12px' }],
-                    }));
+                    // El recorrido por calles; sin recorrido, una línea recta punteada (el estilo lo pone aplicarResaltado).
+                    const camino = v.recorrido ? v.recorrido.map(([lat, lng]) => ({ lat, lng })) : [v.origen, v.destino];
+                    camino.forEach((punto) => delViaje.extend(punto));
+                    const linea = new google.maps.Polyline(v.recorrido
+                        ? { map: mapa, path: camino, strokeColor: '#2563eb' }
+                        : { map: mapa, path: camino, strokeOpacity: 0 });
+                    linea.addListener('click', () => resaltarViaje(v.id));
+                    dibujados.push(linea);
+                    viajesDibujados.set(v.id, v.recorrido
+                        ? { linea, marcadores, limites: delViaje, recta: false, grosor: 4, opacidad: 0.8 }
+                        : { linea, marcadores, limites: delViaje, recta: true, grosor: 3, opacidad: 0.6 });
                 });
+                aplicarResaltado();
 
                 // Encuadra solo la primera vez, para no mover el mapa mientras el admin lo mira.
                 if (! encuadrado && ! limites.isEmpty()) {
