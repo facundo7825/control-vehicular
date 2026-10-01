@@ -185,7 +185,7 @@ it('el script filtra sin distinguir acentos y dibuja a los choferes como autos y
         ->toContain("normalize('NFD')")
         ->toContain('const buscarChoferes')
         ->toContain('setOpacity(')
-        ->toContain('<em>sin ubicaci') // "sin ubicación todavía": Livewire escapa los acentos del script (ó)
+        ->toContain('<em>sin ubicaci') // "sin ubicación todavía": Livewire escapa los acentos del script
         ->toContain("'Enter'")
         ->toContain("'Escape'")
         // Íconos: auto (Material directions_car), punto naranja para el origen y pin rojo para el destino.
@@ -194,7 +194,23 @@ it('el script filtra sin distinguir acentos y dibuja a los choferes como autos y
         ->toContain('const svgPunto')
         ->toContain('const svgPin')
         ->not->toContain('L.circleMarker(')
-        ->not->toContain("letra('O')");
+        ->not->toContain("letra('O')")
+        // Enter elige con los datos al día el primero con ubicación; la lista usa estilos propios (sin el
+        // tope de ancho ni el corte de texto del dropdown de Filament); el listener de clic no se acumula.
+        ->toContain('const primeraConUbicacion')
+        ->toContain('primeraConUbicacion(ultimosDatos.choferes, campo.value)')
+        ->toContain('mapa-en-vivo-lista')
+        ->toContain("removeEventListener('click', cerrarAlClicFuera)")
+        // La sombra de Leaflet va por CSS: ningún id de filtro repetido en cada ícono del documento.
+        ->toContain('mapa-en-vivo-icono')
+        ->not->toContain('sombra-mapa-en-vivo');
+
+    // El rango de acentos se escribe con escapes, no con los caracteres combinantes literales.
+    $vista = file_get_contents(resource_path('views/filament/pages/mapa-en-vivo.blade.php'));
+    expect($vista)->toContain('/[\u0300-\u036f]/g')
+        ->and(preg_match('/[\x{0300}-\x{036f}]/u', $vista))->toBe(0);
+    // La vista no usa las clases del dropdown de Filament (las del resto del panel no cuentan).
+    expect($vista)->not->toContain('fi-dropdown');
 })->with(['leaflet' => [null], 'google' => ['clave']]);
 
 it('los datos del mapa traen nombre y patente de todos los choferes en turno, también de los sin ubicación', function () {

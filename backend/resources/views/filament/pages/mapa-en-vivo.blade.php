@@ -17,9 +17,21 @@
                                    placeholder="Buscar chofer (nombre o patente)"
                                    aria-label="Buscar chofer (nombre o patente)" />
             </x-filament::input.wrapper>
-            {{-- z-index por encima del mapa (que tiene z-index 0). --}}
-            <div id="buscador-choferes-lista" class="fi-dropdown-panel fi-dropdown-list" hidden
-                 style="top: calc(100% + 0.25rem); left: 0; width: 100%; z-index: 20;"></div>
+            {{-- Estilos propios (no los del dropdown de Filament, que limita el ancho y corta el texto). --}}
+            <style>
+                .mapa-en-vivo-lista { position: absolute; top: calc(100% + 0.25rem); left: 0; right: 0; z-index: 20; /* encima del mapa (z-index 0) */
+                    max-height: 20rem; overflow-y: auto; padding: 0.25rem; border-radius: 0.5rem; background: #ffffff; color: #111827;
+                    box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 0 0 1px rgb(0 0 0 / 0.05); }
+                .dark .mapa-en-vivo-lista { background: #18181b; color: #f4f4f5; box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.4), 0 0 0 1px rgb(255 255 255 / 0.1); }
+                .mapa-en-vivo-fila { display: flex; gap: 0.5rem; align-items: flex-start; width: 100%; padding: 0.5rem; border-radius: 0.375rem;
+                    text-align: start; font-size: 0.875rem; line-height: 1.25rem; white-space: normal; overflow-wrap: anywhere; }
+                button.mapa-en-vivo-fila:hover, button.mapa-en-vivo-fila:focus-visible { background: rgb(0 0 0 / 0.05); outline: none; }
+                .dark button.mapa-en-vivo-fila:hover, .dark button.mapa-en-vivo-fila:focus-visible { background: rgb(255 255 255 / 0.08); }
+                .mapa-en-vivo-fila-sin-ubicacion { cursor: default; }
+                .mapa-en-vivo-detalle { opacity: 0.85; }
+                .mapa-en-vivo-icono { filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.45)); }
+            </style>
+            <div id="buscador-choferes-lista" class="mapa-en-vivo-lista" hidden></div>
         </div>
 
         {{-- position/z-index: los paneles de Leaflet no tapan la barra superior ni los modales de Filament. --}}
@@ -60,22 +72,28 @@
 
         // buscador:logica-pura (inicio) — sin DOM ni mapa; se prueba aparte con node.
         // Minúsculas, sin acentos y con los espacios colapsados: "José  PÉREZ" → "jose perez".
-        const normalizar = (texto) => String(texto ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+        const normalizar = (texto) => String(texto ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
             .toLowerCase().replace(/\s+/g, ' ').trim();
-        // Coincide por nombre o por patente; la patente se compara sin espacios ("AB 123 CD" = "ab123cd").
+        // Coincide por nombre o por patente; la patente se compara sin espacios ni guiones ("AB 123-CD" = "ab123cd").
         const coincide = (chofer, consulta) => {
             const buscado = normalizar(consulta);
             if (buscado === '') {
                 return true;
             }
-            const sinEspacios = (texto) => texto.replace(/ /g, '');
+            const compacta = (texto) => texto.replace(/[\s-]/g, '');
 
             return normalizar(chofer.nombre).includes(buscado)
-                || (chofer.patente != null && sinEspacios(normalizar(chofer.patente)).includes(sinEspacios(buscado)));
+                || (chofer.patente != null && compacta(buscado) !== ''
+                    && compacta(normalizar(chofer.patente)).includes(compacta(buscado)));
         };
+        const tieneUbicacion = (chofer) => chofer.lat !== null && chofer.lng !== null;
         const buscarChoferes = (choferes, consulta, limite = 8) => normalizar(consulta) === ''
             ? []
             : choferes.filter((c) => coincide(c, consulta)).slice(0, limite);
+        // Lo que elige Enter: la primera coincidencia que se puede mostrar en el mapa (o null).
+        const primeraConUbicacion = (choferes, consulta) => normalizar(consulta) === ''
+            ? null
+            : choferes.find((c) => tieneUbicacion(c) && coincide(c, consulta)) ?? null;
         // buscador:logica-pura (fin)
 
         // Se escucha desde ya (la librería puede tardar en cargar): se guarda el último dato y, cuando el mapa
@@ -113,23 +131,27 @@
 
         // Íconos SVG (los mismos para Leaflet y Google): el chofer es un auto (Material "directions_car") blanco
         // sobre un círculo del color de su estado; el origen del viaje (el usuario) un punto naranja; el destino un pin rojo.
-        const sombra = '<defs><filter id="sombra-mapa-en-vivo" x="-50%" y="-50%" width="200%" height="200%">'
-            + '<feDropShadow dx="0" dy="1" stdDeviation="1.2" flood-opacity="0.45"/></filter></defs>';
+        // La sombra: en Leaflet con CSS (clase mapa-en-vivo-icono); en Google, dentro de cada imagen data: (documento aparte).
         const TAMANO_AUTO = 36;
-        const svgAuto = (color) => `<svg xmlns="http://www.w3.org/2000/svg" width="${TAMANO_AUTO}" height="${TAMANO_AUTO}" viewBox="0 0 36 36">${sombra}`
-            + `<circle cx="18" cy="18" r="15" fill="${escapar(color)}" stroke="#ffffff" stroke-width="2" filter="url(#sombra-mapa-en-vivo)"/>`
+        const svgAuto = (color) => `<svg xmlns="http://www.w3.org/2000/svg" width="${TAMANO_AUTO}" height="${TAMANO_AUTO}" viewBox="0 0 36 36">`
+            + `<circle cx="18" cy="18" r="15" fill="${escapar(color)}" stroke="#ffffff" stroke-width="2"/>`
             + '<path transform="translate(8.4 8.4) scale(0.8)" fill="#ffffff" d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z"/>'
             + '</svg>';
         const TAMANO_PUNTO = 22;
-        const svgPunto = () => `<svg xmlns="http://www.w3.org/2000/svg" width="${TAMANO_PUNTO}" height="${TAMANO_PUNTO}" viewBox="0 0 22 22">${sombra}`
-            + '<circle cx="11" cy="11" r="7" fill="#f97316" stroke="#ffffff" stroke-width="3" filter="url(#sombra-mapa-en-vivo)"/></svg>';
+        const svgPunto = () => `<svg xmlns="http://www.w3.org/2000/svg" width="${TAMANO_PUNTO}" height="${TAMANO_PUNTO}" viewBox="0 0 22 22">`
+            + '<circle cx="11" cy="11" r="7" fill="#f97316" stroke="#ffffff" stroke-width="3"/></svg>';
         // Pin de 32 px: la punta (y = 22 de 24 en el viewBox) queda a 29 px, que es el anclaje.
         const TAMANO_PIN = 32;
         const PUNTA_PIN = 29;
-        const svgPin = () => `<svg xmlns="http://www.w3.org/2000/svg" width="${TAMANO_PIN}" height="${TAMANO_PIN}" viewBox="0 0 24 24">${sombra}`
-            + '<path fill="#dc2626" stroke="#ffffff" stroke-width="1.2" filter="url(#sombra-mapa-en-vivo)" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>'
+        const svgPin = () => `<svg xmlns="http://www.w3.org/2000/svg" width="${TAMANO_PIN}" height="${TAMANO_PIN}" viewBox="0 0 24 24">`
+            + '<path fill="#dc2626" stroke="#ffffff" stroke-width="1.2" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>'
             + '</svg>';
-        const urlSvg = (svg) => `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+        const urlSvg = (svg) => {
+            const conSombra = svg.replace(/^(<svg[^>]*>)([\s\S]*)<\/svg>$/, '$1<defs><filter id="sombra" x="-50%" y="-50%" width="200%" height="200%">'
+                + '<feDropShadow dx="0" dy="1" stdDeviation="1.2" flood-opacity="0.45"/></filter></defs><g filter="url(#sombra)">$2</g></svg>');
+
+            return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(conSombra)}`;
+        };
         const OPACIDAD_ATENUADO = 0.3;
 
         // Buscador: filtra en el navegador mientras se escribe; lista hasta 8 coincidencias y atenúa al resto en el mapa.
@@ -138,7 +160,7 @@
         let coincidencias = [];
 
         const elegir = (chofer) => {
-            if (chofer.lat === null || chofer.lng === null) {
+            if (! tieneUbicacion(chofer)) {
                 return; // sin ubicación: figura en la lista pero no mueve el mapa
             }
             irAChofer?.(chofer);
@@ -154,18 +176,18 @@
 
                 return;
             }
+            // Dos renglones por chofer: el nombre y, abajo, patente · estado (con su color) · si no tiene ubicación.
             lista.innerHTML = coincidencias.length === 0
-                ? '<div class="fi-dropdown-list-item"><span class="fi-dropdown-list-item-label">Ningún chofer en turno coincide.</span></div>'
+                ? '<div class="mapa-en-vivo-fila">Ningún chofer en turno coincide.</div>'
                 : coincidencias.map((c, i) => {
-                    const sinUbicacion = c.lat === null || c.lng === null;
+                    const sinUbicacion = ! tieneUbicacion(c);
 
-                    return `<button type="button" class="fi-dropdown-list-item" data-indice="${i}"`
-                        + `${sinUbicacion ? ' style="cursor: default;"' : ''}>`
-                        + `<span style="width:10px;height:10px;border-radius:9999px;flex:none;background:${escapar(c.color)};"></span>`
-                        + '<span class="fi-dropdown-list-item-label">'
-                        + `<strong>${escapar(c.nombre)}</strong> · ${escapar(c.patente ?? 'sin vehículo')} · `
-                        + `<span style="color:${escapar(c.color)};">${escapar(c.estado_etiqueta)}</span>`
-                        + `${sinUbicacion ? ' · <em>sin ubicación todavía</em>' : ''}</span></button>`;
+                    return `<button type="button" class="mapa-en-vivo-fila${sinUbicacion ? ' mapa-en-vivo-fila-sin-ubicacion' : ''}" data-indice="${i}">`
+                        + `<span style="width:10px;height:10px;margin-top:0.3rem;border-radius:9999px;flex:none;background:${escapar(c.color)};"></span>`
+                        + `<span><strong>${escapar(c.nombre)}</strong><br>`
+                        + `<span class="mapa-en-vivo-detalle">${escapar(c.patente ?? 'sin vehículo')} · </span>`
+                        + `<span style="color:${escapar(c.color)};font-weight:600;">${escapar(c.estado_etiqueta)}</span>`
+                        + `${sinUbicacion ? '<span class="mapa-en-vivo-detalle"> · <em>sin ubicación todavía</em></span>' : ''}</span></button>`;
                 }).join('');
             lista.hidden = false;
         };
@@ -195,8 +217,12 @@
         campo.addEventListener('keydown', (evento) => {
             if (evento.key === 'Enter') {
                 evento.preventDefault();
-                if (coincidencias.length > 0) {
-                    elegir(coincidencias[0]);
+                // Con los datos de ahora (no con la lista que quedó dibujada): el primero que está en el mapa.
+                const elegido = primeraConUbicacion(ultimosDatos.choferes, campo.value);
+                if (elegido) {
+                    elegir(elegido);
+                } else {
+                    mostrarLista(); // ninguno tiene ubicación: la lista queda a la vista
                 }
             } else if (evento.key === 'Escape') {
                 limpiar();
@@ -214,11 +240,20 @@
                 elegir(coincidencias[Number(boton.dataset.indice)]);
             }
         });
-        document.addEventListener('click', (evento) => {
-            if (! document.getElementById('buscador-choferes')?.contains(evento.target)) {
+        // Un clic fuera del buscador cierra la lista. El listener se quita solo cuando la página ya no está
+        // (al volver a entrar se registra otro), así no se acumulan.
+        const buscador = document.getElementById('buscador-choferes');
+        const cerrarAlClicFuera = (evento) => {
+            if (! buscador.isConnected) {
+                document.removeEventListener('click', cerrarAlClicFuera);
+
+                return;
+            }
+            if (! buscador.contains(evento.target)) {
                 lista.hidden = true;
             }
-        });
+        };
+        document.addEventListener('click', cerrarAlClicFuera);
 
         const iniciarLeaflet = () => {
             const mapa = L.map(contenedor).setView([centroPorDefecto.lat, centroPorDefecto.lng], 12);
@@ -233,7 +268,7 @@
             let encuadrado = false;
 
             const icono = (svg, tamano, anclaje) => L.divIcon({
-                className: '',
+                className: 'mapa-en-vivo-icono',
                 html: svg,
                 iconSize: [tamano, tamano],
                 iconAnchor: anclaje,
