@@ -19,6 +19,7 @@ use App\Servicios\MaquinaEstadosViaje;
 use App\Servicios\ServicioViaje;
 use Filament\Actions\Testing\TestAction;
 use Filament\Forms\Components\Select;
+use Filament\Notifications\Notification;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Queue;
 use Livewire\Features\SupportTesting\Testable;
@@ -176,7 +177,9 @@ describe('nuevo viaje', function () {
         Livewire::test(CreateViaje::class)
             ->fillForm(datosNuevoViaje($solicitante))
             ->call('create')
-            ->assertNotified('No se pudo crear el viaje')
+            // El texto de la app ("Ya tenés...") le habla al solicitante; en el panel se habla de él.
+            ->assertNotified(Notification::make()->danger()->title('No se pudo crear el viaje')
+                ->body('El solicitante ya tiene un viaje en curso.'))
             ->assertNoRedirect();
 
         expect(Viaje::count())->toBe(1);

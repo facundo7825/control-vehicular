@@ -19,6 +19,9 @@ use Illuminate\Support\Facades\DB;
 
 class ServicioViaje
 {
+    /** Error de la app al pedir con un viaje en marcha (le habla al solicitante; el panel lo traduce). */
+    public const YA_TIENE_VIAJE = 'Ya tenés un viaje en curso.';
+
     public function __construct(
         private Despachador $despachador,
         private CalculadorEstadoChofer $estados,
@@ -60,7 +63,7 @@ class ServicioViaje
                 ->whereIn('estado', EstadoViaje::enProgreso())
                 ->exists();
             if ($enProgreso) {
-                throw new ReglaNegocio('Ya tenés un viaje en curso.');
+                throw new ReglaNegocio(self::YA_TIENE_VIAJE);
             }
 
             return Viaje::create([

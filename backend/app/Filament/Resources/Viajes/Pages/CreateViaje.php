@@ -44,7 +44,11 @@ class CreateViaje extends CreateRecord
                 ? app(ServicioReservas::class)->crear($solicitante, $datos)
                 : app(ServicioViaje::class)->pedir($solicitante, $datos);
         } catch (ReglaNegocio|AccionNoPermitida $e) {
-            Notification::make()->danger()->title('No se pudo crear el viaje')->body($e->getMessage())->send();
+            // Los textos de los servicios le hablan al solicitante en la app; acá el que lee es el admin.
+            $mensaje = $e->getMessage() === ServicioViaje::YA_TIENE_VIAJE
+                ? 'El solicitante ya tiene un viaje en curso.'
+                : $e->getMessage();
+            Notification::make()->danger()->title('No se pudo crear el viaje')->body($mensaje)->send();
 
             $this->halt();
         }
