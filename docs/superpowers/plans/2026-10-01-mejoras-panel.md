@@ -49,7 +49,7 @@
 2. **Reportes:** una página nueva **Reportes** con un rango de fechas (por defecto el mes actual, en días locales) y dos pestañas o tablas.
    - **Por chofer:**
      - viajes finalizados y cancelados por el chofer;
-     - km recorridos: la suma haversine de `recorrido_viaje` de sus viajes finalizados en el rango. Si el rango supera la retención, se avisa que los km cubren solo los últimos 90 días;
+     - km recorridos: la suma de `viajes.metros_recorridos` de sus viajes finalizados en el rango. Se calcula una vez al finalizar el viaje (haversine sobre `recorrido_viaje`) y se completó para los viajes previos con una migración; si en el rango hay viajes finalizados sin ese dato, se avisa;
      - horas de turno: la intersección de cada turno con el rango, con los turnos abiertos hasta ahora;
      - llegada promedio: de aceptado a llegó.
    - **Por vehículo:** viajes finalizados, km y horas en turno.
@@ -119,7 +119,7 @@ Tests:
 - horas de turno recortadas al rango y turno abierto;
 - llegada promedio;
 - rango por defecto;
-- aviso de retención;
+- aviso de viajes sin km calculados;
 - la descarga devuelve un xlsx válido: leerlo con OpenSpout en el test y verificar encabezados y filas.
 Commit: `feat: reportes por chofer y vehículo exportables a Excel`
 
