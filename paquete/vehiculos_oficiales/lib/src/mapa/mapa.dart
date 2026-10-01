@@ -1,8 +1,10 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../entorno.dart';
 import '../modelos/comunes.dart';
 import 'mapa_google.dart';
+import 'mapa_osm.dart';
 
 enum TipoMarcador { choferLibre, choferNoDisponible, choferAsignado, origen, destino }
 
@@ -32,11 +34,14 @@ class DatosMapa {
   final ValueChanged<Coordenada>? alTocarMapa;
 }
 
-/// Costura para no instanciar Google Maps en los tests: las pantallas dibujan el mapa con lo que
-/// devuelva este provider (en producción, [MapaGoogle]).
+/// Costura para no instanciar un mapa real en los tests: las pantallas dibujan el mapa con lo que
+/// devuelva este provider.
 typedef ConstructorMapa = Widget Function(BuildContext context, DatosMapa datos);
 
-final constructorMapaProvider = Provider<ConstructorMapa>(
-  (ref) =>
-      (context, datos) => MapaGoogle(datos: datos),
-);
+/// Con clave de Google Maps en la configuración, [MapaGoogle]; sin clave, [MapaOsm] (OpenStreetMap,
+/// solo para desarrollo y demos).
+final constructorMapaProvider = Provider<ConstructorMapa>((ref) {
+  final claveGoogle = ref.watch(entornoProvider).config.googleMapsApiKey;
+  if (claveGoogle.isEmpty) return (context, datos) => MapaOsm(datos: datos);
+  return (context, datos) => MapaGoogle(datos: datos);
+});

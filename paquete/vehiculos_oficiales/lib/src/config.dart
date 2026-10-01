@@ -25,7 +25,8 @@ class VehiculosOficialesConfig {
   final String reverbScheme;
   final String reverbKey;
 
-  /// Solo informativa: en Android e iOS la clave se declara en el manifiesto / AppDelegate.
+  /// Elige el mapa: con clave, Google Maps; vacía, OpenStreetMap (solo desarrollo y demos).
+  /// En Android e iOS la clave además se declara en el manifiesto / AppDelegate.
   final String googleMapsApiKey;
 
   Uri get apiUri => Uri.parse('${_sinBarraFinal(apiBaseUrl)}/api/');
