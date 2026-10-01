@@ -7,6 +7,11 @@
 
     {{ $this->form }}
 
+    @if ($avisoRango = $this->avisoRango())
+        <x-filament::callout color="warning" :icon="\Filament\Support\Icons\Heroicon::OutlinedExclamationTriangle"
+                             :description="$avisoRango" />
+    @endif
+
     @if ($datos['aviso'])
         <x-filament::callout color="warning" :icon="\Filament\Support\Icons\Heroicon::OutlinedExclamationTriangle"
                              :description="$datos['aviso']" />

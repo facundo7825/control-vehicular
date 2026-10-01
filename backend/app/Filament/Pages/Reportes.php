@@ -22,6 +22,9 @@ use Throwable;
  */
 class Reportes extends Page
 {
+    /** Máximo de días (inclusive) de un reporte: acota el trabajo de un pedido. */
+    public const MAXIMO_DIAS = 366;
+
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedChartBar;
 
     protected static ?string $navigationLabel = 'Reportes';
@@ -71,19 +74,45 @@ class Reportes extends Page
         $this->datos = null;
     }
 
-    /**
-     * El rango elegido; si falta una fecha o no es válida se usa la del mes actual, y si quedan
-     * invertidas se dan vuelta.
-     *
-     * @return array{desde: string, hasta: string}
-     */
+    /** @return array{desde: string, hasta: string} el rango que se calcula (ver rangoElegido) */
     public function rango(): array
+    {
+        ['desde' => $desde, 'hasta' => $hasta] = $this->rangoElegido();
+
+        return ['desde' => $desde, 'hasta' => $hasta];
+    }
+
+    /** Aviso cuando el rango elegido supera el máximo y se acortó. */
+    public function avisoRango(): ?string
+    {
+        $rango = $this->rangoElegido();
+
+        return $rango['acotado']
+            ? 'El rango puede abarcar hasta '.self::MAXIMO_DIAS.' días: se muestran del '
+                .Carbon::parse($rango['desde'])->format('d/m/Y').' al '.Carbon::parse($rango['hasta'])->format('d/m/Y').'.'
+            : null;
+    }
+
+    /**
+     * El rango elegido. Si falta una fecha o no es válida se usa la del mes actual; si quedan invertidas
+     * se dan vuelta; si abarca más de MAXIMO_DIAS días se acorta el final (acotado = true).
+     *
+     * @return array{desde: string, hasta: string, acotado: bool}
+     */
+    private function rangoElegido(): array
     {
         $defecto = app(ReportesPanel::class)->rangoPorDefecto();
         $desde = $this->fecha($this->filtros['desde'] ?? null) ?? $defecto['desde'];
         $hasta = $this->fecha($this->filtros['hasta'] ?? null) ?? $defecto['hasta'];
+        if ($desde > $hasta) {
+            [$desde, $hasta] = [$hasta, $desde];
+        }
 
-        return $desde <= $hasta ? ['desde' => $desde, 'hasta' => $hasta] : ['desde' => $hasta, 'hasta' => $desde];
+        $maximo = Carbon::parse($desde)->addDays(self::MAXIMO_DIAS - 1)->format('Y-m-d');
+
+        return $hasta > $maximo
+            ? ['desde' => $desde, 'hasta' => $maximo, 'acotado' => true]
+            : ['desde' => $desde, 'hasta' => $hasta, 'acotado' => false];
     }
 
     /** @return array{choferes: array, vehiculos: array, aviso: string|null} */

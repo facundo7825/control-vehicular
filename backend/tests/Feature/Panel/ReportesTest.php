@@ -8,10 +8,14 @@ use App\Models\Turno;
 use App\Models\Usuario;
 use App\Models\Vehiculo;
 use App\Models\Viaje;
+use App\Servicios\ExportadorExcel;
 use App\Servicios\ReportesPanel;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Queue;
+use Livewire\Features\SupportTesting\Testable;
 use Livewire\Livewire;
+use OpenSpout\Common\Entity\Cell\NumericCell;
+use OpenSpout\Common\Entity\Cell\StringCell;
 use OpenSpout\Reader\XLSX\Reader;
 
 // 2026-10-15 12:00 UTC = 09:00 en Buenos Aires. El día local 10/10 empieza a las 03:00 UTC.
@@ -187,4 +191,83 @@ it('exporta un xlsx con una hoja por chofer y otra por vehículo', function () {
             ['Patente', 'Vehículo', 'Viajes finalizados', 'Km recorridos', 'Horas en turno'],
             ['AB123CD', 'Toyota Corolla', 1, $km, 2],
         ]);
+});
+
+/** Lee un xlsx descargado por Livewire: [hoja => [filas de celdas OpenSpout]]. */
+function leerXlsxDescargado(Testable $componente): array
+{
+    $archivo = tempnam(sys_get_temp_dir(), 'xlsx');
+    file_put_contents($archivo, base64_decode(data_get($componente->effects, 'download.content')));
+
+    $hojas = [];
+    $reader = new Reader;
+    $reader->open($archivo);
+    foreach ($reader->getSheetIterator() as $hoja) {
+        foreach ($hoja->getRowIterator() as $fila) {
+            $hojas[$hoja->getName()][] = $fila->getCells();
+        }
+    }
+    $reader->close();
+    unlink($archivo);
+
+    return $hojas;
+}
+
+it('exporta los textos como texto y neutraliza los que parecen fórmulas', function () {
+    $vehiculo = Vehiculo::factory()->create(['patente' => 'AB123CD']);
+    foreach (['=1+1', '@SUMA(A1)', '+54 11', '-x', 'Ana'] as $nombre) {
+        viajeConRecorrido(Usuario::factory()->chofer()->create(['nombre' => $nombre]), $vehiculo, []);
+    }
+
+    $hojas = leerXlsxDescargado(Livewire::test(Reportes::class)->callAction('exportar'));
+    $nombres = array_map(fn (array $celdas) => $celdas[0], array_slice($hojas['Choferes'], 1));
+
+    expect($nombres)->each->toBeInstanceOf(StringCell::class)
+        ->and(array_map(fn (StringCell $c) => $c->getValue(), $nombres))
+        ->toEqualCanonicalizing(["'=1+1", "'@SUMA(A1)", "'+54 11", "'-x", 'Ana'])
+        // Los números siguen siendo numéricos.
+        ->and($hojas['Choferes'][1][1])->toBeInstanceOf(NumericCell::class);
+});
+
+it('cierra el archivo y borra los temporales si falla a mitad de la escritura', function () {
+    $carpeta = sys_get_temp_dir().DIRECTORY_SEPARATOR.'reportes-test-'.uniqid();
+    mkdir($carpeta);
+    $filas = (function () {
+        yield ['uno'];
+        throw new RuntimeException('falló la consulta');
+    })();
+
+    $respuesta = (new ExportadorExcel($carpeta))->descargar('x.xlsx', ['Columna'], $filas);
+
+    ob_start();
+    try {
+        expect(fn () => $respuesta->sendContent())->toThrow(RuntimeException::class, 'falló la consulta');
+    } finally {
+        ob_end_clean();
+    }
+
+    expect(array_diff(scandir($carpeta), ['.', '..']))->toBe([]);
+    rmdir($carpeta);
+});
+
+it('da vuelta un rango invertido y usa el mes actual si una fecha falta o no es válida', function () {
+    $pagina = Livewire::test(Reportes::class)
+        ->set('filtros.desde', '2026-10-20')
+        ->set('filtros.hasta', '2026-10-05');
+    expect($pagina->instance()->rango())->toBe(['desde' => '2026-10-05', 'hasta' => '2026-10-20']);
+
+    $pagina->set('filtros.desde', 'no es fecha')->set('filtros.hasta', null);
+    expect($pagina->instance()->rango())->toBe(['desde' => '2026-10-01', 'hasta' => '2026-10-31']);
+});
+
+it('acota el rango a 366 días y lo avisa', function () {
+    $pagina = Livewire::test(Reportes::class)
+        ->assertDontSee('puede abarcar hasta')
+        ->set('filtros.desde', '2024-01-01')
+        ->set('filtros.hasta', '2026-10-31')
+        ->assertSee('El rango puede abarcar hasta 366 días: se muestran del 01/01/2024 al 31/12/2024.');
+
+    expect($pagina->instance()->rango())->toBe(['desde' => '2024-01-01', 'hasta' => '2024-12-31']);
+
+    $pagina->callAction('exportar')->assertFileDownloaded('reportes-2024-01-01-a-2024-12-31.xlsx');
 });
