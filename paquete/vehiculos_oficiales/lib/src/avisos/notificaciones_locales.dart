@@ -10,8 +10,13 @@ abstract class NotificacionesLocales {
   /// Android 13+ (y iOS): pide permiso para mostrar notificaciones. Si ya se respondió, no molesta.
   Future<void> pedirPermiso();
 
-  /// Notificación con sonido en el canal de alta prioridad. Tocarla abre la app.
-  Future<void> mostrar({required String titulo, required String texto});
+  /// Notificación con sonido en el canal de alta prioridad. Tocarla abre la app. Con [id] reemplaza a la
+  /// notificación que tenga ese id (y se puede [cancelar]); sin él, cada una es nueva. Los ids fijos son
+  /// negativos, para no chocar con los automáticos.
+  Future<void> mostrar({required String titulo, required String texto, int? id});
+
+  /// Quita la notificación [id] si está a la vista.
+  Future<void> cancelar(int id);
 }
 
 final notificacionesLocalesProvider = Provider<NotificacionesLocales>((ref) => NotificacionesPlugin());
@@ -71,10 +76,10 @@ class NotificacionesPlugin implements NotificacionesLocales {
   });
 
   @override
-  Future<void> mostrar({required String titulo, required String texto}) => _intentar(() async {
+  Future<void> mostrar({required String titulo, required String texto, int? id}) => _intentar(() async {
     final plugin = await _iniciado();
     await plugin?.show(
-      id: _siguienteId++,
+      id: id ?? _siguienteId++,
       title: titulo,
       body: texto,
       notificationDetails: const NotificationDetails(
@@ -82,6 +87,12 @@ class NotificacionesPlugin implements NotificacionesLocales {
         iOS: DarwinNotificationDetails(presentAlert: true, presentSound: true),
       ),
     );
+  });
+
+  @override
+  Future<void> cancelar(int id) => _intentar(() async {
+    final plugin = await _iniciado();
+    await plugin?.cancel(id: id);
   });
 
   Future<void> _intentar(Future<void> Function() accion) async {

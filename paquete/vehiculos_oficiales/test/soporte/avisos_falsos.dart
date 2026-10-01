@@ -37,9 +37,21 @@ class NotificacionesFalsas implements NotificacionesLocales {
   int permisos = 0;
   final mostradas = <(String, String)>[];
 
+  /// El id pedido para cada notificación de [mostradas] (nulo: uno nuevo).
+  final ids = <int?>[];
+
+  /// Ids cancelados, en orden.
+  final canceladas = <int>[];
+
   @override
   Future<void> pedirPermiso() async => permisos++;
 
   @override
-  Future<void> mostrar({required String titulo, required String texto}) async => mostradas.add((titulo, texto));
+  Future<void> mostrar({required String titulo, required String texto, int? id}) async {
+    mostradas.add((titulo, texto));
+    ids.add(id);
+  }
+
+  @override
+  Future<void> cancelar(int id) async => canceladas.add(id);
 }

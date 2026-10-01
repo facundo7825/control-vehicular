@@ -447,6 +447,42 @@ void main() {
       });
     });
 
+    test('la notificación de la oferta tiene id fijo y se quita al cortar el timbre', () {
+      fakeAsync((async) {
+        final c = libre(async);
+        binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+        tr.emitir('chofer.2', Eventos.ofertaCreada, oferta());
+        expect(e.notificaciones.ids.single, AvisosViaje.idNotificacionOferta);
+        expect(e.notificaciones.canceladas, isEmpty);
+
+        c.read(viajeActualProvider.notifier).rechazarOferta();
+        async.flushMicrotasks();
+        expect(e.notificaciones.canceladas, [AvisosViaje.idNotificacionOferta]);
+      });
+    });
+
+    test('la notificación de la oferta se quita al vencer', () {
+      fakeAsync((async) {
+        libre(async);
+        binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+        tr.emitir('chofer.2', Eventos.ofertaCreada, oferta(vence: const Duration(seconds: 10)));
+
+        async.elapse(const Duration(seconds: 10));
+        expect(e.notificaciones.canceladas, [AvisosViaje.idNotificacionOferta]);
+      });
+    });
+
+    test('sin notificación de la oferta (primer plano) no se cancela nada', () {
+      fakeAsync((async) {
+        final c = libre(async);
+        tr.emitir('chofer.2', Eventos.ofertaCreada, oferta());
+
+        c.read(viajeActualProvider.notifier).rechazarOferta();
+        async.flushMicrotasks();
+        expect(e.notificaciones.canceladas, isEmpty);
+      });
+    });
+
     test('un obligatorio asignado sin oferta suena una vez', () {
       fakeAsync((async) {
         libre(async);

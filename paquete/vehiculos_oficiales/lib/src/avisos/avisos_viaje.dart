@@ -20,11 +20,17 @@ final avisosViajeProvider = NotifierProvider<AvisosViaje, void>(AvisosViaje.new)
 class AvisosViaje extends Notifier<void> {
   static const intervaloVibracion = Duration(seconds: 2);
 
+  /// Id fijo de la notificación de la oferta: una oferta nueva la reemplaza y se quita al cortar el timbre.
+  static const idNotificacionOferta = -1;
+
   /// Oferta cuyo timbre suena en bucle (nula si no suena ninguno).
   int? _ofertaSonando;
   ReproductorSonidos? _bucle;
   Timer? _vibracion;
   Timer? _vencimiento;
+
+  /// Las notificaciones donde salió la oferta que suena (nulas si salió en primer plano, sin notificación).
+  NotificacionesLocales? _notificacionOferta;
 
   /// Ofertas que el chofer ya respondió (o empezó a responder): no vuelven a sonar aunque una consulta,
   /// un push o la reconexión las traigan otra vez, ni si la respuesta falla. Se olvidan cuando la oferta se va.
@@ -145,7 +151,11 @@ class AvisosViaje extends Notifier<void> {
     _vibracion = Timer.periodic(intervaloVibracion, (_) => unawaited(r.vibrar()));
     // Por si nadie la da por vencida (sin la pantalla de la oferta, p. ej. en segundo plano).
     _vencimiento = Timer(restante, _cortarBucle);
-    _notificar('Nuevo viaje ofrecido', 'Hacia ${oferta.viaje.destino.descripcion}. Respondé antes de que venza.');
+    _notificacionOferta = _notificar(
+      'Nuevo viaje ofrecido',
+      'Hacia ${oferta.viaje.destino.descripcion}. Respondé antes de que venza.',
+      id: idNotificacionOferta,
+    );
   }
 
   void _cortarBucle() {
@@ -158,6 +168,10 @@ class AvisosViaje extends Notifier<void> {
     final r = _bucle;
     _bucle = null;
     if (r != null) unawaited(r.detenerBucle());
+    // La oferta ya no se puede responder: su notificación tampoco queda a la vista.
+    final n = _notificacionOferta;
+    _notificacionOferta = null;
+    if (n != null) unawaited(n.cancelar(idNotificacionOferta));
   }
 
   void _avisar(Sonido sonido, String titulo, String texto) {
@@ -167,9 +181,12 @@ class AvisosViaje extends Notifier<void> {
 
   /// La notificación sale solo con la app en segundo plano (`paused`, `hidden` o `detached`). `inactive` es
   /// primer plano: la app se ve, tapada un momento (panel de notificaciones, diálogo del sistema, llamada).
-  void _notificar(String titulo, String texto) {
+  /// Devuelve dónde se mostró (nulo si no salió).
+  NotificacionesLocales? _notificar(String titulo, String texto, {int? id}) {
     final ciclo = WidgetsBinding.instance.lifecycleState;
-    if (ciclo == null || ciclo == AppLifecycleState.resumed || ciclo == AppLifecycleState.inactive) return;
-    unawaited(ref.read(notificacionesLocalesProvider).mostrar(titulo: titulo, texto: texto));
+    if (ciclo == null || ciclo == AppLifecycleState.resumed || ciclo == AppLifecycleState.inactive) return null;
+    final n = ref.read(notificacionesLocalesProvider);
+    unawaited(n.mostrar(titulo: titulo, texto: texto, id: id));
+    return n;
   }
 }
