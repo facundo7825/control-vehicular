@@ -310,10 +310,24 @@ void main() {
       expect(s.aMover(Enfoque.punto(a, version: 1)), Enfoque.punto(a, version: 1));
       expect(s.aMover(Enfoque.entre(const [a, b])), Enfoque.entre(const [a, b]));
     });
+
+    test('SeguidorEnfoque: un enfoque que no se pudo aplicar se vuelve a pedir', () {
+      final s = SeguidorEnfoque();
+      final e = Enfoque.punto(a);
+      expect(s.aMover(e), e);
+
+      s.fallo(e);
+      expect(s.aMover(e), e);
+      expect(s.aMover(e), isNull);
+
+      s.fallo(Enfoque.punto(b)); // uno que ya no es el último: no cambia nada
+      expect(s.aMover(e), isNull);
+    });
   });
 
   group('MapaGoogle', () {
     const a = Coordenada(-26.8, -65.2);
+    const a2 = Coordenada(-26.8001, -65.2001); // a unos metros de a
     const b = Coordenada(-27.0, -65.4);
 
     test('un punto: centra con el zoom de enfoque', () {
@@ -331,6 +345,37 @@ void main() {
           Enfoque.margen,
         ).toJson(),
       );
+    });
+
+    group('aplicar', () {
+      late List<Map<String, Object?>> movimientos;
+      Future<void> mover(gm.CameraUpdate u) async => movimientos.add({'u': u.toJson()});
+      setUp(() => movimientos = []);
+
+      test('un encuadre que acerca más que el zoom de un punto se limita a ese zoom', () async {
+        await MapaGoogle.aplicar(Enfoque.entre(const [a, a2]), mover: mover, zoom: () async => 19);
+
+        expect(movimientos.map((m) => m['u']), [
+          MapaGoogle.actualizacionPara(Enfoque.entre(const [a, a2])).toJson(),
+          gm.CameraUpdate.zoomTo(Enfoque.zoomPunto).toJson(),
+        ]);
+      });
+
+      test('un encuadre amplio no se toca; un punto no consulta el zoom', () async {
+        await MapaGoogle.aplicar(Enfoque.entre(const [a, b]), mover: mover, zoom: () async => 9);
+        expect(movimientos, hasLength(1));
+
+        movimientos.clear();
+        await MapaGoogle.aplicar(Enfoque.punto(a), mover: mover, zoom: () async => fail('no hace falta'));
+        expect(movimientos, hasLength(1));
+      });
+
+      test('si mover falla, el error llega a quien llamó (para reintentar)', () async {
+        await expectLater(
+          MapaGoogle.aplicar(Enfoque.punto(a), mover: (_) async => throw Exception('sin mapa'), zoom: () async => 15),
+          throwsException,
+        );
+      });
     });
 
     test('la posición inicial mira el enfoque de un punto, si no el centro', () {

@@ -80,6 +80,12 @@ class SeguidorEnfoque {
     if (actual == null || actual == _aplicado) return null;
     return _aplicado = actual;
   }
+
+  /// [enfoque] no se pudo aplicar (falló el movimiento de cámara): se vuelve a pedir en el próximo
+  /// [aMover]. Si ya se aplicó otro después, no cambia nada.
+  void fallo(Enfoque enfoque) {
+    if (_aplicado == enfoque) _aplicado = null;
+  }
 }
 
 class DatosMapa {
