@@ -24,6 +24,23 @@ return [
         'google_js_api_key' => env('GOOGLE_MAPS_JS_API_KEY'),
     ],
 
+    // Búsqueda de lugares para el destino del pedido.
+    'lugares' => [
+        // nominatim (OpenStreetMap, solo desarrollo/demos) | google (Places, usa mapas.google_api_key) | falso
+        'driver' => env('LUGARES_DRIVER', 'nominatim'),
+        // La política de Nominatim exige un User-Agent identificable de la aplicación.
+        'user_agent' => env('LUGARES_USER_AGENT', 'VehiculosOficiales/1.0 (+https://github.com/facundo7825/control-vehicular)'),
+    ],
+
+    // Recorrido con indicaciones (GET /api/ruta).
+    'rutas' => [
+        // osrm (servidor público de OSRM, solo desarrollo/demos) | google (Directions, usa mapas.google_api_key) | falso
+        'driver' => env('RUTAS_DRIVER', 'osrm'),
+        // Un OSRM propio en producción; el público pide User-Agent identificable y como mucho 1 pedido por segundo.
+        'osrm_url' => env('RUTAS_OSRM_URL', 'https://router.project-osrm.org'),
+        'user_agent' => env('RUTAS_USER_AGENT', env('LUGARES_USER_AGENT', 'VehiculosOficiales/1.0 (+https://github.com/facundo7825/control-vehicular)')),
+    ],
+
     'notificaciones' => [
         // registro | fcm
         'driver' => env('NOTIFICACIONES_DRIVER', 'registro'),

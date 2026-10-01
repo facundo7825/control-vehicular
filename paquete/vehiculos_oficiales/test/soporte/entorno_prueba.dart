@@ -2,12 +2,15 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
+import 'package:vehiculos_oficiales/src/avisos/notificaciones_locales.dart';
+import 'package:vehiculos_oficiales/src/avisos/reproductor_sonidos.dart';
 import 'package:vehiculos_oficiales/src/chofer/almacen_cola.dart';
 import 'package:vehiculos_oficiales/src/entorno.dart';
 import 'package:vehiculos_oficiales/src/sesion/almacen_token.dart';
 import 'package:vehiculos_oficiales/vehiculos_oficiales.dart';
 
 import 'adaptador_falso.dart';
+import 'avisos_falsos.dart';
 import 'dobles_chofer.dart';
 
 const configPrueba = VehiculosOficialesConfig(
@@ -49,6 +52,10 @@ class EntornoPrueba {
   AlmacenCola almacenCola = AlmacenColaMemoria();
   int sesionesInvalidas = 0;
 
+  /// Nunca los plugins de audio y notificaciones.
+  final sonidos = ReproductorFalso();
+  final notificaciones = NotificacionesFalsas();
+
   EntornoModulo get entorno => EntornoModulo(
     config: configPrueba,
     sesion: SesionPJ(tokenPJ),
@@ -66,6 +73,8 @@ class EntornoPrueba {
     adaptadorHttpProvider.overrideWithValue(http),
     almacenTokenProvider.overrideWithValue(almacen),
     almacenColaProvider.overrideWithValue(almacenCola),
+    reproductorSonidosProvider.overrideWithValue(sonidos),
+    notificacionesLocalesProvider.overrideWithValue(notificaciones),
     ...extra,
   ];
 

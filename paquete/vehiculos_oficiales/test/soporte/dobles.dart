@@ -65,6 +65,38 @@ class ApiFalsa extends ApiVehiculos {
   ErrorApi? errorDetalle;
   final consultasDetalle = <int>[];
 
+  /// Respuesta de `buscarLugares` y las búsquedas recibidas (texto, cerca de).
+  List<LugarEncontrado> lugares = [];
+  ErrorApi? errorLugares;
+  final busquedas = <(String, Coordenada?)>[];
+
+  /// Si no es nulo, `buscarLugares` espera a que el test lo complete antes de responder.
+  Completer<void>? demorarLugares;
+
+  @override
+  Future<List<LugarEncontrado>> buscarLugares(String texto, {Coordenada? cerca}) async {
+    busquedas.add((texto, cerca));
+    await demorarLugares?.future;
+    if (errorLugares != null) throw errorLugares!;
+    return lugares;
+  }
+
+  /// Respuesta de `obtenerRuta` (nula = sin recorrido) y los pedidos recibidos (origen, destino).
+  Ruta? ruta;
+  ErrorApi? errorRuta;
+  final consultasRuta = <(Coordenada, Coordenada)>[];
+
+  /// Si no es nulo, `obtenerRuta` espera a que el test lo complete antes de responder.
+  Completer<void>? demorarRuta;
+
+  @override
+  Future<Ruta?> obtenerRuta(Coordenada origen, Coordenada destino) async {
+    consultasRuta.add((origen, destino));
+    await demorarRuta?.future;
+    if (errorRuta != null) throw errorRuta!;
+    return ruta;
+  }
+
   @override
   Future<Viaje> viaje(int id) async {
     consultasDetalle.add(id);
@@ -178,14 +210,23 @@ class UbicadorFalso implements Ubicador {
 
   void fallar(Object error) => _gps?.addError(error);
 
+  /// Si no es nulo, `actual()` espera a que el test lo complete (el GPS tardando en responder).
+  Completer<void>? retener;
+
   @override
-  Future<Coordenada?> actual() async => posicion;
+  Future<Coordenada?> actual() async {
+    await retener?.future;
+    return posicion;
+  }
 
   @override
   Future<PermisoUbicacion> pedirPermiso() async {
     pedidosDePermiso++;
     return permiso;
   }
+
+  @override
+  Future<PermisoUbicacion> consultarPermiso() async => permiso;
 
   @override
   Stream<PuntoGps> seguir(Duration intervalo) {

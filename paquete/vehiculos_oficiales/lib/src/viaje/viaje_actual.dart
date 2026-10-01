@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/api_vehiculos.dart';
 import '../api/errores_api.dart';
+import '../avisos/notificaciones_locales.dart';
 import '../entorno.dart';
 import '../modelos/modelos.dart';
 import '../sesion/sesion.dart';
@@ -142,14 +143,27 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
     final v = await ref.read(apiProvider).pedirViaje(pedido);
     _fijar(SeguimientoViaje(viaje: v));
     _seguir(v);
+    // Android 13+: los avisos en segundo plano necesitan permiso. Se pide con el primer pedido.
+    unawaited(ref.read(notificacionesLocalesProvider).pedirPermiso());
     return v;
   }
+
+  /// La cancelación la pidió este usuario (no suena el aviso de "cancelado"). Se marca antes de llamar a
+  /// la API: el evento del socket puede llegar antes que la respuesta.
+  bool canceladoPorMi(int viajeId) => _cancelandoViajeId == viajeId;
+  int? _cancelandoViajeId;
 
   Future<void> cancelar({String? motivo}) async {
     final actual = state.value?.viaje;
     if (actual == null) return;
-    final v = await ref.read(apiProvider).cancelarViaje(actual.id, motivo: motivo);
-    if (ref.mounted) _aplicarViaje(v);
+    _cancelandoViajeId = actual.id;
+    try {
+      final v = await ref.read(apiProvider).cancelarViaje(actual.id, motivo: motivo);
+      if (ref.mounted) _aplicarViaje(v);
+    } catch (_) {
+      _cancelandoViajeId = null;
+      rethrow;
+    }
   }
 
   /// Paso siguiente del chofer (spec 5.5): `en_camino`, `llego`, `en_curso` o `finalizado`. Los errores

@@ -18,7 +18,11 @@ const intercambioInvalido = r'''{"message":"Sesión inválida."}''';
 const noAutenticado = r'''{"message":"Unauthenticated."}''';
 
 // GET /api/configuracion -> 200
-const configuracion = r'''{"gps_turno_seg":10,"gps_viaje_seg":5,"oferta_segundos":30}''';
+const configuracion = r'''{"gps_turno_seg":10,"gps_viaje_seg":5,"oferta_segundos":30,"lugares_autocompletar":true}''';
+
+// GET /api/configuracion -> 200 con LUGARES_DRIVER=nominatim: la búsqueda de lugares es al confirmar.
+const configuracionSinAutocompletar =
+    r'''{"gps_turno_seg":10,"gps_viaje_seg":5,"oferta_segundos":30,"lugares_autocompletar":false}''';
 
 // GET /api/choferes -> 200
 const choferes =
@@ -78,3 +82,9 @@ const eventoUbicacion =
 
 // Evento `chofer.estado` en `private-mapa.choferes`
 const eventoEstadoChofer = r'''{"chofer_id":2,"estado":"en_viaje"}''';
+
+// GET /api/ruta?origen_lat=-26.8241&origen_lng=-65.2226&destino_lat=-26.8083&destino_lng=-65.2176 -> 200
+// Forma de la Decisión 1 del plan de recorrido (el backend se escribe en paralelo): `indice` es la posición
+// del punto de la maniobra dentro de `puntos`. Sin recorrido disponible responde 200 con `null`.
+const ruta =
+    r'''{"distancia_m":1830,"duracion_s":240.5,"puntos":[[-26.8241,-65.2226],[-26.8162,-65.2201],[-26.8083,-65.2176]],"pasos":[{"instruccion":"Seguí por 24 de Septiembre","distancia_m":1830,"indice":0,"lat":-26.8241,"lng":-65.2226,"tipo":"salida"},{"instruccion":"Llegaste a destino","distancia_m":0,"indice":2,"lat":-26.8083,"lng":-65.2176,"tipo":"llegada"}]}''';

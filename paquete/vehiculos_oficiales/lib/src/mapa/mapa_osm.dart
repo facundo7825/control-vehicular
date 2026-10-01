@@ -10,7 +10,7 @@ import 'mapa.dart';
 /// Mapa de OpenStreetMap (flutter_map), sin clave. Se usa cuando la app no configuró una clave de
 /// Google Maps: sirve para desarrollo y demos, no para producción (los servidores públicos de teselas
 /// de OpenStreetMap no admiten tráfico de producción).
-class MapaOsm extends ConsumerWidget {
+class MapaOsm extends ConsumerStatefulWidget {
   const MapaOsm({super.key, required this.datos, this.teselas});
 
   final DatosMapa datos;
@@ -26,47 +26,19 @@ class MapaOsm extends ConsumerWidget {
   static final _derechos = Uri.parse('https://www.openstreetmap.org/copyright');
 
   /// Los mismos tonos que los marcadores de [MapaGoogle].
-  static Color colorDe(TipoMarcador t) => switch (t) {
-    TipoMarcador.choferLibre => Colors.green,
-    TipoMarcador.choferNoDisponible => Colors.amber,
-    TipoMarcador.choferAsignado => Colors.lightBlue,
-    TipoMarcador.origen => Colors.orange,
-    TipoMarcador.destino => Colors.red,
-  };
+  static Color colorDe(TipoMarcador t) => t.color;
 
-  static const _tamano = 40.0;
+  static LatLng _latLng(Coordenada c) => LatLng(c.lat, c.lng);
+
+  /// Encuadre de varios puntos (los de un solo punto se centran con [MapController.move]).
+  static CameraFit _encuadre(Enfoque enfoque) => CameraFit.coordinates(
+    coordinates: [for (final p in enfoque.puntos) _latLng(p)],
+    padding: const EdgeInsets.all(Enfoque.margen),
+    maxZoom: Enfoque.zoomPunto,
+  );
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final alTocar = datos.alTocarMapa;
-    return FlutterMap(
-      options: MapOptions(
-        initialCenter: LatLng(datos.centro.lat, datos.centro.lng),
-        initialZoom: 14,
-        onTap: alTocar == null ? null : (_, p) => alTocar(Coordenada(p.latitude, p.longitude)),
-      ),
-      children: [
-        TileLayer(urlTemplate: urlTeselas, userAgentPackageName: agenteUsuario, tileProvider: teselas),
-        MarkerLayer(
-          markers: [
-            for (final m in datos.marcadores)
-              Marker(
-                point: LatLng(m.posicion.lat, m.posicion.lng),
-                width: _tamano,
-                height: _tamano,
-                // La punta del ícono queda sobre la posición.
-                alignment: Alignment.topCenter,
-                child: _Marcador(key: Key('marcador-${m.id}'), marcador: m),
-              ),
-          ],
-        ),
-        SimpleAttributionWidget(
-          source: const Text('OpenStreetMap contributors'),
-          onTap: () => _abrirDerechos(ref.read(lanzadorUrlProvider)),
-        ),
-      ],
-    );
-  }
+  ConsumerState<MapaOsm> createState() => _MapaOsmState();
 
   /// Sin navegador (o si el sistema rechaza abrirla) no pasa nada: es solo la página de créditos.
   static Future<void> _abrirDerechos(LanzadorUrl lanzar) async {
@@ -75,6 +47,88 @@ class MapaOsm extends ConsumerWidget {
     } catch (e) {
       debugPrint('No se pudo abrir los créditos de OpenStreetMap (${e.runtimeType}).');
     }
+  }
+}
+
+class _MapaOsmState extends ConsumerState<MapaOsm> {
+  final _controlador = MapController();
+  final _seguidor = SeguidorEnfoque();
+
+  /// El enfoque con que nace el mapa: se aplica como cámara inicial.
+  late final Enfoque? _inicial;
+
+  @override
+  void initState() {
+    super.initState();
+    _inicial = _seguidor.aMover(widget.datos.enfoque);
+  }
+
+  @override
+  void didUpdateWidget(MapaOsm anterior) {
+    super.didUpdateWidget(anterior);
+    final enfoque = _seguidor.aMover(widget.datos.enfoque);
+    if (enfoque == null) return;
+    final punto = enfoque.unico;
+    if (punto != null) {
+      _controlador.move(MapaOsm._latLng(punto), Enfoque.zoomPunto);
+    } else {
+      _controlador.fitCamera(MapaOsm._encuadre(enfoque));
+    }
+  }
+
+  @override
+  void dispose() {
+    _controlador.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final datos = widget.datos;
+    final alTocar = datos.alTocarMapa;
+    final inicial = _inicial;
+    final puntoInicial = inicial?.unico;
+    return FlutterMap(
+      mapController: _controlador,
+      options: MapOptions(
+        initialCenter: MapaOsm._latLng(puntoInicial ?? datos.centro),
+        initialZoom: puntoInicial == null ? 14 : Enfoque.zoomPunto,
+        initialCameraFit: inicial != null && puntoInicial == null ? MapaOsm._encuadre(inicial) : null,
+        onTap: alTocar == null ? null : (_, p) => alTocar(Coordenada(p.latitude, p.longitude)),
+      ),
+      children: [
+        TileLayer(
+          urlTemplate: MapaOsm.urlTeselas,
+          userAgentPackageName: MapaOsm.agenteUsuario,
+          tileProvider: widget.teselas,
+        ),
+        // Antes que los marcadores: quedan debajo.
+        PolylineLayer(
+          polylines: [
+            for (final l in datos.lineas)
+              if (l.visible)
+                Polyline(points: [for (final p in l.puntos) MapaOsm._latLng(p)], color: l.color, strokeWidth: l.ancho),
+          ],
+        ),
+        MarkerLayer(
+          markers: [
+            for (final m in datos.marcadores)
+              Marker(
+                point: LatLng(m.posicion.lat, m.posicion.lng),
+                width: m.tipo.forma.lado,
+                height: m.tipo.forma.lado,
+                // El pin, con la punta sobre la posición; el auto y el punto, centrados en ella.
+                alignment: m.tipo.forma == FormaMarcador.pin ? Alignment.topCenter : Alignment.center,
+                child: _Marcador(key: Key('marcador-${m.id}'), marcador: m),
+              ),
+          ],
+        ),
+        SimpleAttributionWidget(
+          source: const Text('OpenStreetMap contributors'),
+          onTap: () => MapaOsm._abrirDerechos(ref.read(lanzadorUrlProvider)),
+        ),
+      ],
+    );
   }
 }
 
@@ -91,10 +145,28 @@ class _Marcador extends StatelessWidget {
         onTap: marcador.alTocar,
         child: Opacity(
           // Como en MapaGoogle: los no disponibles van desvaídos.
-          opacity: marcador.tipo == TipoMarcador.choferNoDisponible ? 0.45 : 1,
-          child: Icon(Icons.location_on, size: MapaOsm._tamano, color: MapaOsm.colorDe(marcador.tipo)),
+          opacity: marcador.tipo.opacidad,
+          child: _forma(marcador.tipo),
         ),
       ),
+    );
+  }
+
+  static Widget _forma(TipoMarcador tipo) {
+    final forma = tipo.forma;
+    if (forma == FormaMarcador.pin) return Icon(Icons.location_on, size: forma.lado, color: tipo.color);
+    return Container(
+      width: forma.lado,
+      height: forma.lado,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: tipo.color,
+        border: Border.all(color: Colors.white, width: forma == FormaMarcador.auto ? 2 : 3),
+        boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 3, offset: Offset(0, 1))],
+      ),
+      child: forma == FormaMarcador.auto
+          ? Icon(Icons.directions_car, size: forma.lado * 0.6, color: Colors.white)
+          : null,
     );
   }
 }

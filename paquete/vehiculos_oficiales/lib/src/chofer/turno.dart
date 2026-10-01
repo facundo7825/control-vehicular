@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/errores_api.dart';
+import '../avisos/notificaciones_locales.dart';
 import '../entorno.dart';
 import '../modelos/modelos.dart';
 import '../sesion/sesion.dart';
@@ -96,6 +97,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
       // quedó sin enviar. Si el permiso ya no está, el GPS falla y el mapa lo avisa.
       await ref.read(ubicadorProvider).pedirPermiso();
       if (!ref.mounted) return turno;
+      unawaited(ref.read(notificacionesLocalesProvider).pedirPermiso());
       final pendientes = await _leerCola(turno.id);
       if (!ref.mounted) return turno;
       await _iniciarRastreo(turno, pendientes: pendientes);
@@ -112,6 +114,8 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
     final turno = await ref.read(apiProvider).iniciarTurno(vehiculoId);
     if (!ref.mounted) return permiso;
     state = AsyncData(turno);
+    // Android 13+: sin este permiso las ofertas con la app en segundo plano no se ven.
+    unawaited(ref.read(notificacionesLocalesProvider).pedirPermiso());
     await _iniciarRastreo(turno);
     return permiso;
   }

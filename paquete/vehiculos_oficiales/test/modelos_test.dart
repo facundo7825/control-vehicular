@@ -126,6 +126,11 @@ void main() {
   test('lee configuración y disponibles de reserva', () {
     final c = Configuracion.fromJson(p.json(p.configuracion));
     expect([c.gpsTurnoSeg, c.gpsViajeSeg, c.ofertaSegundos], [10, 5, 30]);
+    expect(c.lugaresAutocompletar, isTrue);
+    expect(Configuracion.fromJson(p.json(p.configuracionSinAutocompletar)).lugaresAutocompletar, isFalse);
+    // Un backend anterior no manda el dato: se busca solo al confirmar.
+    final anterior = p.json(p.configuracion)..remove('lugares_autocompletar');
+    expect(Configuracion.fromJson(anterior).lugaresAutocompletar, isFalse);
 
     final d = DisponiblesReserva.fromJson(p.json(p.reservasDisponibles));
     expect(d.duracionEstimadaMin, 19);

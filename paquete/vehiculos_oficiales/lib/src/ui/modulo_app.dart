@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:go_router/go_router.dart';
 
+import '../avisos/avisos_viaje.dart';
 import '../entorno.dart';
 import '../push/push_modulo.dart';
 import '../sesion/sesion.dart';
@@ -162,7 +163,8 @@ class _RaizModuloState extends ConsumerState<_RaizModulo> {
   }
 }
 
-/// Pantallas con sesión lista: activa el puente push (registro del token y avisos).
+/// Pantallas con sesión lista: activa el puente push (registro del token y avisos) y los avisos con sonido
+/// del viaje, para los dos roles.
 class _ConSesion extends ConsumerStatefulWidget {
   const _ConSesion({required this.child});
 
@@ -177,6 +179,7 @@ class _ConSesionState extends ConsumerState<_ConSesion> {
   void initState() {
     super.initState();
     ref.read(pushModuloProvider);
+    ref.read(avisosViajeProvider);
   }
 
   @override

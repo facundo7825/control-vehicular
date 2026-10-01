@@ -5,7 +5,7 @@ Qué tiene que hacer la app principal para embeber el módulo. `host_prueba/` (e
 ## 1. Versiones
 
 - Flutter **3.41** o más nuevo, Dart **3.11** o más nuevo (`environment` de `pubspec.yaml` del paquete).
-- El módulo usa **Riverpod 3** (`flutter_riverpod ^3.3.2`), `go_router ^17.5.0`, `dio ^5.11.1`, `geolocator ^14.1.1`, `google_maps_flutter ^2.18.1`, `flutter_map ^8.3.2` y `latlong2 ^0.10.1` (mapa de OpenStreetMap sin clave, ver 2), `url_launcher ^6.3.2`, `flutter_secure_storage ^11.2.0`, `path_provider ^2.1.6` y `dart_pusher_channels ^1.3.1`. Varios son plugins de Flutter (con código nativo, como `path_provider`): tienen que resolverse en el `pubspec.lock` de la app principal. Si la app principal usa alguno, tiene que poder resolver esas versiones (en particular, no puede seguir en Riverpod 2).
+- El módulo usa **Riverpod 3** (`flutter_riverpod ^3.3.2`), `go_router ^17.5.0`, `dio ^5.11.1`, `geolocator ^14.1.1`, `google_maps_flutter ^2.18.1`, `flutter_map ^8.3.2` y `latlong2 ^0.10.1` (mapa de OpenStreetMap sin clave, ver 2), `url_launcher ^6.3.2`, `flutter_secure_storage ^11.2.0`, `path_provider ^2.1.6`, `dart_pusher_channels ^1.3.1`, `audioplayers ^6.7.1` (sonidos de los avisos) y `flutter_local_notifications ^22.3.1` (avisos con la app en segundo plano, ver 4). Varios son plugins de Flutter (con código nativo, como `path_provider`): tienen que resolverse en el `pubspec.lock` de la app principal. Si la app principal usa alguno, tiene que poder resolver esas versiones (en particular, no puede seguir en Riverpod 2).
 - El módulo arma su propio `ProviderScope` y su propio router: no hace falta envolverlo en nada.
 
 Dependencia (ruta o git, según cómo se distribuya):
@@ -70,7 +70,7 @@ class PuenteFcm implements PuenteNotificaciones {
 - `mensajes`: el `data` de cada mensaje recibido, **como stream broadcast** (`StreamController.broadcast()`). Un stream de una sola escucha falla desde la segunda apertura del módulo.
 - Los mensajes del módulo traen en `data` (todo string): `modulo = vehiculos_oficiales`, `tipo` (`oferta`, `oferta_reserva`, `viaje`, `recordatorio_reserva`, `alerta_reserva`) y, según el tipo, `viaje_id`, `oferta_id` y `estado`. Los que no tienen `modulo = vehiculos_oficiales` el módulo los ignora, así que se le pueden reenviar todos.
 - El backend manda cada push con `notification` (título y texto) y prioridad alta en Android: con la app en segundo plano la notificación la muestra el sistema. Qué hacer al tocarla (por ejemplo, abrir el módulo) lo decide la app principal.
-- En Android 13 o más nuevo, **la app tiene que pedir `POST_NOTIFICATIONS` en tiempo de ejecución** (por ejemplo con `FirebaseMessaging.instance.requestPermission()`): sin ese permiso no se ven ni los push ni la notificación fija del turno del chofer. El módulo no lo pide.
+- En Android 13 o más nuevo hace falta el permiso `POST_NOTIFICATIONS` en tiempo de ejecución: sin él no se ven ni los push, ni la notificación fija del turno del chofer, ni los avisos locales del módulo. El módulo lo pide al **iniciar el turno** (chofer) y al **pedir un viaje o una reserva** (solicitante); si la app principal ya lo pidió antes (por ejemplo con `FirebaseMessaging.instance.requestPermission()`), el sistema no vuelve a preguntar.
 
 ## 4. Android
 
@@ -120,6 +120,29 @@ Dentro de `<queries>` (Android 11+), para "Llamar" y "Navegar" con Google Maps o
 </intent>
 ```
 
+### Avisos locales (`flutter_local_notifications`)
+
+El plugin necesita **core library desugaring** y `compileSdk` 35 o más (Flutter 3.41 usa 36 por defecto). En `android/app/build.gradle.kts`:
+
+```kotlin
+android {
+    compileOptions {
+        isCoreLibraryDesugaringEnabled = true
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+}
+```
+
+(Con `build.gradle` en Groovy: `coreLibraryDesugaringEnabled true` y `coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'`.) El permiso `POST_NOTIFICATIONS` ya está en la lista de arriba.
+
+- **Ícono:** la notificación usa `@mipmap/ic_launcher` de la app. Android dibuja el ícono chico de la barra de estado solo con el canal alfa, así que un ícono a color se ve como un cuadrado blanco: si la app ya tiene un ícono monocromo para notificaciones, conviene ponerlo con ese nombre en el `mipmap` o avisar para cambiar `NotificacionesPlugin.icono`.
+- **Canal:** "Avisos de viajes" (`vehiculos_oficiales_avisos`), de prioridad alta y con el sonido del sistema. Tocar la notificación abre la app (el intent de inicio por defecto).
+
 `minSdk` **24** o más (lo exige `flutter_secure_storage`; es el valor por defecto de Flutter 3.41).
 
 El GPS del turno corre en un **servicio en primer plano de tipo `location`** (geolocator) con la notificación fija "Turno activo – compartiendo ubicación" en el canal "Ubicación del turno". Se inicia con la app en primer plano, así que alcanza el permiso "mientras se usa la app"; `ACCESS_BACKGROUND_LOCATION` no hace falta para eso.
@@ -159,7 +182,19 @@ if let clave = Bundle.main.object(forInfoDictionaryKey: "GMSApiKey") as? String,
 }
 ```
 
+Para que `flutter_local_notifications` pueda mostrar avisos en iOS, en `AppDelegate.swift` (dentro de `application(_:didFinishLaunchingWithOptions:)`):
+
+```swift
+UNUserNotificationCenter.current().delegate = self as? UNUserNotificationCenterDelegate
+```
+
 ## 6. Comportamiento que conviene saber
+
+- **Avisos con sonido.** El módulo hace sonar (con `audioplayers`, assets propios del paquete) la oferta nueva del chofer —en bucle, con vibración cada 2 s, hasta que la acepta, la rechaza o vence—, el viaje asignado, y al solicitante el viaje aceptado (también una reserva), la llegada del chofer y la cancelación (salvo que cancele él mismo). La reserva aceptada se nota por el push o, sin push, al recargar "Mis viajes". El timbre de la oferta sigue el volumen del **tono de llamada** y los demás avisos el de **notificaciones** (no el multimedia); bajan la música mientras suenan. Con la app en **segundo plano** (`paused`/`hidden`; no `inactive`) y el módulo abierto, además muestra una notificación local; con el módulo cerrado los avisos son solo los push de FCM. En web solo hay sonido, y el navegador puede bloquearlo hasta que el usuario toque la página.
+- **Limitaciones conocidas de los avisos:**
+  - El backend no informa quién canceló: el módulo reconoce la cancelación propia porque la pidió desde ese teléfono. Si el mismo usuario cancela desde otro dispositivo, en este suena "cancelado".
+  - Con la app en segundo plano pueden verse dos notificaciones del mismo hecho: la del push de FCM (la muestra el sistema) y la local del módulo.
+  - La notificación local usa el ícono de la app (`@mipmap/ic_launcher`); a color, Android lo muestra como una silueta blanca. En producción conviene un ícono monocromo (ver 4).
 
 - **El GPS del chofer vive con el módulo abierto.** Mientras el módulo está abierto sigue compartiendo la ubicación con la app en segundo plano; si el chofer **cierra el módulo** con el turno abierto, el GPS se corta hasta que lo vuelva a abrir (el turno sigue abierto y el backend lo marca "sin señal"). Por eso el módulo pide confirmación al cerrarlo con el turno abierto. Si el PJ necesita que siga con el módulo cerrado, el rastreo tiene que pasar a un servicio de la app principal (pendiente de definir con el equipo de la app).
 - El GPS se abre una sola vez por turno y no se reinicia al empezar o terminar un viaje: reabrirlo con la app en segundo plano puede fallar en Android 12+ e iOS. Si el GPS falla (permiso revocado, ubicación apagada), el mapa del chofer lo avisa con "Abrir ajustes" y "Reintentar".

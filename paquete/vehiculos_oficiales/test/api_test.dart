@@ -176,6 +176,71 @@ void main() {
     });
   });
 
+  test(
+    'buscar lugares manda el texto y, si hay, la ubicación para sesgar; lee {nombre, direccion, lat, lng}',
+    () async {
+      http.responder(
+        'GET',
+        'lugares',
+        200,
+        '[{"nombre":"Tribunales","direccion":"Tribunales, 24 de Septiembre 677, Tucumán","lat":-26.83,"lng":-65.2}]',
+      );
+
+      final lugares = await api.buscarLugares('tribu', cerca: const Coordenada(-26.8241, -65.2226));
+      await api.buscarLugares('tribu');
+
+      expect(lugares.single.nombre, 'Tribunales');
+      expect(lugares.single.direccion, 'Tribunales, 24 de Septiembre 677, Tucumán');
+      expect(lugares.single.coordenada, const Coordenada(-26.83, -65.2));
+      expect(http.pedidos.first.uri.queryParameters, {'q': 'tribu', 'lat': '-26.8241', 'lng': '-65.2226'});
+      expect(http.pedidos.last.uri.queryParameters, {'q': 'tribu'});
+    },
+  );
+
+  test('la ruta sale por GET ruta con origen y destino; lee puntos y pasos', () async {
+    http.responder('GET', 'ruta', 200, p.ruta);
+
+    final r = await api.obtenerRuta(const Coordenada(-26.8241, -65.2226), const Coordenada(-26.8083, -65.2176));
+
+    expect(http.pedidos.single.uri.queryParameters, {
+      'origen_lat': '-26.8241',
+      'origen_lng': '-65.2226',
+      'destino_lat': '-26.8083',
+      'destino_lng': '-65.2176',
+    });
+    expect(r, isNotNull);
+    expect(r!.distanciaM, 1830);
+    expect(r.duracionS, 240.5);
+    expect(r.puntos, const [
+      Coordenada(-26.8241, -65.2226),
+      Coordenada(-26.8162, -65.2201),
+      Coordenada(-26.8083, -65.2176),
+    ]);
+    expect(r.pasos, hasLength(2));
+    final ultimo = r.pasos.last;
+    expect(ultimo.instruccion, 'Llegaste a destino');
+    expect(ultimo.distanciaM, 0);
+    expect(ultimo.indice, 2);
+    expect(ultimo.coordenada, const Coordenada(-26.8083, -65.2176));
+    expect(ultimo.tipo, 'llegada');
+  });
+
+  test('sin recorrido disponible el backend responde null y la ruta es nula', () async {
+    http.responder('GET', 'ruta', 200, 'null');
+
+    expect(await api.obtenerRuta(const Coordenada(-26.8241, -65.2226), const Coordenada(-26.8083, -65.2176)), isNull);
+  });
+
+  test('una ruta que no se puede leer es ErrorServidor (p. ej. un paso fuera de los puntos)', () async {
+    http.responder('GET', 'ruta', 200, p.ruta.replaceFirst('"indice":2', '"indice":3'));
+    http.responder('GET', 'ruta', 200, '{"distancia_m":10}');
+
+    const a = Coordenada(-26.8241, -65.2226);
+    const b = Coordenada(-26.8083, -65.2176);
+    await expectLater(api.obtenerRuta(a, b), throwsA(isA<ErrorServidor>()));
+    await expectLater(api.obtenerRuta(a, b), throwsA(isA<ErrorServidor>()));
+  });
+
   test('disponibles de reserva manda la franja como query con fecha UTC', () async {
     http.responder('GET', 'reservas/disponibles', 200, p.reservasDisponibles);
 

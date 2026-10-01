@@ -1,11 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../api/errores_api.dart';
+import '../../avisos/avisos_viaje.dart';
 import '../../chofer/cuenta_regresiva.dart';
 import '../../chofer/turno.dart';
 import '../../modelos/modelos.dart';
@@ -13,28 +13,8 @@ import '../../viaje/viaje_actual.dart';
 import '../comunes/comunes.dart';
 import '../modulo_app.dart';
 
-/// Vibración y sonido de la oferta. Costura para los tests. Nunca lanza: sin vibrador o sin
-/// sonido del sistema (web, tests) no pasa nada.
-final alertaOfertaProvider = Provider<void Function()>(
-  (ref) =>
-      () => unawaited(_alertar()),
-);
-
-Future<void> _alertar() async {
-  try {
-    await HapticFeedback.vibrate();
-  } catch (_) {
-    // Plataforma sin vibración.
-  }
-  try {
-    await SystemSound.play(SystemSoundType.alert);
-  } catch (_) {
-    // Plataforma sin sonidos del sistema.
-  }
-}
-
 /// Spec 7, chofer 3: oferta entrante a pantalla completa con la cuenta regresiva del servidor.
-/// No se sale con "atrás": se acepta, se rechaza o vence.
+/// No se sale con "atrás": se acepta, se rechaza o vence. El timbre y la vibración los maneja [AvisosViaje].
 class PantallaOferta extends ConsumerStatefulWidget {
   const PantallaOferta({super.key});
 
@@ -47,13 +27,11 @@ class _PantallaOfertaState extends ConsumerState<PantallaOferta> {
   Oferta? _oferta;
   bool _vencida = false;
   bool _respondiendo = false;
-  int _segundos = 0;
 
   @override
   void initState() {
     super.initState();
     _oferta = ref.read(viajeActualProvider).value?.oferta;
-    ref.read(alertaOfertaProvider)();
   }
 
   void _vencer() {
@@ -66,6 +44,7 @@ class _PantallaOfertaState extends ConsumerState<PantallaOferta> {
 
   Future<void> _responder({required bool aceptar}) async {
     setState(() => _respondiendo = true);
+    ref.read(avisosViajeProvider.notifier).silenciarOferta(_oferta!.id);
     final notifier = ref.read(viajeActualProvider.notifier);
     try {
       if (aceptar) {
@@ -91,12 +70,8 @@ class _PantallaOfertaState extends ConsumerState<PantallaOferta> {
     final seguimiento = ref.watch(viajeActualProvider).value;
     final actual = seguimiento?.oferta;
     if (actual != null && actual.id != _oferta?.id) {
-      // Otra oferta llegó con esta pantalla abierta (la ruta se reutiliza): empieza de cero y vuelve a avisar.
+      // Otra oferta llegó con esta pantalla abierta (la ruta se reutiliza): empieza de cero.
       _vencida = false;
-      _segundos = 0;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) ref.read(alertaOfertaProvider)();
-      });
     }
     if (actual != null) _oferta = actual;
     final oferta = _oferta;
@@ -112,8 +87,7 @@ class _PantallaOfertaState extends ConsumerState<PantallaOferta> {
 
     final restante = ref.watch(restanteProvider(oferta.venceEn));
     ref.listen(restanteProvider(oferta.venceEn), (_, r) {
-      if (r == Duration.zero) return _vencer();
-      if (++_segundos % 5 == 0) ref.read(alertaOfertaProvider)(); // cada 5 s mientras está abierta
+      if (r == Duration.zero) _vencer();
     });
     if (restante == Duration.zero && !_vencida) {
       WidgetsBinding.instance.addPostFrameCallback((_) {

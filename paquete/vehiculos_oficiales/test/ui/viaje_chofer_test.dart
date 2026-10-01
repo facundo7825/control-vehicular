@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:vehiculos_oficiales/src/mapa/mapa.dart';
+import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
 import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real.dart';
 import 'package:vehiculos_oficiales/src/ui/chofer/mapa_chofer.dart';
 import 'package:vehiculos_oficiales/src/ui/chofer/viaje_chofer.dart';
@@ -36,11 +38,13 @@ void main() {
   late TiempoRealFalso tr;
   late List<Uri> lanzadas;
   late bool abreGoogleMaps;
+  late UbicadorFalso gps;
 
   setUp(() {
     tr = TiempoRealFalso();
     lanzadas = [];
     abreGoogleMaps = true;
+    gps = UbicadorFalso();
   });
 
   /// [preparar] agrega respuestas antes de abrir.
@@ -51,6 +55,7 @@ void main() {
       tester,
       e,
       tiempoReal: tr,
+      ubicador: gps,
       extra: [
         lanzadorUrlProvider.overrideWithValue((uri) async {
           lanzadas.add(uri);
@@ -249,5 +254,169 @@ void main() {
     await tester.tap(find.text('Ver'));
     await esperar(tester);
     expect(find.byType(ViajeChofer), findsOneWidget);
+  });
+
+  group('recorrido e indicaciones', () {
+    // Desde (-26.83, -65.23): 656 m al norte y 734 m al este, hasta el origen del viaje.
+    const rutaAlOrigen =
+        '{"distancia_m":1390,"duracion_s":300,"puntos":[[-26.83,-65.23],[-26.8241,-65.23],[-26.8241,-65.2226]],'
+        '"pasos":[{"instruccion":"Seguí por Belgrano","distancia_m":656,"indice":0,"lat":-26.83,"lng":-65.23,"tipo":"salida"},'
+        '{"instruccion":"Doblá a la derecha por San Martín","distancia_m":734,"indice":1,"lat":-26.8241,"lng":-65.23,"tipo":"derecha"},'
+        '{"instruccion":"Llegaste a destino","distancia_m":0,"indice":2,"lat":-26.8241,"lng":-65.2226,"tipo":"llegada"}]}';
+    const rutaAlDestino =
+        '{"distancia_m":1900,"duracion_s":240,"puntos":[[-26.8241,-65.224],[-26.8083,-65.2176]],'
+        '"pasos":[{"instruccion":"Seguí por 24 de Septiembre","distancia_m":1900,"indice":0,"lat":-26.8241,"lng":-65.224,"tipo":"salida"},'
+        '{"instruccion":"Llegaste a destino","distancia_m":0,"indice":1,"lat":-26.8083,"lng":-65.2176,"tipo":"llegada"}]}';
+
+    var segundo = 0;
+    Future<void> ir(WidgetTester tester, double lat, double lng) async {
+      gps.emitir(
+        PuntoGps(
+          posicion: Coordenada(lat, lng),
+          registradoEn: DateTime.utc(2026, 10, 1, 12).add(Duration(seconds: ++segundo)),
+        ),
+      );
+      await esperar(tester);
+    }
+
+    /// Origen y destino de cada `GET /ruta`, como "lat,lng → lat,lng".
+    List<String> tramosPedidos() => [
+      for (final r in e.http.pedidos)
+        if (r.uri.path == '/api/ruta')
+          '${r.uri.queryParameters['origen_lat']},${r.uri.queryParameters['origen_lng']} → '
+              '${r.uri.queryParameters['destino_lat']},${r.uri.queryParameters['destino_lng']}',
+    ];
+
+    List<LineaMapa> lineas(WidgetTester tester) => lineasDelMapa(tester, en: find.byType(ViajeChofer));
+
+    testWidgets('al origen con la próxima indicación que avanza con el GPS; en curso, al destino', (tester) async {
+      await abrir(tester, viajeJson(estado: 'en_camino'), (e) {
+        e.http
+          ..responder('GET', 'ruta', 200, rutaAlOrigen)
+          ..responder('GET', 'ruta', 200, rutaAlDestino);
+      });
+      expect(tramosPedidos(), isEmpty, reason: 'sin posición todavía no hay recorrido');
+      expect(lineas(tester), isEmpty);
+
+      await ir(tester, -26.83, -65.23);
+      expect(tramosPedidos(), ['-26.83,-65.23 → -26.8241,-65.2226']);
+      expect(lineas(tester).single.puntos, hasLength(3));
+      expect(find.text('En 650 m, doblá a la derecha por San Martín'), findsOneWidget);
+      expect(find.text('1,4 km · 5 min'), findsOneWidget);
+      expect(find.byIcon(Icons.turn_right), findsOneWidget);
+
+      await ir(tester, -26.8243, -65.23);
+      expect(find.text('Doblá a la derecha por San Martín'), findsOneWidget);
+
+      await ir(tester, -26.8241, -65.2228);
+      expect(find.text('Llegaste al origen'), findsOneWidget);
+      expect(find.byIcon(Icons.flag), findsOneWidget);
+      expect(tramosPedidos(), hasLength(1), reason: 'sobre el recorrido no se recalcula');
+
+      await ir(tester, -26.8241, -65.224);
+      tr.emitir('chofer.2', Eventos.viajeActualizado, p.json(viajeJson(estado: 'en_curso')));
+      await esperar(tester);
+      expect(tramosPedidos().last, '-26.8241,-65.224 → -26.8083,-65.2176');
+      expect(lineas(tester).single.puntos, hasLength(2));
+      expect(find.text('En 1,9 km, llegás a destino'), findsOneWidget);
+      expect(find.text('Navegar'), findsOneWidget, reason: 'la navegación externa sigue');
+    });
+
+    testWidgets('fuera del recorrido en 2 posiciones seguidas se recalcula, como mucho cada 30 s', (tester) async {
+      await abrir(tester, viajeJson(), (e) => e.http.responder('GET', 'ruta', 200, rutaAlOrigen));
+      await ir(tester, -26.83, -65.23);
+      expect(tramosPedidos(), hasLength(1));
+
+      await ir(tester, -26.829, -65.227);
+      await ir(tester, -26.8285, -65.227);
+      expect(tramosPedidos(), hasLength(1), reason: 'no antes de 30 s del anterior');
+      await tester.pump(const Duration(seconds: 30));
+      await esperar(tester);
+      expect(tramosPedidos(), hasLength(2));
+      expect(tramosPedidos().last, startsWith('-26.8285,-65.227 →'), reason: 'desde la última posición');
+
+      // Se sale y vuelve antes de los 30 s: no hace falta recalcular.
+      await ir(tester, -26.83, -65.23);
+      await ir(tester, -26.828, -65.227);
+      await ir(tester, -26.8275, -65.227);
+      await ir(tester, -26.829, -65.23);
+      await tester.pump(const Duration(seconds: 30));
+      await esperar(tester);
+      expect(tramosPedidos(), hasLength(2));
+
+      // Pasados los 30 s, al salirse se recalcula enseguida.
+      await ir(tester, -26.827, -65.227);
+      await ir(tester, -26.8265, -65.227);
+      expect(tramosPedidos(), hasLength(3));
+      expect(tramosPedidos().last, startsWith('-26.8265,-65.227 →'));
+    });
+
+    testWidgets('sin recorrido no hay cartel ni línea, y el viaje se ve igual', (tester) async {
+      await abrir(tester, viajeJson(), (e) => e.http.responder('GET', 'ruta', 500, '{"message":"Server Error"}'));
+      await ir(tester, -26.83, -65.23);
+
+      expect(tramosPedidos(), hasLength(1));
+      expect(lineas(tester), isEmpty);
+      expect(find.textContaining(' · '), findsNothing);
+      expect(find.textContaining('llegás'), findsNothing);
+      expect(find.text('Voy en camino'), findsOneWidget);
+    });
+
+    testWidgets('si el recorrido falla se reintenta a los 30 s (aunque siga en el mismo lugar)', (tester) async {
+      await abrir(tester, viajeJson(), (e) {
+        e.http
+          ..responder('GET', 'ruta', 500, '{"message":"Server Error"}')
+          ..responder('GET', 'ruta', 200, rutaAlOrigen);
+      });
+      await ir(tester, -26.83, -65.23);
+      expect(lineas(tester), isEmpty);
+
+      await ir(tester, -26.83, -65.23);
+      expect(tramosPedidos(), hasLength(1), reason: 'no antes de 30 s');
+      await tester.pump(const Duration(seconds: 30));
+      await esperar(tester);
+
+      expect(tramosPedidos(), ['-26.83,-65.23 → -26.8241,-65.2226', '-26.83,-65.23 → -26.8241,-65.2226']);
+      expect(lineas(tester).single.puntos, hasLength(3));
+      expect(find.text('En 650 m, doblá a la derecha por San Martín'), findsOneWidget);
+    });
+
+    testWidgets('fuera del recorrido dice "Recalculando…"; si el recálculo falla sigue el recorrido anterior', (
+      tester,
+    ) async {
+      await abrir(tester, viajeJson(), (e) {
+        e.http
+          ..responder('GET', 'ruta', 200, rutaAlOrigen)
+          ..responder('GET', 'ruta', 500, '{"message":"Server Error"}');
+      });
+      await ir(tester, -26.83, -65.23);
+      await ir(tester, -26.829, -65.227);
+      expect(find.text('En 650 m, doblá a la derecha por San Martín'), findsOneWidget);
+      await ir(tester, -26.8285, -65.227);
+      expect(find.text('Recalculando…'), findsOneWidget);
+      expect(find.text('En 650 m, doblá a la derecha por San Martín'), findsNothing);
+
+      await tester.pump(const Duration(seconds: 30));
+      await esperar(tester);
+      expect(tramosPedidos(), hasLength(2));
+      expect(lineas(tester).single.puntos, hasLength(3), reason: 'el recálculo falló: sigue el anterior');
+      expect(find.text('Recalculando…'), findsOneWidget);
+
+      await ir(tester, -26.8299, -65.23);
+      expect(find.textContaining('doblá a la derecha por San Martín'), findsOneWidget);
+    });
+
+    for (final estado in ['aceptado', 'llego']) {
+      testWidgets('$estado: el recorrido va al origen', (tester) async {
+        await abrir(tester, viajeJson(estado: estado), (e) => e.http.responder('GET', 'ruta', 200, rutaAlOrigen));
+        await ir(tester, -26.83, -65.23);
+
+        expect(tramosPedidos(), ['-26.83,-65.23 → -26.8241,-65.2226']);
+        expect(lineas(tester).single.puntos, hasLength(3));
+        expect(find.text('En 650 m, doblá a la derecha por San Martín'), findsOneWidget);
+        final texto = tester.widget<Text>(find.text('En 650 m, doblá a la derecha por San Martín'));
+        expect([texto.maxLines, texto.overflow], [2, TextOverflow.ellipsis]);
+      });
+    }
   });
 }
