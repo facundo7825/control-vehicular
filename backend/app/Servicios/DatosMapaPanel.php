@@ -3,6 +3,7 @@
 namespace App\Servicios;
 
 use App\Enums\EstadoChofer;
+use App\Mapas\ServicioRutas;
 use App\Models\Viaje;
 use App\Support\HoraLocal;
 use DateTimeInterface;
@@ -18,7 +19,7 @@ class DatosMapaPanel
         'sin_senal' => '#6b7280',
     ];
 
-    public function __construct(private CalculadorEstadoChofer $estados) {}
+    public function __construct(private CalculadorEstadoChofer $estados, private ServicioRutas $rutas) {}
 
     /**
      * Los choferes que todavía no mandaron ninguna ubicación vienen con lat/lng en null: el mapa no
@@ -26,7 +27,7 @@ class DatosMapaPanel
      *
      * @return array{
      *     choferes: list<array{id: int, nombre: string, estado: string, estado_etiqueta: string, color: string, lat: ?float, lng: ?float, patente: ?string, actualizado_en: ?string, actualizado_hace: ?string}>,
-     *     viajes: list<array{id: int, estado: string, estado_etiqueta: string, chofer_id: int, chofer: string, origen: array{lat: float, lng: float, direccion: ?string}, destino: array{lat: float, lng: float, direccion: ?string}}>
+     *     viajes: list<array{id: int, estado: string, estado_etiqueta: string, chofer_id: int, chofer: string, origen: array{lat: float, lng: float, direccion: ?string}, destino: array{lat: float, lng: float, direccion: ?string}, recorrido: ?list<array{0: float, 1: float}>}>
      * }
      */
     public function obtener(): array
@@ -66,6 +67,9 @@ class DatosMapaPanel
                 'chofer' => $v->chofer->nombre,
                 'origen' => ['lat' => $v->origen_lat, 'lng' => $v->origen_lng, 'direccion' => $v->origen_direccion],
                 'destino' => ['lat' => $v->destino_lat, 'lng' => $v->destino_lng, 'direccion' => $v->destino_direccion],
+                // El camino por calles entre origen y destino (cacheado por el servicio); null = sin recorrido, el mapa
+                // une los puntos con una línea recta punteada.
+                'recorrido' => $this->rutas->ruta($v->origen_lat, $v->origen_lng, $v->destino_lat, $v->destino_lng)['puntos'] ?? null,
             ])
             ->all();
 

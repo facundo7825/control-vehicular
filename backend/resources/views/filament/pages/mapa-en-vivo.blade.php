@@ -276,6 +276,8 @@
             });
             const iconoPunto = icono(svgPunto(), TAMANO_PUNTO, [TAMANO_PUNTO / 2, TAMANO_PUNTO / 2]);
             const iconoPin = icono(svgPin(), TAMANO_PIN, [TAMANO_PIN / 2, PUNTA_PIN]);
+            const ESTILO_RECORRIDO = { color: '#2563eb', opacity: 0.8, weight: 4, dashArray: null };
+            const ESTILO_RECTA = { color: '#2563eb', opacity: 0.6, weight: 3, dashArray: '6 8' };
 
             const actualizar = (datos) => {
                 const limites = L.latLngBounds([]);
@@ -306,18 +308,21 @@
                     }
                 });
 
-                // Viajes activos: origen (punto) y destino (pin) unidos por una línea.
+                // Viajes activos: origen (punto) y destino (pin) unidos por el recorrido por calles; sin recorrido,
+                // por una línea recta punteada.
                 const viajesVistos = new Set();
                 datos.viajes.forEach((v) => {
                     const origen = [v.origen.lat, v.origen.lng];
                     const destino = [v.destino.lat, v.destino.lng];
+                    const camino = v.recorrido ?? [origen, destino];
+                    const estilo = v.recorrido ? ESTILO_RECORRIDO : ESTILO_RECTA;
                     viajesVistos.add(v.id);
                     limites.extend(origen);
                     limites.extend(destino);
                     let capas = capasViaje.get(v.id);
                     if (! capas) {
                         capas = {
-                            linea: L.polyline([origen, destino], { color: '#2563eb', opacity: 0.6, weight: 3 })
+                            linea: L.polyline(camino, estilo)
                                 .bindTooltip('')
                                 .addTo(mapa),
                             origen: L.marker(origen, { icon: iconoPunto }).bindPopup('').addTo(mapa),
@@ -325,7 +330,7 @@
                         };
                         capasViaje.set(v.id, capas);
                     }
-                    capas.linea.setLatLngs([origen, destino]);
+                    capas.linea.setLatLngs(camino).setStyle(estilo);
                     capas.origen.setLatLng(origen).setPopupContent(globoViaje(v, v.origen, 'O'));
                     capas.destino.setLatLng(destino).setPopupContent(globoViaje(v, v.destino, 'D'));
                     capas.linea.setTooltipContent(`Viaje #${escapar(v.id)} · ${escapar(v.estado_etiqueta)}`);
@@ -438,8 +443,13 @@
                             map: mapa, position: punto, icon, title: `${titulo} · ${nombre}: ${punto.direccion ?? 'sin dirección'}`,
                         }));
                     });
-                    dibujados.push(new google.maps.Polyline({
-                        map: mapa, path: [v.origen, v.destino], strokeColor: '#2563eb', strokeOpacity: 0.6, strokeWeight: 3,
+                    // El recorrido por calles; sin recorrido, una línea recta punteada.
+                    dibujados.push(new google.maps.Polyline(v.recorrido ? {
+                        map: mapa, path: v.recorrido.map(([lat, lng]) => ({ lat, lng })),
+                        strokeColor: '#2563eb', strokeOpacity: 0.8, strokeWeight: 4,
+                    } : {
+                        map: mapa, path: [v.origen, v.destino], strokeOpacity: 0,
+                        icons: [{ icon: { path: 'M 0,-1 0,1', strokeColor: '#2563eb', strokeOpacity: 0.6, scale: 3 }, offset: '0', repeat: '12px' }],
                     }));
                 });
 

@@ -2,6 +2,7 @@
 
 use App\Enums\EstadoViaje;
 use App\Filament\Pages\MapaEnVivo;
+use App\Mapas\ServicioRutas;
 use App\Models\Turno;
 use App\Models\Usuario;
 use App\Models\Viaje;
@@ -67,8 +68,26 @@ it('arma todos los choferes en turno con su color y los viajes activos con orige
         'chofer' => $enViaje->nombre,
         'origen' => ['lat' => -34.6037, 'lng' => -58.3816, 'direccion' => 'Tribunales'],
         'destino' => ['lat' => -34.609, 'lng' => -58.392, 'direccion' => 'Casa de Gobierno'],
+        'recorrido' => app(ServicioRutas::class)->ruta(-34.6037, -58.3816, -34.609, -58.392)['puntos'],
     ]]);
+    expect($datos['viajes'][0]['recorrido'])->not->toBeEmpty();
 });
+
+it('sin recorrido disponible el viaje viene con recorrido null (el mapa traza una recta)', function () {
+    $this->mock(ServicioRutas::class)->shouldReceive('ruta')->andReturnNull();
+    Viaje::factory()->create(['chofer_id' => choferEnTurno()->id, 'estado' => EstadoViaje::EnCurso]);
+
+    expect(app(DatosMapaPanel::class)->obtener()['viajes'][0]['recorrido'])->toBeNull();
+});
+
+it('el script dibuja el recorrido por calles y, sin recorrido, una recta punteada', function (?string $clave) {
+    config(['vehiculos.mapas.google_api_key' => $clave, 'vehiculos.mapas.google_js_api_key' => $clave]);
+
+    $html = Livewire::test(MapaEnVivo::class)->assertOk()->html();
+
+    expect($html)->toContain('v.recorrido');
+    expect($html)->toContain('ESTILO_RECTA');
+})->with(['leaflet' => [null], 'google' => ['clave']]);
 
 it('no incluye a los choferes sin turno abierto', function () {
     $enTurno = choferEnTurno();
