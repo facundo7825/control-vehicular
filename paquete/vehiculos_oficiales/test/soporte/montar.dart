@@ -55,9 +55,14 @@ class _LineasDePrueba extends StatelessWidget {
   Widget build(BuildContext context) => const SizedBox.shrink();
 }
 
-/// Las líneas (p. ej. el recorrido) que la pantalla le pasó a [mapaDePrueba].
-List<LineaMapa> lineasDelMapa(WidgetTester tester) =>
-    tester.widget<_LineasDePrueba>(find.byType(_LineasDePrueba, skipOffstage: false)).lineas;
+/// Las líneas (p. ej. el recorrido) que la pantalla le pasó a [mapaDePrueba]. Con otra pantalla debajo
+/// (también con mapa), [en] elige la de arriba.
+List<LineaMapa> lineasDelMapa(WidgetTester tester, {Finder? en}) {
+  final lineas = find.byType(_LineasDePrueba, skipOffstage: false);
+  return tester
+      .widget<_LineasDePrueba>(en == null ? lineas : find.descendant(of: en, matching: lineas, skipOffstage: false))
+      .lineas;
+}
 
 /// App principal de prueba con un botón que abre el módulo.
 Future<void> montarModulo(

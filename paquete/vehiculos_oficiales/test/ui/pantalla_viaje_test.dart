@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real.dart';
 import 'package:vehiculos_oficiales/src/ui/comunes/comunes.dart';
 import 'package:vehiculos_oficiales/src/ui/solicitante/inicio_solicitante.dart';
+import 'package:vehiculos_oficiales/src/ui/solicitante/pantalla_viaje.dart';
 
 import '../fixtures/payloads.dart' as p;
 import '../soporte/dobles.dart';
@@ -237,6 +238,87 @@ void main() {
       eta.complete((200, etaJson(segundos: 241)));
       await esperar(tester);
       expect(find.text('Llega en ~5 min'), findsOneWidget);
+    });
+  });
+
+  group('recorrido', () {
+    List<String> origenesDeRuta() => [
+      for (final r in e.http.pedidos)
+        if (r.uri.path == '/api/ruta') '${r.uri.queryParameters['origen_lat']},${r.uri.queryParameters['origen_lng']}',
+    ];
+
+    String ubicacion(double lat, double lng) => jsonEncode(
+      p.json(p.eventoUbicacion)
+        ..['lat'] = lat
+        ..['lng'] = lng,
+    );
+
+    testWidgets('antes de "En curso" se ve el recorrido pedido', (tester) async {
+      e.http.responder('GET', 'viajes/actual', 200, actualCon(p.viajeAceptado));
+      e.http.responder('GET', 'viajes/1/eta', 200, etaJson());
+      e.http.responder('GET', 'ruta', 200, p.ruta);
+
+      await abrir(tester);
+      tr.emitir('viaje.1', Eventos.choferUbicacion, p.json(p.eventoUbicacion));
+      await esperar(tester);
+
+      expect(lineasDelMapa(tester, en: find.byType(PantallaViaje)).single.puntos, hasLength(3));
+      final pedido = e.http.pedidos.lastWhere((r) => r.uri.path == '/api/ruta').uri.queryParameters;
+      expect(pedido, {
+        'origen_lat': '-26.8241',
+        'origen_lng': '-65.2226',
+        'destino_lat': '-26.8083',
+        'destino_lng': '-65.2176',
+      });
+      expect(origenesDeRuta(), hasLength(1), reason: 'la posición del chofer no cambia el recorrido pedido');
+    });
+
+    testWidgets('en curso: desde el chofer al destino, recalculado como mucho cada 30 s', (tester) async {
+      e.http.responder('GET', 'viajes/actual', 200, actualCon(viajeJson(estado: 'en_curso')));
+      e.http.responder('GET', 'viajes/1/eta', 200, etaJson(hacia: 'destino'));
+      e.http.responder('GET', 'ruta', 200, p.ruta);
+
+      await abrir(tester);
+      tr.emitir('viaje.1', Eventos.choferUbicacion, p.json(ubicacion(-26.8301, -65.2001)));
+      await esperar(tester);
+      expect(origenesDeRuta().last, '-26.8301,-65.2001');
+      final pedidos = origenesDeRuta().length;
+      final destino = e.http.pedidos.lastWhere((r) => r.uri.path == '/api/ruta').uri.queryParameters;
+      expect([destino['destino_lat'], destino['destino_lng']], ['-26.8083', '-65.2176']);
+      expect(lineasDelMapa(tester, en: find.byType(PantallaViaje)), hasLength(1));
+
+      tr.emitir('viaje.1', Eventos.choferUbicacion, p.json(ubicacion(-26.8250, -65.2050)));
+      await esperar(tester);
+      tr.emitir('viaje.1', Eventos.choferUbicacion, p.json(ubicacion(-26.8200, -65.2100)));
+      await esperar(tester);
+      expect(origenesDeRuta(), hasLength(pedidos), reason: 'no antes de 30 s');
+      expect(lineasDelMapa(tester, en: find.byType(PantallaViaje)), hasLength(1));
+
+      final nueva = e.http.demorar('GET', 'ruta');
+      await tester.pump(const Duration(seconds: 30));
+      await esperar(tester);
+      expect(origenesDeRuta().sublist(pedidos), ['-26.82,-65.21'], reason: 'con la última posición');
+      expect(
+        lineasDelMapa(tester, en: find.byType(PantallaViaje)),
+        hasLength(1),
+        reason: 'mientras llega la nueva sigue la anterior',
+      );
+
+      nueva.complete((200, p.ruta));
+      await esperar(tester);
+      expect(lineasDelMapa(tester, en: find.byType(PantallaViaje)), hasLength(1));
+    });
+
+    testWidgets('sin recorrido el viaje se ve igual, sin línea', (tester) async {
+      e.http.responder('GET', 'viajes/actual', 200, actualCon(p.viajeAceptado));
+      e.http.responder('GET', 'viajes/1/eta', 200, etaJson());
+      e.http.responder('GET', 'ruta', 500, '{"message":"Server Error"}');
+
+      await abrir(tester);
+
+      expect(origenesDeRuta(), hasLength(1));
+      expect(lineasDelMapa(tester, en: find.byType(PantallaViaje)), isEmpty);
+      expect(find.text('Carlos Gómez'), findsOneWidget);
     });
   });
 }

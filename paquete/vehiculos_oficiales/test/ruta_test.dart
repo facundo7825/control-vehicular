@@ -4,6 +4,7 @@ import 'package:vehiculos_oficiales/src/api/errores_api.dart';
 import 'package:vehiculos_oficiales/src/entorno.dart';
 import 'package:vehiculos_oficiales/src/mapa/ruta.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
+import 'package:vehiculos_oficiales/src/ui/comunes/comunes.dart';
 
 import 'fixtures/payloads.dart' as p;
 import 'soporte/dobles.dart';
@@ -68,5 +69,30 @@ void main() {
 
     expect(await leer(c, TramoRuta(_plaza, const Coordenada(-26.82411, -65.22261))), isNull);
     expect(api.consultasRuta, isEmpty);
+  });
+
+  group('resumen del recorrido', () {
+    Ruta ruta(double metros, double segundos) =>
+        Ruta(distanciaM: metros, duracionS: segundos, puntos: const [], pasos: const []);
+
+    test('minutos redondeados hacia arriba y kilómetros con coma', () {
+      expect(resumenRuta(ruta(5300, 691)), '≈ 12 min · 5,3 km');
+      expect(resumenRuta(ruta(1830, 240.5)), '≈ 5 min · 1,8 km');
+    });
+
+    test('menos de un kilómetro, en metros', () {
+      expect(resumenRuta(ruta(734, 120)), '≈ 2 min · 730 m');
+    });
+
+    test('una hora o más, en horas y minutos', () {
+      expect(formatearDuracion(3900), '1 h 5 min');
+      expect(formatearDuracion(3600), '1 h');
+      expect(formatearDuracion(7261), '2 h 2 min');
+    });
+
+    test('menos de un minuto es 1 min', () {
+      expect(formatearDuracion(20), '1 min');
+      expect(formatearDuracion(0), '1 min');
+    });
   });
 }

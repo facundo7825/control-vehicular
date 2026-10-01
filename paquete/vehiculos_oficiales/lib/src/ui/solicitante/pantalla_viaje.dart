@@ -6,6 +6,7 @@ import '../../mapa/mapa.dart';
 import '../../modelos/modelos.dart';
 import '../../solicitante/borrador_pedido.dart';
 import '../../viaje/eta_viaje.dart';
+import '../../viaje/recorrido_viaje.dart';
 import '../../viaje/viaje_actual.dart';
 import '../comunes/comunes.dart';
 import '../modulo_app.dart';
@@ -128,6 +129,7 @@ class _Activo extends ConsumerWidget {
     final mapa = ref.watch(constructorMapaProvider);
     final texto = Theme.of(context).textTheme;
     final eta = ref.watch(etaViajeProvider);
+    final ruta = ref.watch(rutaViajeProvider);
 
     return Column(
       children: [
@@ -136,6 +138,7 @@ class _Activo extends ConsumerWidget {
             context,
             DatosMapa(
               centro: ubicacion?.posicion ?? viaje.origen.coordenada,
+              lineas: [if (ruta != null) LineaMapa.recorrido(ruta.puntos)],
               marcadores: [
                 MarcadorMapa(
                   id: 'origen',

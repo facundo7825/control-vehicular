@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:vehiculos_oficiales/src/mapa/mapa.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
 import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real.dart';
 import 'package:vehiculos_oficiales/src/ubicacion/ubicador.dart';
@@ -500,5 +501,82 @@ void main() {
     expect(tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Pedir el más cercano')).onPressed, isNotNull);
     // El mapa sigue mostrando el pedido entero (origen y destino), no solo un punto.
     expect(enfoqueDelMapa(tester)!.puntos, hasLength(2));
+  });
+
+  group('recorrido del pedido', () {
+    List<PedidoRegistrado> pedidosDeRuta() => e.http.pedidos.where((r) => r.uri.path == '/api/ruta').toList();
+
+    testWidgets('con origen y destino se ve el recorrido, el mapa lo encuadra y el panel dice cuánto lleva', (
+      tester,
+    ) async {
+      e.http.responder('GET', 'ruta', 200, p.ruta);
+
+      await abrir(tester);
+      expect(lineasDelMapa(tester), isEmpty);
+      final antes = enfoqueDelMapa(tester);
+
+      await tester.tap(find.byKey(const Key('tocar-mapa'))); // el destino
+      await esperar(tester);
+
+      expect(pedidosDeRuta().single.uri.queryParameters, {
+        'origen_lat': '-26.8241',
+        'origen_lng': '-65.2226',
+        'destino_lat': '${puntoTocado.lat}',
+        'destino_lng': '${puntoTocado.lng}',
+      });
+      final linea = lineasDelMapa(tester).single;
+      expect(linea.puntos, const [
+        Coordenada(-26.8241, -65.2226),
+        Coordenada(-26.8162, -65.2201),
+        Coordenada(-26.8083, -65.2176),
+      ]);
+      expect(linea.color, LineaMapa.colorRecorrido);
+      expect(find.text('≈ 5 min · 1,8 km'), findsOneWidget);
+
+      // Encuadra origen, destino y el recorrido.
+      final enfoque = enfoqueDelMapa(tester)!;
+      expect(enfoque, isNot(antes));
+      expect(
+        enfoque.puntos,
+        containsAll([const Coordenada(-26.8241, -65.2226), puntoTocado, const Coordenada(-26.8162, -65.2201)]),
+      );
+
+      // El mismo pedido no vuelve a mover el mapa (la persona puede haberlo movido).
+      await tester.tap(find.byKey(const Key('tocar-mapa')));
+      await esperar(tester);
+      expect(enfoqueDelMapa(tester), enfoque);
+      expect(pedidosDeRuta(), hasLength(1));
+    });
+
+    testWidgets('sin recorrido no hay línea ni resumen, y se puede pedir igual', (tester) async {
+      e.http.responder('GET', 'ruta', 500, '{"message":"Server Error"}');
+
+      await abrir(tester);
+      await tester.tap(find.byKey(const Key('tocar-mapa')));
+      await esperar(tester);
+
+      expect(pedidosDeRuta(), hasLength(1));
+      expect(lineasDelMapa(tester), isEmpty);
+      expect(find.textContaining('≈'), findsNothing);
+      expect(
+        tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Pedir el más cercano')).onPressed,
+        isNotNull,
+      );
+    });
+
+    testWidgets('mientras el recorrido no llega no hay línea; al llegar, sí', (tester) async {
+      final ruta = e.http.demorar('GET', 'ruta');
+
+      await abrir(tester);
+      await tester.tap(find.byKey(const Key('tocar-mapa')));
+      await esperar(tester);
+      expect(lineasDelMapa(tester), isEmpty);
+      expect(find.textContaining('≈'), findsNothing);
+
+      ruta.complete((200, p.ruta));
+      await esperar(tester);
+      expect(lineasDelMapa(tester), hasLength(1));
+      expect(find.text('≈ 5 min · 1,8 km'), findsOneWidget);
+    });
   });
 }

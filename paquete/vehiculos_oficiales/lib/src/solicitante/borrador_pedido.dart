@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../mapa/mapa.dart';
+import '../mapa/ruta.dart';
 import '../modelos/modelos.dart';
 import '../ubicacion/ubicador.dart';
 
@@ -61,6 +62,9 @@ class BorradorPedido {
   final PermisoUbicacion? permisoUbicacion;
 
   bool get completo => origen != null && destino != null;
+
+  /// El tramo del recorrido a mostrar; nulo mientras falte el origen o el destino.
+  TramoRuta? get tramo => completo ? TramoRuta(origen!, destino!) : null;
 
   Lugar? get lugarOrigen => origen == null ? null : Lugar(origen!, direccion: _texto(direccionOrigen));
 
@@ -177,6 +181,16 @@ class BorradorPedidoNotifier extends Notifier<BorradorPedido> {
     this.direccion(p, direccion);
     state = state.copiar(enfoque: _enfoque([?state.origen, ?state.destino]));
   }
+
+  /// Llegó el recorrido de [tramo]: si sigue siendo el del pedido, el mapa encuadra origen, destino y
+  /// recorrido. Una sola vez por tramo: después la persona puede mover el mapa sin que vuelva solo.
+  void encuadrarRuta(TramoRuta tramo, Ruta ruta) {
+    if (tramo != state.tramo || tramo == _tramoEncuadrado) return;
+    _tramoEncuadrado = tramo;
+    state = state.copiar(enfoque: _enfoque([state.origen!, state.destino!, ...ruta.puntos]));
+  }
+
+  TramoRuta? _tramoEncuadrado;
 
   void marcarAhora(PuntoPedido punto) => state = state.copiar(marcando: punto);
 

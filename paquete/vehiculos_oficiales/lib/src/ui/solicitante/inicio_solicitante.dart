@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../entorno.dart';
 import '../../mapa/mapa.dart';
+import '../../mapa/ruta.dart';
 import '../../modelos/modelos.dart';
 import '../../solicitante/borrador_pedido.dart';
 import '../../solicitante/busqueda_lugares.dart';
@@ -53,6 +54,14 @@ class _InicioSolicitanteState extends ConsumerState<InicioSolicitante> {
     final hayViaje = ref.watch(viajeActualProvider).value?.viaje != null;
     final choferes = ref.watch(choferesMapaProvider).value ?? const <ChoferEnMapa>[];
     final borrador = ref.watch(borradorPedidoProvider);
+    final tramo = borrador.tramo;
+    // Sin ruta (cargando, o la API no la pudo armar) solo no se dibuja el recorrido.
+    final ruta = tramo == null ? null : ref.watch(rutaProvider(tramo)).value;
+    if (tramo != null) {
+      ref.listen(rutaProvider(tramo), (_, r) {
+        if (r.value case final ruta?) ref.read(borradorPedidoProvider.notifier).encuadrarRuta(tramo, ruta);
+      });
+    }
     final mapa = ref.watch(constructorMapaProvider);
     final config = ref.watch(entornoProvider).config;
     // Con el teclado abierto el panel puede ocupar más: lo importante es el campo y sus sugerencias.
@@ -96,6 +105,7 @@ class _InicioSolicitanteState extends ConsumerState<InicioSolicitante> {
                               centro: borrador.origen ?? Coordenada(config.centroMapaLat, config.centroMapaLng),
                               enfoque: borrador.enfoque,
                               alTocarMapa: ref.read(borradorPedidoProvider.notifier).marcar,
+                              lineas: [if (ruta != null) LineaMapa.recorrido(ruta.puntos)],
                               marcadores: [
                                 for (final c in choferes)
                                   if (c.posicion != null)
@@ -248,6 +258,9 @@ class _PanelPedidoState extends ConsumerState<_PanelPedido> {
     final b = ref.watch(borradorPedidoProvider);
     final notifier = ref.read(borradorPedidoProvider.notifier);
     final buscandoOrigen = b.marcando == PuntoPedido.origen;
+    final tramo = b.tramo;
+    final ruta = tramo == null ? null : ref.watch(rutaProvider(tramo)).value;
+    final destino = b.descripcion(PuntoPedido.destino) ?? 'Escribilo arriba o tocá el mapa';
 
     final sinOrigen = switch (b.ubicacion) {
       EstadoUbicacion.buscando => 'Buscando tu ubicación…',
@@ -301,7 +314,12 @@ class _PanelPedidoState extends ConsumerState<_PanelPedido> {
                   ListTile(
                     leading: const Icon(Icons.place),
                     title: const Text('Destino'),
-                    subtitle: Text(b.descripcion(PuntoPedido.destino) ?? 'Escribilo arriba o tocá el mapa'),
+                    subtitle: ruta == null
+                        ? Text(destino)
+                        : Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [Text(destino), Text(resumenRuta(ruta))],
+                          ),
                     selected: !buscandoOrigen,
                     onTap: () => _marcar(PuntoPedido.destino),
                   ),
