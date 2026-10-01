@@ -20,7 +20,7 @@ Guía para mostrar el sistema funcionando en una sola compu y un celular Android
    ```powershell
    winget install DBBrowserForSQLite.DBBrowserForSQLite --source winget
    ```
-3. **Clave de Google Maps** con *Maps JavaScript API* y *Maps SDK for Android* habilitadas (console.cloud.google.com → API y servicios → Credenciales).
+3. **Mapa:** sin clave de Google Maps el módulo usa **OpenStreetMap** (gratis, sin cuenta ni tarjeta; pensado para desarrollo y demos). Si tenés una clave con *Maps JavaScript API* y *Maps SDK for Android* habilitadas, podés usar el mapa de Google pasándola al compilar.
 4. **Celular:** Opciones de desarrollador → *Depuración inalámbrica* activada (o depuración USB con cable de datos). Vincular una vez:
    ```powershell
    & "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" pair <IP:PUERTO de vinculación> <código>
@@ -34,9 +34,9 @@ Guía para mostrar el sistema funcionando en una sola compu y un celular Android
    ```
 2. **Compilar e instalar** (solo la primera vez o si cambió el código o la IP de la compu). Desde la raíz del repo:
    ```powershell
-   powershell -ExecutionPolicy Bypass -File .\scripts\compilar-demo.ps1 -MapsKey "TU_CLAVE"
+   powershell -ExecutionPolicy Bypass -File .\scripts\compilar-demo.ps1
    ```
-   Compila la app web, compila el APK y, si el celular está conectado, lo instala.
+   Compila la app web, compila el APK y, si el celular está conectado, lo instala. Para usar el mapa de Google en vez de OpenStreetMap: agregar `-MapsKey "TU_CLAVE"`.
 3. **Levantar todo** con la base limpia:
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\scripts\iniciar-demo.ps1 -Reiniciar
