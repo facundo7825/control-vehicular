@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart' as gm;
+import 'package:latlong2/latlong.dart';
 import 'package:vehiculos_oficiales/src/entorno.dart';
 import 'package:vehiculos_oficiales/src/mapa/mapa.dart';
 import 'package:vehiculos_oficiales/src/mapa/mapa_google.dart';
@@ -14,6 +16,7 @@ import 'package:vehiculos_oficiales/src/ui/comunes/comunes.dart';
 import 'package:vehiculos_oficiales/vehiculos_oficiales.dart';
 
 import 'soporte/entorno_prueba.dart';
+import 'soporte/montar.dart';
 
 /// PNG transparente de 1x1: los tests nunca piden teselas a la red.
 final Uint8List _pngVacio = base64Decode(
@@ -186,6 +189,188 @@ void main() {
       await tester.pump(const Duration(milliseconds: 500));
       expect(abiertas, hasLength(1));
       expect(tester.takeException(), isNull);
+    });
+
+    group('enfoque', () {
+      const tucuman = Coordenada(-26.8241, -65.2226);
+      const yerbaBuena = Coordenada(-26.8167, -65.3167);
+      const famailla = Coordenada(-27.0544, -65.4031);
+
+      MapCamera camara(WidgetTester tester) => MapCamera.of(tester.element(find.byType(TileLayer)));
+
+      Future<void> enfocar(WidgetTester tester, Enfoque? enfoque) async {
+        await tester.pumpWidget(
+          ProviderScope(
+            child: MaterialApp(
+              home: Scaffold(
+                body: MapaOsm(
+                  datos: DatosMapa(centro: tucuman, enfoque: enfoque),
+                  teselas: teselas,
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+      }
+
+      testWidgets('arranca mirando el enfoque si ya hay uno', (tester) async {
+        tester.view.physicalSize = const Size(800, 800);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        await enfocar(tester, Enfoque.punto(yerbaBuena));
+        expect(camara(tester).center.latitude, closeTo(yerbaBuena.lat, 1e-6));
+        expect(camara(tester).center.longitude, closeTo(yerbaBuena.lng, 1e-6));
+      });
+
+      testWidgets('un enfoque nuevo mueve la cámara sin recrear el mapa', (tester) async {
+        tester.view.physicalSize = const Size(800, 800);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        await enfocar(tester, null);
+        expect(camara(tester).center.latitude, closeTo(tucuman.lat, 1e-6));
+        final estado = tester.state(find.byType(FlutterMap));
+
+        await enfocar(tester, Enfoque.punto(yerbaBuena, version: 1));
+        expect(camara(tester).center.latitude, closeTo(yerbaBuena.lat, 1e-6));
+        expect(camara(tester).center.longitude, closeTo(yerbaBuena.lng, 1e-6));
+        expect(camara(tester).zoom, Enfoque.zoomPunto);
+        expect(tester.state(find.byType(FlutterMap)), same(estado), reason: 'no se recrea el mapa');
+      });
+
+      testWidgets('el mismo enfoque no vuelve a mover; otra versión del mismo punto sí', (tester) async {
+        tester.view.physicalSize = const Size(800, 800);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        await enfocar(tester, Enfoque.punto(yerbaBuena));
+
+        // La persona mueve el mapa con el dedo.
+        await tester.drag(find.byType(FlutterMap), const Offset(-300, 0));
+        await tester.pumpAndSettle();
+        final movida = camara(tester).center;
+        expect(movida.longitude, isNot(closeTo(yerbaBuena.lng, 1e-4)));
+
+        // Reconstruir con el mismo enfoque (p. ej. cambió un marcador) no la devuelve.
+        await enfocar(tester, Enfoque.punto(yerbaBuena));
+        expect(camara(tester).center, movida);
+
+        // "Mi ubicación": mismo punto, versión nueva → vuelve a centrar.
+        await enfocar(tester, Enfoque.punto(yerbaBuena, version: 1));
+        expect(camara(tester).center.longitude, closeTo(yerbaBuena.lng, 1e-6));
+      });
+
+      testWidgets('con varios puntos los encuadra a todos', (tester) async {
+        tester.view.physicalSize = const Size(800, 800);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        await enfocar(tester, null);
+        await enfocar(tester, Enfoque.entre(const [tucuman, famailla]));
+        final visible = camara(tester).visibleBounds;
+        for (final p in [tucuman, famailla]) {
+          expect(visible.contains(LatLng(p.lat, p.lng)), isTrue, reason: '$p visible');
+        }
+        expect(camara(tester).zoom, greaterThan(9), reason: 'encuadra, no se aleja de más');
+      });
+    });
+  });
+
+  group('Enfoque', () {
+    const a = Coordenada(-26.8, -65.2);
+    const b = Coordenada(-27.0, -65.4);
+
+    test('se compara por puntos y versión', () {
+      expect(Enfoque.punto(a), Enfoque.punto(a));
+      expect(Enfoque.punto(a).hashCode, Enfoque.punto(a).hashCode);
+      expect(Enfoque.punto(a), isNot(Enfoque.punto(a, version: 1)));
+      expect(Enfoque.punto(a), isNot(Enfoque.punto(b)));
+      expect(Enfoque.entre(const [a, b]), Enfoque.entre(const [a, b]));
+    });
+
+    test('varios puntos iguales cuentan como uno solo', () {
+      expect(Enfoque.entre(const [a, a]).unico, a);
+      expect(Enfoque.punto(a).unico, a);
+      expect(Enfoque.entre(const [a, b]).unico, isNull);
+    });
+
+    test('límites de varios puntos', () {
+      final e = Enfoque.entre(const [a, b]);
+      expect(e.sur, -27.0);
+      expect(e.norte, -26.8);
+      expect(e.oeste, -65.4);
+      expect(e.este, -65.2);
+    });
+
+    test('SeguidorEnfoque solo pide mover cuando el enfoque cambia', () {
+      final s = SeguidorEnfoque();
+      expect(s.aMover(null), isNull);
+      expect(s.aMover(Enfoque.punto(a)), Enfoque.punto(a));
+      expect(s.aMover(Enfoque.punto(a)), isNull, reason: 'el mismo enfoque ya se aplicó');
+      expect(s.aMover(null), isNull);
+      expect(s.aMover(Enfoque.punto(a)), isNull, reason: 'quitar el enfoque no olvida el último aplicado');
+      expect(s.aMover(Enfoque.punto(a, version: 1)), Enfoque.punto(a, version: 1));
+      expect(s.aMover(Enfoque.entre(const [a, b])), Enfoque.entre(const [a, b]));
+    });
+  });
+
+  group('MapaGoogle', () {
+    const a = Coordenada(-26.8, -65.2);
+    const b = Coordenada(-27.0, -65.4);
+
+    test('un punto: centra con el zoom de enfoque', () {
+      expect(
+        MapaGoogle.actualizacionPara(Enfoque.punto(a)).toJson(),
+        gm.CameraUpdate.newLatLngZoom(const gm.LatLng(-26.8, -65.2), Enfoque.zoomPunto).toJson(),
+      );
+    });
+
+    test('varios puntos: encuadra los límites', () {
+      expect(
+        MapaGoogle.actualizacionPara(Enfoque.entre(const [a, b])).toJson(),
+        gm.CameraUpdate.newLatLngBounds(
+          gm.LatLngBounds(southwest: const gm.LatLng(-27.0, -65.4), northeast: const gm.LatLng(-26.8, -65.2)),
+          Enfoque.margen,
+        ).toJson(),
+      );
+    });
+
+    test('la posición inicial mira el enfoque de un punto, si no el centro', () {
+      expect(
+        MapaGoogle.posicionInicial(DatosMapa(centro: a, enfoque: Enfoque.punto(b))).target,
+        const gm.LatLng(-27.0, -65.4),
+      );
+      expect(MapaGoogle.posicionInicial(const DatosMapa(centro: a)).target, const gm.LatLng(-26.8, -65.2));
+      expect(
+        MapaGoogle.posicionInicial(DatosMapa(centro: a, enfoque: Enfoque.entre(const [a, b]))).target,
+        const gm.LatLng(-26.8, -65.2),
+        reason: 'el encuadre de varios puntos se aplica al crearse el mapa',
+      );
+    });
+  });
+
+  testWidgets('el mapa de prueba deja leer su enfoque', (tester) async {
+    Future<void> mostrar(Enfoque? enfoque) => tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (c) => mapaDePrueba(c, DatosMapa(centro: const Coordenada(-26.8, -65.2), enfoque: enfoque)),
+        ),
+      ),
+    );
+    await mostrar(null);
+    expect(enfoqueDelMapa(tester), isNull);
+    await mostrar(Enfoque.punto(const Coordenada(-27, -65.4), version: 2));
+    expect(enfoqueDelMapa(tester), Enfoque.punto(const Coordenada(-27, -65.4), version: 2));
+  });
+
+  group('BotonMiUbicacion', () {
+    testWidgets('avisa al tocarlo', (tester) async {
+      var tocado = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: BotonMiUbicacion(alTocar: () => tocado++)),
+        ),
+      );
+      await tester.tap(find.byTooltip('Mi ubicación'));
+      expect(tocado, 1);
     });
   });
 }

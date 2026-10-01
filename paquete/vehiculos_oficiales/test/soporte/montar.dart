@@ -10,13 +10,15 @@ import 'dobles.dart';
 import 'entorno_prueba.dart';
 
 /// Mapa de prueba: una lista de botones, uno por marcador, y un botón que "toca" el mapa en
-/// [puntoTocado]. Así las pantallas se prueban sin Google Maps.
+/// [puntoTocado]. Así las pantallas se prueban sin Google Maps. A dónde mira se lee con
+/// [enfoqueDelMapa].
 const puntoTocado = Coordenada(-26.8083, -65.2176);
 
 Widget mapaDePrueba(BuildContext context, DatosMapa datos) {
   return ListView(
     key: const Key('mapa'),
     children: [
+      _EnfoqueDePrueba(datos.enfoque),
       for (final m in datos.marcadores)
         TextButton(key: Key('marcador-${m.id}'), onPressed: m.alTocar, child: Text('${m.tipo.name}: ${m.titulo}')),
       if (datos.alTocarMapa != null)
@@ -28,6 +30,19 @@ Widget mapaDePrueba(BuildContext context, DatosMapa datos) {
     ],
   );
 }
+
+class _EnfoqueDePrueba extends StatelessWidget {
+  const _EnfoqueDePrueba(this.enfoque);
+
+  final Enfoque? enfoque;
+
+  @override
+  Widget build(BuildContext context) => const SizedBox.shrink();
+}
+
+/// El enfoque que la pantalla le pasó a [mapaDePrueba] (nulo si no pidió mirar a ningún lado).
+Enfoque? enfoqueDelMapa(WidgetTester tester) =>
+    tester.widget<_EnfoqueDePrueba>(find.byType(_EnfoqueDePrueba, skipOffstage: false)).enfoque;
 
 /// App principal de prueba con un botón que abre el módulo.
 Future<void> montarModulo(
