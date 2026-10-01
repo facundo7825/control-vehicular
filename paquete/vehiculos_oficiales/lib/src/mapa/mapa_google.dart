@@ -113,6 +113,20 @@ class MapaGoogle extends StatefulWidget {
 
   static LatLng _latLng(Coordenada c) => LatLng(c.lat, c.lng);
 
+  /// Las [lineas] que se dibujan, en orden. Google siempre pone los marcadores encima de las polilíneas;
+  /// el `zIndex` solo ordena las líneas entre sí. El ancho de Google es en píxeles lógicos enteros.
+  static List<Polyline> polilineasDe(List<LineaMapa> lineas) => [
+    for (final (i, l) in lineas.indexed)
+      if (l.visible)
+        Polyline(
+          polylineId: PolylineId(l.id),
+          points: [for (final p in l.puntos) _latLng(p)],
+          color: l.color,
+          width: l.ancho.round(),
+          zIndex: i,
+        ),
+  ];
+
   /// Dónde arranca la cámara: en el enfoque si es un solo punto; si no, en el centro (el encuadre de
   /// varios puntos necesita el mapa ya creado).
   static CameraPosition posicionInicial(DatosMapa datos) {
@@ -219,6 +233,7 @@ class _MapaGoogleState extends State<MapaGoogle> {
       mapToolbarEnabled: false,
       onTap: alTocar == null ? null : (p) => alTocar(Coordenada(p.latitude, p.longitude)),
       markers: {for (final m in datos.marcadores) _marcador(m)},
+      polylines: MapaGoogle.polilineasDe(datos.lineas).toSet(),
     );
   }
 

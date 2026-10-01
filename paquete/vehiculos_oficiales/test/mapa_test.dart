@@ -219,6 +219,38 @@ void main() {
       expect(tester.getRect(find.byKey(const Key('marcador-d'))).bottomCenter, posicion, reason: 'punta abajo');
     });
 
+    testWidgets('dibuja las líneas debajo de los marcadores', (tester) async {
+      const a = Coordenada(-26.8241, -65.2226);
+      const b = Coordenada(-26.8083, -65.2176);
+      await montar(
+        tester,
+        DatosMapa(
+          centro: a,
+          lineas: [
+            LineaMapa.recorrido(const [a, b]),
+            const LineaMapa(id: 'sola', puntos: [a], color: Colors.red, ancho: 3),
+          ],
+          marcadores: const [MarcadorMapa(id: 'o', posicion: a, tipo: TipoMarcador.origen, titulo: 'Origen')],
+        ),
+      );
+
+      final polilineas = tester.widget<PolylineLayer>(find.byType(PolylineLayer)).polylines;
+      expect(polilineas, hasLength(1), reason: 'una línea de un solo punto no se dibuja');
+      expect(polilineas.single.points, [LatLng(a.lat, a.lng), LatLng(b.lat, b.lng)]);
+      expect(polilineas.single.color, LineaMapa.colorRecorrido);
+      expect(polilineas.single.strokeWidth, 5);
+
+      final capas = tester.widget<FlutterMap>(find.byType(FlutterMap)).children;
+      expect(
+        capas.indexWhere((c) => c is PolylineLayer),
+        allOf(
+          greaterThan(capas.indexWhere((c) => c is TileLayer)),
+          lessThan(capas.indexWhere((c) => c is MarkerLayer)),
+        ),
+        reason: 'encima de las teselas y debajo de los marcadores',
+      );
+    });
+
     testWidgets('sin alTocarMapa, tocar el mapa no hace nada', (tester) async {
       await montar(tester, const DatosMapa(centro: Coordenada(-26.8241, -65.2226)));
       await tester.tapAt(const Offset(400, 200));
@@ -482,6 +514,23 @@ void main() {
       });
     });
 
+    test('las líneas son polilíneas con su color y ancho; las de menos de dos puntos no se dibujan', () {
+      final polilineas = MapaGoogle.polilineasDe([
+        LineaMapa.recorrido(const [a, a2, b]),
+        const LineaMapa(id: 'otra', puntos: [a, b], color: Colors.red, ancho: 2.6),
+        const LineaMapa(id: 'sola', puntos: [a], color: Colors.red, ancho: 3),
+      ]);
+
+      expect(polilineas.map((p) => p.polylineId.value), ['recorrido', 'otra']);
+      final recorrido = polilineas.first;
+      expect(recorrido.points, const [gm.LatLng(-26.8, -65.2), gm.LatLng(-26.8001, -65.2001), gm.LatLng(-27.0, -65.4)]);
+      expect(recorrido.color, LineaMapa.colorRecorrido);
+      expect(recorrido.width, 5);
+      expect(recorrido.zIndex, lessThan(1), reason: 'debajo de los marcadores');
+      expect(polilineas.last.width, 3);
+      expect(polilineas.last.color, Colors.red);
+    });
+
     test('la posición inicial mira el enfoque de un punto, si no el centro', () {
       expect(
         MapaGoogle.posicionInicial(DatosMapa(centro: a, enfoque: Enfoque.punto(b))).target,
@@ -494,6 +543,30 @@ void main() {
         reason: 'el encuadre de varios puntos se aplica al crearse el mapa',
       );
     });
+  });
+
+  test('el recorrido es una línea azul de 5 px', () {
+    final l = LineaMapa.recorrido(const [Coordenada(-26.8, -65.2), Coordenada(-27, -65.4)]);
+    expect(l.id, 'recorrido');
+    expect(l.color, Colors.blue);
+    expect(l.ancho, 5);
+    expect(l.puntos, const [Coordenada(-26.8, -65.2), Coordenada(-27, -65.4)]);
+    expect(const DatosMapa(centro: Coordenada(0, 0)).lineas, isEmpty);
+  });
+
+  testWidgets('el mapa de prueba deja leer sus líneas', (tester) async {
+    final linea = LineaMapa.recorrido(const [Coordenada(-26.8, -65.2), Coordenada(-27, -65.4)]);
+    Future<void> mostrar(List<LineaMapa> lineas) => tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (c) => mapaDePrueba(c, DatosMapa(centro: const Coordenada(-26.8, -65.2), lineas: lineas)),
+        ),
+      ),
+    );
+    await mostrar(const []);
+    expect(lineasDelMapa(tester), isEmpty);
+    await mostrar([linea]);
+    expect(lineasDelMapa(tester), [linea]);
   });
 
   testWidgets('el mapa de prueba deja leer su enfoque', (tester) async {

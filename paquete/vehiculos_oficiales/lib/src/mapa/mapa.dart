@@ -132,8 +132,38 @@ class SeguidorEnfoque {
   }
 }
 
+/// Una línea sobre el mapa (p. ej. el recorrido de un viaje), debajo de los marcadores. Se dibuja igual en
+/// [MapaOsm] y [MapaGoogle]; una de menos de dos puntos no se dibuja.
+class LineaMapa {
+  const LineaMapa({required this.id, required this.puntos, required this.color, required this.ancho});
+
+  /// El recorrido a hacer: azul, de [anchoRecorrido] píxeles lógicos.
+  LineaMapa.recorrido(List<Coordenada> puntos, {String id = 'recorrido'})
+    : this(id: id, puntos: List.unmodifiable(puntos), color: colorRecorrido, ancho: anchoRecorrido);
+
+  static const colorRecorrido = Colors.blue;
+  static const anchoRecorrido = 5.0;
+
+  /// Único entre las líneas de un mismo mapa.
+  final String id;
+  final List<Coordenada> puntos;
+  final Color color;
+
+  /// En píxeles lógicos.
+  final double ancho;
+
+  /// Si se dibuja: hace falta al menos un segmento.
+  bool get visible => puntos.length >= 2;
+}
+
 class DatosMapa {
-  const DatosMapa({required this.centro, this.enfoque, this.marcadores = const [], this.alTocarMapa});
+  const DatosMapa({
+    required this.centro,
+    this.enfoque,
+    this.marcadores = const [],
+    this.lineas = const [],
+    this.alTocarMapa,
+  });
 
   /// Dónde arranca el mapa si no hay [enfoque].
   final Coordenada centro;
@@ -142,6 +172,9 @@ class DatosMapa {
   final Enfoque? enfoque;
 
   final List<MarcadorMapa> marcadores;
+
+  /// Se dibujan debajo de los [marcadores], en orden (la última encima).
+  final List<LineaMapa> lineas;
 
   /// Si no es nulo, tocar el mapa elige un punto (origen o destino del pedido).
   final ValueChanged<Coordenada>? alTocarMapa;

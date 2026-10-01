@@ -71,6 +71,21 @@ class ApiVehiculos {
     ).map(LugarEncontrado.fromJson).toList(),
   );
 
+  /// Recorrido en auto de [origen] a [destino], con indicaciones en español. Nulo si el proveedor no pudo
+  /// armarlo (el backend responde `null`).
+  Future<Ruta?> obtenerRuta(Coordenada origen, Coordenada destino) => _leer(() async {
+    final j = await cliente.get(
+      'ruta',
+      query: {
+        'origen_lat': origen.lat,
+        'origen_lng': origen.lng,
+        'destino_lat': destino.lat,
+        'destino_lng': destino.lng,
+      },
+    );
+    return j == null ? null : Ruta.fromJson(leerMapa(j));
+  });
+
   Future<void> registrarTokenPush(String token) async {
     await cliente.post('push/token', datos: {'token': token});
   }

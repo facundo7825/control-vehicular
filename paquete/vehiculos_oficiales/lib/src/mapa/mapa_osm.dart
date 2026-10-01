@@ -102,6 +102,14 @@ class _MapaOsmState extends ConsumerState<MapaOsm> {
           userAgentPackageName: MapaOsm.agenteUsuario,
           tileProvider: widget.teselas,
         ),
+        // Antes que los marcadores: quedan debajo.
+        PolylineLayer(
+          polylines: [
+            for (final l in datos.lineas)
+              if (l.visible)
+                Polyline(points: [for (final p in l.puntos) MapaOsm._latLng(p)], color: l.color, strokeWidth: l.ancho),
+          ],
+        ),
         MarkerLayer(
           markers: [
             for (final m in datos.marcadores)

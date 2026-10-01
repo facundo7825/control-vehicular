@@ -81,6 +81,22 @@ class ApiFalsa extends ApiVehiculos {
     return lugares;
   }
 
+  /// Respuesta de `obtenerRuta` (nula = sin recorrido) y los pedidos recibidos (origen, destino).
+  Ruta? ruta;
+  ErrorApi? errorRuta;
+  final consultasRuta = <(Coordenada, Coordenada)>[];
+
+  /// Si no es nulo, `obtenerRuta` espera a que el test lo complete antes de responder.
+  Completer<void>? demorarRuta;
+
+  @override
+  Future<Ruta?> obtenerRuta(Coordenada origen, Coordenada destino) async {
+    consultasRuta.add((origen, destino));
+    await demorarRuta?.future;
+    if (errorRuta != null) throw errorRuta!;
+    return ruta;
+  }
+
   @override
   Future<Viaje> viaje(int id) async {
     consultasDetalle.add(id);

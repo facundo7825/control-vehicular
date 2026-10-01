@@ -7,5 +7,6 @@ export 'json.dart';
 export 'lugares.dart';
 export 'pedidos.dart';
 export 'reservas.dart';
+export 'ruta.dart';
 export 'usuario.dart';
 export 'viaje.dart';

@@ -12,7 +12,7 @@ import 'entorno_prueba.dart';
 
 /// Mapa de prueba: una lista de botones, uno por marcador, y un botón que "toca" el mapa en
 /// [puntoTocado]. Así las pantallas se prueban sin Google Maps. A dónde mira se lee con
-/// [enfoqueDelMapa].
+/// [enfoqueDelMapa] y las líneas con [lineasDelMapa].
 const puntoTocado = Coordenada(-26.8083, -65.2176);
 
 Widget mapaDePrueba(BuildContext context, DatosMapa datos) {
@@ -20,6 +20,7 @@ Widget mapaDePrueba(BuildContext context, DatosMapa datos) {
     key: const Key('mapa'),
     children: [
       _EnfoqueDePrueba(datos.enfoque),
+      _LineasDePrueba(datos.lineas),
       for (final m in datos.marcadores)
         TextButton(key: Key('marcador-${m.id}'), onPressed: m.alTocar, child: Text('${m.tipo.name}: ${m.titulo}')),
       if (datos.alTocarMapa != null)
@@ -44,6 +45,19 @@ class _EnfoqueDePrueba extends StatelessWidget {
 /// El enfoque que la pantalla le pasó a [mapaDePrueba] (nulo si no pidió mirar a ningún lado).
 Enfoque? enfoqueDelMapa(WidgetTester tester) =>
     tester.widget<_EnfoqueDePrueba>(find.byType(_EnfoqueDePrueba, skipOffstage: false)).enfoque;
+
+class _LineasDePrueba extends StatelessWidget {
+  const _LineasDePrueba(this.lineas);
+
+  final List<LineaMapa> lineas;
+
+  @override
+  Widget build(BuildContext context) => const SizedBox.shrink();
+}
+
+/// Las líneas (p. ej. el recorrido) que la pantalla le pasó a [mapaDePrueba].
+List<LineaMapa> lineasDelMapa(WidgetTester tester) =>
+    tester.widget<_LineasDePrueba>(find.byType(_LineasDePrueba, skipOffstage: false)).lineas;
 
 /// App principal de prueba con un botón que abre el módulo.
 Future<void> montarModulo(
