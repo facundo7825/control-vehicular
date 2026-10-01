@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Levanta todo lo necesario para la demo local, cada proceso en su propia ventana.
 

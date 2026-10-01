@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Compila host_prueba para la demo local: la versión web (solicitante en la compu) y el APK (chofer en el celular).
 
