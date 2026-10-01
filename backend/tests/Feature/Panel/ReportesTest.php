@@ -215,7 +215,7 @@ function leerXlsxDescargado(Testable $componente): array
 
 it('exporta los textos como texto y neutraliza los que parecen fórmulas', function () {
     $vehiculo = Vehiculo::factory()->create(['patente' => 'AB123CD']);
-    foreach (['=1+1', '@SUMA(A1)', '+54 11', '-x', 'Ana'] as $nombre) {
+    foreach (['=1+1', '@SUMA(A1)', '+54 11 1234', '-x', 'Ana'] as $nombre) {
         viajeConRecorrido(Usuario::factory()->chofer()->create(['nombre' => $nombre]), $vehiculo, []);
     }
 
@@ -224,7 +224,7 @@ it('exporta los textos como texto y neutraliza los que parecen fórmulas', funct
 
     expect($nombres)->each->toBeInstanceOf(StringCell::class)
         ->and(array_map(fn (StringCell $c) => $c->getValue(), $nombres))
-        ->toEqualCanonicalizing(["'=1+1", "'@SUMA(A1)", "'+54 11", "'-x", 'Ana'])
+        ->toEqualCanonicalizing(["'=1+1", "'@SUMA(A1)", '+54 11 1234', '-x', 'Ana'])
         // Los números siguen siendo numéricos.
         ->and($hojas['Choferes'][1][1])->toBeInstanceOf(NumericCell::class);
 });

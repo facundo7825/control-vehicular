@@ -21,14 +21,15 @@ use Throwable;
  * Inyección de fórmulas (OWASP "CSV Injection"): los textos vienen de la base (nombres, direcciones,
  * motivos) y nunca se escriben como fórmula. Cell::fromValue convierte en fórmula todo texto que empieza
  * con "=", así que acá los textos van siempre como celda de texto, y además a los que empiezan con
- * = + - @ tabulación o retorno de carro se les antepone un apóstrofo, para que tampoco se interpreten si
- * alguien copia la celda o guarda el archivo como CSV. Los números quedan numéricos.
+ * "=", "@", tabulación o retorno de carro se les antepone un apóstrofo, para que tampoco se interpreten si
+ * alguien copia la celda o guarda el archivo como CSV. "+" y "-" no se tocan (teléfonos como "+54 11 ...",
+ * textos con guion): la celda es de texto y Excel no la evalúa. Los números quedan numéricos.
  */
 class ExportadorExcel
 {
     public const TIPO = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
-    private const INICIOS_PELIGROSOS = ['=', '+', '-', '@', "\t", "\r"];
+    private const INICIOS_PELIGROSOS = ['=', '@', "\t", "\r"];
 
     /** @param  string|null  $carpetaTemporal  donde OpenSpout arma el archivo (por defecto la del sistema) */
     public function __construct(private ?string $carpetaTemporal = null) {}
