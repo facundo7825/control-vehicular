@@ -7,14 +7,12 @@ use App\Enums\EstadoViaje;
 use App\Excepciones\ReglaNegocio;
 use App\Filament\Resources\Usuarios\UsuarioResource;
 use App\Filament\Resources\Viajes\ViajeResource;
-use App\Mapas\Distancia;
 use App\Mapas\ServicioRutas;
 use App\Models\Turno;
 use App\Models\Viaje;
 use App\Support\HoraLocal;
 use DateTimeInterface;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\DB;
 use Throwable;
 
 /**
@@ -163,20 +161,8 @@ class DatosMapaPanel
             $resultado[$choferId]['viajes']++;
         }
 
-        $anterior = null;
-        $puntos = DB::table('recorrido_viaje')
-            ->whereIn('viaje_id', $choferDeViaje->keys()->all())
-            ->orderBy('viaje_id')
-            ->orderBy('registrado_en')
-            ->select(['viaje_id', 'lat', 'lng'])
-            ->cursor();
-        foreach ($puntos as $punto) {
-            if ($anterior !== null && $anterior->viaje_id === $punto->viaje_id) {
-                $resultado[$choferDeViaje[$punto->viaje_id]]['metros'] += Distancia::metros(
-                    (float) $anterior->lat, (float) $anterior->lng, (float) $punto->lat, (float) $punto->lng,
-                );
-            }
-            $anterior = $punto;
+        foreach (KilometrosRecorridos::metrosPorViaje($choferDeViaje->keys()->all()) as $viajeId => $metros) {
+            $resultado[$choferDeViaje[$viajeId]]['metros'] += $metros;
         }
 
         return $resultado;

@@ -237,6 +237,9 @@
             return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(conSombra)}`;
         };
         const OPACIDAD_ATENUADO = 0.3;
+        // Al encuadrar un viaje resaltado: margen en píxeles y zoom máximo (igual en Leaflet y en Google).
+        const MARGEN_ENCUADRE = 40;
+        const ZOOM_MAXIMO_ENCUADRE = 16;
 
         // Buscador: filtra en el navegador mientras se escribe; lista hasta 8 coincidencias y atenúa al resto en el mapa.
         const campo = document.getElementById('buscador-choferes-campo');
@@ -383,7 +386,7 @@
                 viajeResaltado = id;
                 aplicarResaltado();
                 const limites = capas.linea.getBounds().extend(capas.origen.getLatLng()).extend(capas.destino.getLatLng());
-                mapa.fitBounds(limites, { padding: [40, 40], maxZoom: 16 });
+                mapa.fitBounds(limites, { padding: [MARGEN_ENCUADRE, MARGEN_ENCUADRE], maxZoom: ZOOM_MAXIMO_ENCUADRE });
             };
             quitarResaltado = () => {
                 if (viajeResaltado !== null) {
@@ -505,9 +508,12 @@
             const iconoPunto = { url: urlSvg(svgPunto()), anchor: new google.maps.Point(TAMANO_PUNTO / 2, TAMANO_PUNTO / 2) };
             const iconoPin = { url: urlSvg(svgPin()), anchor: new google.maps.Point(TAMANO_PIN / 2, PUNTA_PIN) };
 
+            // El globo compartido muestra un chofer (idConGlobo) o un punto de un viaje (viajeConGlobo: {id, letra}).
             let idConGlobo = null;
+            let viajeConGlobo = null;
             globo.addListener('closeclick', () => {
                 idConGlobo = null;
+                viajeConGlobo = null;
             });
             const abrirGlobo = (id) => {
                 const marcador = marcadoresChofer.get(id);
@@ -515,7 +521,14 @@
                     globo.setContent(globoChofer(choferPorId.get(id)));
                     globo.open({ map: mapa, anchor: marcador });
                     idConGlobo = id;
+                    viajeConGlobo = null;
                 }
+            };
+            // Ubicado en el punto y no anclado al marcador, porque los marcadores de viaje se rearman en cada actualización.
+            const ponerGloboViaje = (v, letra) => {
+                const punto = letra === 'O' ? v.origen : v.destino;
+                globo.setContent(globoViaje(v, punto, letra));
+                globo.setPosition({ lat: punto.lat, lng: punto.lng });
             };
 
             // Viajes dibujados por id (se rearman en cada actualización): línea, marcadores, estilo base y su encuadre.
@@ -540,7 +553,13 @@
                 }
                 viajeResaltado = id;
                 aplicarResaltado();
-                mapa.fitBounds(d.limites);
+                // Google no tiene maxZoom en fitBounds: se acota cuando termina de encuadrar.
+                mapa.fitBounds(d.limites, MARGEN_ENCUADRE);
+                google.maps.event.addListenerOnce(mapa, 'idle', () => {
+                    if (mapa.getZoom() > ZOOM_MAXIMO_ENCUADRE) {
+                        mapa.setZoom(ZOOM_MAXIMO_ENCUADRE);
+                    }
+                });
             };
             quitarResaltado = () => {
                 if (viajeResaltado !== null) {
@@ -599,14 +618,13 @@
                         const marcador = new google.maps.Marker({
                             map: mapa, position: punto, icon, title: `${titulo} · ${nombre}: ${punto.direccion ?? 'sin dirección'}`,
                         });
-                        // Tocar el origen o el destino resalta el viaje y muestra su globo (anclado al punto: el
-                        // marcador se rearma en cada actualización).
+                        // Tocar el origen o el destino resalta el viaje y muestra su globo.
                         marcador.addListener('click', () => {
                             resaltarViaje(v.id);
-                            globo.setContent(globoViaje(v, punto, letra));
-                            globo.setPosition({ lat: punto.lat, lng: punto.lng });
+                            ponerGloboViaje(v, letra);
                             globo.open({ map: mapa });
                             idConGlobo = null;
+                            viajeConGlobo = { id: v.id, letra };
                         });
                         dibujados.push(marcador);
 
@@ -625,6 +643,16 @@
                         : { linea, marcadores, limites: delViaje, recta: true, grosor: 3, opacidad: 0.6 });
                 });
                 aplicarResaltado();
+                // El globo abierto de un viaje se actualiza con los datos nuevos; si el viaje terminó, se cierra.
+                if (viajeConGlobo) {
+                    const v = datos.viajes.find((x) => x.id === viajeConGlobo.id);
+                    if (v) {
+                        ponerGloboViaje(v, viajeConGlobo.letra);
+                    } else {
+                        globo.close();
+                        viajeConGlobo = null;
+                    }
+                }
 
                 // Encuadra solo la primera vez, para no mover el mapa mientras el admin lo mira.
                 if (! encuadrado && ! limites.isEmpty()) {

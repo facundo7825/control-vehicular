@@ -15,6 +15,7 @@ use App\Servicios\DatosMapaPanel;
 use App\Servicios\EstimadorLlegada;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Exceptions;
 use Livewire\Livewire;
 
 beforeEach(function () {
@@ -326,7 +327,8 @@ it('el chofer sin viaje activo trae viaje null', function () {
     expect(app(DatosMapaPanel::class)->obtener()['choferes'][0]['viaje'])->toBeNull();
 });
 
-it('si el estimador falla el viaje queda sin estimación y el mapa sigue andando', function (Throwable $error) {
+it('si el estimador falla el viaje queda sin estimación y el mapa sigue andando', function (Throwable $error, bool $seReporta) {
+    Exceptions::fake();
     $this->mock(EstimadorLlegada::class)->shouldReceive('estimar')->andThrow($error);
     $chofer = choferEnTurno();
     $viaje = Viaje::factory()->create(['chofer_id' => $chofer->id, 'estado' => EstadoViaje::Aceptado]);
@@ -334,9 +336,11 @@ it('si el estimador falla el viaje queda sin estimación y el mapa sigue andando
     $datos = app(DatosMapaPanel::class)->obtener()['choferes'][0]['viaje'];
 
     expect($datos)->toMatchArray(['id' => $viaje->id, 'hacia' => 'origen', 'llega_en_min' => null]);
+    // La regla de negocio es esperable (el viaje cambió de estado); una falla del servicio se reporta.
+    $seReporta ? Exceptions::assertReported(RuntimeException::class) : Exceptions::assertNothingReported();
 })->with([
-    'regla de negocio' => fn () => new ReglaNegocio('El viaje no tiene un chofer en camino.'),
-    'servicio de mapas caído' => fn () => new RuntimeException('timeout'),
+    'regla de negocio' => fn () => [new ReglaNegocio('El viaje no tiene un chofer en camino.'), false],
+    'servicio de mapas caído' => fn () => [new RuntimeException('timeout'), true],
 ]);
 
 it('hoy trae los viajes finalizados en el día local, los km recorridos y desde qué hora está en turno', function () {
@@ -358,6 +362,13 @@ it('hoy trae los viajes finalizados en el día local, los km recorridos y desde 
 
     expect(round($metros / 1000, 1))->toBe(2.4)
         ->and($choferes[$chofer->id]['hoy'])->toBe(['viajes' => 2, 'km' => 2.4, 'turno_desde' => '07:30']);
+});
+
+it('si el turno empezó un día anterior muestra también la fecha', function () {
+    $chofer = choferEnTurno();
+    $chofer->turnoAbierto->update(['inicio' => '2026-10-01 01:00:00']); // 30/09 22:00 en Buenos Aires
+
+    expect(app(DatosMapaPanel::class)->obtener()['choferes'][0]['hoy']['turno_desde'])->toBe('30/09 22:00');
 });
 
 it('sin viajes hoy trae ceros', function () {
@@ -417,3 +428,17 @@ it('el script resalta el viaje tocado y el globo del chofer enlaza al viaje y al
         ->toContain('quitarResaltado')
         ->toContain("removeEventListener('keydown', quitarConEscape)");
 })->with(['leaflet' => [null], 'google' => ['clave']]);
+
+it('con Google el resaltado encuadra con margen y zoom acotado, y el globo del viaje sigue a los datos', function () {
+    config(['vehiculos.mapas.google_api_key' => 'clave', 'vehiculos.mapas.google_js_api_key' => null]);
+    choferEnTurno();
+
+    $html = html_entity_decode($this->get(MapaEnVivo::getUrl())->assertOk()->getContent(), ENT_QUOTES);
+
+    expect($html)
+        ->toContain('mapa.fitBounds(d.limites, MARGEN_ENCUADRE)')
+        ->toContain("google.maps.event.addListenerOnce(mapa, 'idle'")
+        ->toContain('ZOOM_MAXIMO_ENCUADRE')
+        // El globo de un viaje se refresca en cada actualización y se cierra si el viaje ya no está activo.
+        ->toContain('viajeConGlobo');
+});

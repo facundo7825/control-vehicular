@@ -4,8 +4,6 @@ namespace App\Servicios;
 
 use App\Enums\EstadoViaje;
 use App\Enums\TipoViaje;
-use App\Mapas\Distancia;
-use App\Models\PuntoRecorrido;
 use App\Models\Turno;
 use App\Models\Usuario;
 use App\Models\Vehiculo;
@@ -130,32 +128,13 @@ class ReportesPanel
     }
 
     /**
-     * Metros recorridos por viaje finalizado en el rango: suma haversine de los puntos consecutivos de
-     * recorrido_viaje. Una sola consulta recorrida con cursor, ordenada por viaje y momento.
+     * Metros recorridos por viaje finalizado en el rango (ver KilometrosRecorridos).
      *
      * @return array<int, float>
      */
     private function kmPorViaje(Carbon $inicio, Carbon $fin): array
     {
-        $metros = [];
-        $anterior = null;
-
-        PuntoRecorrido::query()
-            ->whereIn('viaje_id', $this->finalizados($inicio, $fin)->select('id'))
-            ->orderBy('viaje_id')->orderBy('registrado_en')->orderBy('id')
-            ->toBase()
-            ->select(['viaje_id', 'lat', 'lng'])
-            ->cursor()
-            ->each(function (object $punto) use (&$metros, &$anterior) {
-                $viaje = (int) $punto->viaje_id;
-                if ($anterior !== null && $anterior->viaje_id === $viaje) {
-                    $metros[$viaje] = ($metros[$viaje] ?? 0)
-                        + Distancia::metros($anterior->lat, $anterior->lng, (float) $punto->lat, (float) $punto->lng);
-                }
-                $anterior = (object) ['viaje_id' => $viaje, 'lat' => (float) $punto->lat, 'lng' => (float) $punto->lng];
-            });
-
-        return $metros;
+        return KilometrosRecorridos::metrosPorViaje($this->finalizados($inicio, $fin)->select('id'));
     }
 
     /** @param  Collection<int, Viaje>  $viajes */
