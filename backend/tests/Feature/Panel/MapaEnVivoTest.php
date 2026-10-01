@@ -159,3 +159,58 @@ it('el tooltip de la línea del viaje se crea una vez y en cada refresco solo ca
     expect($html)->toContain('capas.linea.setTooltipContent(')
         ->not->toContain('capas.linea.bindTooltip(');
 });
+
+it('muestra el buscador de choferes arriba del mapa, fuera del alcance del polling', function (?string $clave) {
+    config(['vehiculos.mapas.google_api_key' => $clave, 'vehiculos.mapas.google_js_api_key' => null]);
+    choferEnTurno();
+
+    $html = Livewire::test(MapaEnVivo::class)->assertOk()
+        ->assertSee('Buscar chofer (nombre o patente)')
+        ->html();
+
+    // El buscador vive en su propio bloque wire:ignore (el polling no le borra el texto ni la lista) y va antes del mapa.
+    expect($html)->toMatch('/<div[^>]*id="buscador-choferes"[^>]*wire:ignore|<div[^>]*wire:ignore[^>]*id="buscador-choferes"/')
+        ->and(strpos($html, 'id="buscador-choferes"'))->toBeLessThan(strpos($html, 'id="mapa-en-vivo"'));
+})->with(['leaflet' => [null], 'google' => ['clave']]);
+
+it('el script filtra sin distinguir acentos y dibuja a los choferes como autos y al origen como un punto', function (?string $clave) {
+    config(['vehiculos.mapas.google_api_key' => $clave, 'vehiculos.mapas.google_js_api_key' => null]);
+    choferEnTurno();
+
+    // Livewire incrusta el @script escapado en HTML.
+    $html = html_entity_decode($this->get(MapaEnVivo::getUrl())->assertOk()->getContent(), ENT_QUOTES);
+
+    expect($html)
+        // Filtro: normalización sin acentos ni mayúsculas, hasta 8 coincidencias y atenuado de los que no coinciden.
+        ->toContain("normalize('NFD')")
+        ->toContain('const buscarChoferes')
+        ->toContain('setOpacity(')
+        ->toContain('<em>sin ubicaci') // "sin ubicación todavía": Livewire escapa los acentos del script (ó)
+        ->toContain("'Enter'")
+        ->toContain("'Escape'")
+        // Íconos: auto (Material directions_car), punto naranja para el origen y pin rojo para el destino.
+        ->toContain('const svgAuto')
+        ->toContain('M18.92 6.01C18.72 5.42')
+        ->toContain('const svgPunto')
+        ->toContain('const svgPin')
+        ->not->toContain('L.circleMarker(')
+        ->not->toContain("letra('O')");
+})->with(['leaflet' => [null], 'google' => ['clave']]);
+
+it('los datos del mapa traen nombre y patente de todos los choferes en turno, también de los sin ubicación', function () {
+    $conUbicacion = choferEnTurno();
+    $sinUbicacion = Turno::factory()->create()->chofer;
+
+    Livewire::test(MapaEnVivo::class)
+        ->call('refrescar')
+        ->assertDispatched('mapa-datos', function (string $evento, array $parametros) use ($conUbicacion, $sinUbicacion) {
+            $choferes = collect($parametros['datos']['choferes'])->keyBy('id');
+
+            return $choferes->count() === 2
+                && $choferes[$conUbicacion->id]['nombre'] === $conUbicacion->nombre
+                && $choferes[$conUbicacion->id]['patente'] === $conUbicacion->turnoAbierto->vehiculo->patente
+                && $choferes[$sinUbicacion->id]['nombre'] === $sinUbicacion->nombre
+                && $choferes[$sinUbicacion->id]['patente'] === $sinUbicacion->turnoAbierto->vehiculo->patente
+                && $choferes[$sinUbicacion->id]['lat'] === null;
+        });
+});
