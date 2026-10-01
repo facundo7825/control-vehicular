@@ -62,10 +62,19 @@ class MapaOsm extends ConsumerWidget {
         ),
         SimpleAttributionWidget(
           source: const Text('OpenStreetMap contributors'),
-          onTap: () => ref.read(lanzadorUrlProvider)(_derechos),
+          onTap: () => _abrirDerechos(ref.read(lanzadorUrlProvider)),
         ),
       ],
     );
+  }
+
+  /// Sin navegador (o si el sistema rechaza abrirla) no pasa nada: es solo la página de créditos.
+  static Future<void> _abrirDerechos(LanzadorUrl lanzar) async {
+    try {
+      await lanzar(_derechos);
+    } catch (e) {
+      debugPrint('No se pudo abrir los créditos de OpenStreetMap (${e.runtimeType}).');
+    }
   }
 }
 

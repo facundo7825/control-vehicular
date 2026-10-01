@@ -1,7 +1,7 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -76,7 +76,7 @@ void main() {
       abiertas = [];
     });
 
-    Future<void> montar(WidgetTester tester, DatosMapa datos) async {
+    Future<void> montar(WidgetTester tester, DatosMapa datos, {Object? errorAlAbrir}) async {
       tester.view.physicalSize = const Size(800, 800);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
@@ -85,6 +85,7 @@ void main() {
           overrides: [
             lanzadorUrlProvider.overrideWithValue((uri) async {
               abiertas.add(uri);
+              if (errorAlAbrir != null) throw errorAlAbrir;
               return true;
             }),
           ],
@@ -172,6 +173,18 @@ void main() {
       await montar(tester, const DatosMapa(centro: Coordenada(-26.8241, -65.2226)));
       await tester.tapAt(const Offset(400, 200));
       await tester.pump(const Duration(milliseconds: 500));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('si no se puede abrir la página de créditos, no queda un error sin capturar', (tester) async {
+      await montar(
+        tester,
+        const DatosMapa(centro: Coordenada(-26.8241, -65.2226)),
+        errorAlAbrir: PlatformException(code: 'ACTIVITY_NOT_FOUND'),
+      );
+      await tester.tap(find.textContaining('OpenStreetMap'));
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(abiertas, hasLength(1));
       expect(tester.takeException(), isNull);
     });
   });
