@@ -49,6 +49,23 @@ describe('alerta de viaje sin chofer', function () {
             ->and(Alerta::pendientes()->count())->toBe(0);
     });
 
+    it('si el viaje vuelve a quedar sin chofer crea una alerta nueva y la anterior queda resuelta', function () {
+        $viaje = Viaje::factory()->create();
+        $maquina = app(MaquinaEstadosViaje::class);
+        $maquina->transicionar($viaje, EstadoViaje::SinChofer);
+        $primera = Alerta::sole();
+
+        // El admin la asigna a mano y el chofer después cancela la reserva: vuelve a quedar sin chofer.
+        $maquina->asignar($viaje, Usuario::factory()->chofer()->create()->id, null);
+        $maquina->transicionar($viaje, EstadoViaje::SinChofer);
+
+        $alertas = Alerta::where('tipo', Alerta::VIAJE_SIN_CHOFER)->where('viaje_id', $viaje->id)->orderBy('id')->get();
+        expect($alertas)->toHaveCount(2)
+            ->and($alertas[0]->id)->toBe($primera->id)
+            ->and($alertas[0]->resuelta_en)->not->toBeNull()
+            ->and($alertas[1]->resuelta_en)->toBeNull();
+    });
+
     it('no toca las alertas de otros tipos ni de otros viajes', function () {
         $viaje = Viaje::factory()->create();
         $otro = Viaje::factory()->create();

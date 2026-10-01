@@ -313,6 +313,23 @@ describe('asignar chofer', function () {
             ->and(Alerta::where('tipo', Alerta::VIAJE_SIN_CHOFER)->sole()->resuelta_en)->not->toBeNull();
     });
 
+    it('en el detalle un error de negocio al asignar llega como notificación y no asigna', function () {
+        $viaje = Viaje::factory()->create();
+        app(MaquinaEstadosViaje::class)->transicionar($viaje, EstadoViaje::SinChofer);
+        $chofer = choferEnTurno();
+        // Por ejemplo, otro admin lo asignó entre que se abrió el modal y se confirmó.
+        $this->mock(ServicioViaje::class)->shouldReceive('asignarPorAdmin')->once()
+            ->andThrow(new ReglaNegocio('El viaje ya tiene chofer o terminó; no se puede asignar.'));
+
+        Livewire::test(ViewViaje::class, ['record' => $viaje->getRouteKey()])
+            ->callAction('asignar', data: ['chofer_id' => $chofer->id])
+            ->assertHasNoActionErrors()
+            ->assertNotified('El viaje ya tiene chofer o terminó; no se puede asignar.')
+            ->assertNotNotified('Chofer asignado');
+
+        expect($viaje->fresh())->estado->toBe(EstadoViaje::SinChofer)->chofer_id->toBeNull();
+    });
+
     it('asigna desde el detalle un viaje ofrecido: vence la oferta', function () {
         $ofrecido = choferEnTurno(-34.6037, -58.3816);
         $viaje = Viaje::factory()->create();
