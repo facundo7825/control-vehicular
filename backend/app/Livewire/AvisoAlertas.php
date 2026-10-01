@@ -23,10 +23,17 @@ class AvisoAlertas extends Component
     #[Locked]
     public int $ultimoId = 0;
 
+    /** Última alerta avisada, en la sesión: el panel no es SPA y cada página monta el aviso de nuevo. */
+    private const CLAVE_SESION = 'alertas.ultimo_visto';
+
     public function mount(): void
     {
-        // Lo que ya existía al abrir la página se da por visto.
-        $this->ultimoId = (int) Alerta::max('id');
+        // Sigue desde la última avisada en la sesión, así no se pierde lo creado entre la última consulta y
+        // la navegación. En una sesión nueva lo que ya existía se da por visto.
+        if (! session()->has(self::CLAVE_SESION)) {
+            session([self::CLAVE_SESION => (int) Alerta::max('id')]);
+        }
+        $this->ultimoId = (int) session(self::CLAVE_SESION);
     }
 
     public function revisar(): void
@@ -40,7 +47,10 @@ class AvisoAlertas extends Component
             return;
         }
 
+        // Límite conocido: los ids se asignan al insertar y no al confirmar; una alerta con un id menor que
+        // confirma después de una consulta que ya vio uno mayor no se avisa (queda en la lista de alertas).
         $this->ultimoId = (int) (clone $nuevas)->max('id');
+        session([self::CLAVE_SESION => max($this->ultimoId, (int) session(self::CLAVE_SESION, 0))]);
 
         foreach ($nuevas->orderBy('id')->limit(self::MAXIMO_AVISOS)->get() as $alerta) {
             $this->notificar(

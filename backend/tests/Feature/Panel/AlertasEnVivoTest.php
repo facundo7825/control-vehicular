@@ -112,6 +112,17 @@ describe('aviso en vivo', function () {
         expect(notificacionesEnviadas())->toBe([]);
     });
 
+    it('avisa en la página siguiente una alerta creada entre la última consulta y la navegación', function () {
+        Alerta::create(['tipo' => Alerta::RESERVA_SIN_TURNO, 'mensaje' => 'Vieja']);
+        Livewire::test(AvisoAlertas::class)->call('revisar')->assertNotDispatched('alertas-nuevas');
+        Alerta::create(['tipo' => Alerta::RESERVA_SIN_TURNO, 'mensaje' => 'Entre páginas']);
+
+        // El admin cambia de página antes de la próxima consulta: el aviso se monta de nuevo.
+        Livewire::test(AvisoAlertas::class)->call('revisar')->assertDispatched('alertas-nuevas');
+
+        expect(array_column(notificacionesEnviadas(), 'body'))->toBe(['Entre páginas']);
+    });
+
     it('muestra hasta 3 avisos y resume el resto', function () {
         $componente = Livewire::test(AvisoAlertas::class);
         foreach (range(1, 5) as $n) {
