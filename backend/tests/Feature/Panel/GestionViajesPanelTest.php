@@ -466,4 +466,25 @@ describe('lista', function () {
         expect(array_column(array_slice(filasExcelViajes($sinBusqueda), 1), 0))
             ->toEqualCanonicalizing([$viaje->id, $otroDeAna->id]);
     });
+
+    it('sin filtro de fecha exporta solo los últimos 366 días y lo avisa', function () {
+        // Hoy es 01/10/2026: los últimos 366 días van del 01/10/2025 al 01/10/2026 (más las reservas futuras).
+        $reciente = Viaje::factory()->create(['created_at' => now()->subDays(10)]);
+        $limite = Viaje::factory()->create(['created_at' => Carbon::parse('2025-10-01 03:00:00')]); // 00:00 local
+        $futura = Viaje::factory()->create(['tipo' => TipoViaje::Reserva, 'created_at' => now()->subYears(2), 'programado_para' => now()->addDay()]);
+        $viejo = Viaje::factory()->create(['created_at' => Carbon::parse('2025-10-01 02:59:00')]); // 30/09 local
+
+        $sinFecha = Livewire::test(ListViajes::class)
+            ->callAction('exportar')
+            ->assertNotified('Se exportaron los viajes de los últimos 366 días (desde el 01/10/2025). Para otro período, filtrá por fecha.');
+        expect(array_column(array_slice(filasExcelViajes($sinFecha), 1), 0))
+            ->toEqualCanonicalizing([$reciente->id, $limite->id, $futura->id]);
+
+        $conFecha = Livewire::test(ListViajes::class)
+            ->filterTable('fecha', ['desde' => '2025-01-01'])
+            ->callAction('exportar')
+            ->assertNotNotified();
+        expect(array_column(array_slice(filasExcelViajes($conFecha), 1), 0))
+            ->toEqualCanonicalizing([$reciente->id, $limite->id, $futura->id, $viejo->id]);
+    });
 });
