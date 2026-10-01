@@ -441,6 +441,9 @@ it('con Google el resaltado encuadra con margen y zoom acotado, y el globo del v
     expect($html)
         ->toContain('mapa.fitBounds(d.limites, MARGEN_ENCUADRE)')
         ->toContain("google.maps.event.addListenerOnce(mapa, 'idle'")
+        // La acotación del zoom espera solo al encuadre recién pedido: se descarta la anterior y vence sola.
+        ->toContain('cancelarAcotarZoom?.()')
+        ->toContain('PLAZO_ACOTAR_ZOOM_MS')
         ->toContain('ZOOM_MAXIMO_ENCUADRE')
         // El globo de un viaje se refresca en cada actualización y se cierra si el viaje ya no está activo.
         ->toContain('viajeConGlobo');

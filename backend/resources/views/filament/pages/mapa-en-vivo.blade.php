@@ -533,6 +533,9 @@
 
             // Viajes dibujados por id (se rearman en cada actualización): línea, marcadores, estilo base y su encuadre.
             let viajesDibujados = new Map();
+            // Espera pendiente para acotar el zoom tras encuadrar un viaje resaltado (ver resaltarViaje).
+            let cancelarAcotarZoom = null;
+            const PLAZO_ACOTAR_ZOOM_MS = 1000;
             const LINEA_PUNTEADA = 'M 0,-1 0,1';
             const aplicarResaltado = () => {
                 viajesDibujados.forEach((d, id) => {
@@ -553,13 +556,24 @@
                 }
                 viajeResaltado = id;
                 aplicarResaltado();
-                // Google no tiene maxZoom en fitBounds: se acota cuando termina de encuadrar.
+                // Google no tiene maxZoom en fitBounds: se acota cuando termina de encuadrar. Solo para este
+                // encuadre: se descarta la espera de un resaltado anterior y, si el mapa no queda quieto en
+                // PLAZO_ACOTAR_ZOOM_MS (p. ej. no hubo que moverlo), se deja de esperar, así un "idle"
+                // posterior (el admin moviendo el mapa) no le cambia el zoom.
+                cancelarAcotarZoom?.();
                 mapa.fitBounds(d.limites, MARGEN_ENCUADRE);
-                google.maps.event.addListenerOnce(mapa, 'idle', () => {
+                const escucha = google.maps.event.addListenerOnce(mapa, 'idle', () => {
+                    cancelarAcotarZoom?.();
                     if (mapa.getZoom() > ZOOM_MAXIMO_ENCUADRE) {
                         mapa.setZoom(ZOOM_MAXIMO_ENCUADRE);
                     }
                 });
+                const plazo = setTimeout(() => cancelarAcotarZoom?.(), PLAZO_ACOTAR_ZOOM_MS);
+                cancelarAcotarZoom = () => {
+                    escucha.remove();
+                    clearTimeout(plazo);
+                    cancelarAcotarZoom = null;
+                };
             };
             quitarResaltado = () => {
                 if (viajeResaltado !== null) {
