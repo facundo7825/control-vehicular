@@ -65,6 +65,22 @@ class ApiFalsa extends ApiVehiculos {
   ErrorApi? errorDetalle;
   final consultasDetalle = <int>[];
 
+  /// Respuesta de `buscarLugares` y las búsquedas recibidas (texto, cerca de).
+  List<LugarEncontrado> lugares = [];
+  ErrorApi? errorLugares;
+  final busquedas = <(String, Coordenada?)>[];
+
+  /// Si no es nulo, `buscarLugares` espera a que el test lo complete antes de responder.
+  Completer<void>? demorarLugares;
+
+  @override
+  Future<List<LugarEncontrado>> buscarLugares(String texto, {Coordenada? cerca}) async {
+    busquedas.add((texto, cerca));
+    await demorarLugares?.future;
+    if (errorLugares != null) throw errorLugares!;
+    return lugares;
+  }
+
   @override
   Future<Viaje> viaje(int id) async {
     consultasDetalle.add(id);

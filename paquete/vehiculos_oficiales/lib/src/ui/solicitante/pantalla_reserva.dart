@@ -119,19 +119,19 @@ class _PantallaReservaState extends ConsumerState<PantallaReserva> {
     return Scaffold(
       appBar: AppBar(title: const Text('Reservar un viaje')),
       body: !b.completo
-          ? const Center(child: Text('Marcá el origen y el destino en el mapa antes de reservar.'))
+          ? const Center(child: Text('Elegí el origen y el destino antes de reservar.'))
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
                 ListTile(
                   leading: const Icon(Icons.trip_origin),
                   title: const Text('Origen'),
-                  subtitle: Text(b.lugarOrigen!.descripcion),
+                  subtitle: Text(b.descripcion(PuntoPedido.origen)!),
                 ),
                 ListTile(
                   leading: const Icon(Icons.place),
                   title: const Text('Destino'),
-                  subtitle: Text(b.lugarDestino!.descripcion),
+                  subtitle: Text(b.descripcion(PuntoPedido.destino)!),
                 ),
                 ListTile(
                   leading: const Icon(Icons.event),

@@ -57,6 +57,20 @@ class ApiVehiculos {
   Future<Viaje> crearReserva(PedidoReserva pedido) =>
       _leer(() async => Viaje.fromJson(await cliente.postMapa('reservas', datos: pedido.toJson())));
 
+  /// Hasta 5 lugares para [texto] (3 a 200 caracteres, lo que valida `LugaresController`), sesgados
+  /// hacia [cerca] si se conoce. Un fallo del proveedor llega como lista vacía.
+  Future<List<LugarEncontrado>> buscarLugares(String texto, {Coordenada? cerca}) => _leer(
+    () async => leerLista(
+      await cliente.get(
+        'lugares',
+        query: {
+          'q': texto,
+          if (cerca != null) ...{'lat': cerca.lat, 'lng': cerca.lng},
+        },
+      ),
+    ).map(LugarEncontrado.fromJson).toList(),
+  );
+
   Future<void> registrarTokenPush(String token) async {
     await cliente.post('push/token', datos: {'token': token});
   }

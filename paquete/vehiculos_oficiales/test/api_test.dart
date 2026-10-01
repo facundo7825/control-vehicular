@@ -176,6 +176,27 @@ void main() {
     });
   });
 
+  test(
+    'buscar lugares manda el texto y, si hay, la ubicación para sesgar; lee {nombre, direccion, lat, lng}',
+    () async {
+      http.responder(
+        'GET',
+        'lugares',
+        200,
+        '[{"nombre":"Tribunales","direccion":"Tribunales, 24 de Septiembre 677, Tucumán","lat":-26.83,"lng":-65.2}]',
+      );
+
+      final lugares = await api.buscarLugares('tribu', cerca: const Coordenada(-26.8241, -65.2226));
+      await api.buscarLugares('tribu');
+
+      expect(lugares.single.nombre, 'Tribunales');
+      expect(lugares.single.direccion, 'Tribunales, 24 de Septiembre 677, Tucumán');
+      expect(lugares.single.coordenada, const Coordenada(-26.83, -65.2));
+      expect(http.pedidos.first.uri.queryParameters, {'q': 'tribu', 'lat': '-26.8241', 'lng': '-65.2226'});
+      expect(http.pedidos.last.uri.queryParameters, {'q': 'tribu'});
+    },
+  );
+
   test('disponibles de reserva manda la franja como query con fecha UTC', () async {
     http.responder('GET', 'reservas/disponibles', 200, p.reservasDisponibles);
 

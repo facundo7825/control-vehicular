@@ -1,0 +1,73 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../entorno.dart';
+import '../modelos/modelos.dart';
+import 'borrador_pedido.dart';
+
+/// `inactiva`: menos de [BusquedaLugaresNotifier.minimo] letras; `buscando`: esperando que deje de
+/// escribir o la respuesta; `lista`: llegaron los [BusquedaLugares.resultados] (vacíos = "Sin resultados").
+enum EstadoBusqueda { inactiva, buscando, lista }
+
+class BusquedaLugares {
+  const BusquedaLugares({this.texto = '', this.estado = EstadoBusqueda.inactiva, this.resultados = const []});
+
+  final String texto;
+  final EstadoBusqueda estado;
+  final List<LugarEncontrado> resultados;
+}
+
+final busquedaLugaresProvider = NotifierProvider.autoDispose<BusquedaLugaresNotifier, BusquedaLugares>(
+  BusquedaLugaresNotifier.new,
+);
+
+/// Sugerencias para el campo de dirección del solicitante (`GET /lugares`), sesgadas a su ubicación.
+/// Consulta una sola vez cuando deja de escribir durante [espera].
+class BusquedaLugaresNotifier extends Notifier<BusquedaLugares> {
+  static const espera = Duration(milliseconds: 400);
+
+  /// Lo mínimo que acepta `LugaresController`.
+  static const minimo = 3;
+
+  /// Lo máximo que acepta `LugaresController`.
+  static const maximo = 200;
+
+  Timer? _espera;
+
+  @override
+  BusquedaLugares build() {
+    ref.onDispose(() => _espera?.cancel());
+    return const BusquedaLugares();
+  }
+
+  void escribir(String texto) {
+    _espera?.cancel();
+    final t = texto.trim();
+    if (t.length < minimo) {
+      state = BusquedaLugares(texto: t);
+      return;
+    }
+    state = BusquedaLugares(texto: t, estado: EstadoBusqueda.buscando);
+    _espera = Timer(espera, () => _buscar(t));
+  }
+
+  void limpiar() {
+    _espera?.cancel();
+    state = const BusquedaLugares();
+  }
+
+  Future<void> _buscar(String texto) async {
+    final cerca = ref.read(borradorPedidoProvider).miUbicacion;
+    List<LugarEncontrado> resultados;
+    try {
+      resultados = await ref.read(apiProvider).buscarLugares(texto, cerca: cerca);
+    } on Exception catch (e) {
+      debugPrint('vehiculos_oficiales: no se pudo buscar el lugar (${e.runtimeType}).');
+      resultados = const [];
+    }
+    if (!ref.mounted || state.texto != texto || state.estado != EstadoBusqueda.buscando) return;
+    state = BusquedaLugares(texto: texto, estado: EstadoBusqueda.lista, resultados: resultados);
+  }
+}

@@ -40,9 +40,8 @@ void main() {
     ],
   );
 
+  /// El origen es la ubicación actual; el destino se marca en el mapa.
   Future<void> marcarOrigenYDestino(WidgetTester tester) async {
-    await tester.tap(find.byTooltip('Usar mi ubicación'));
-    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('tocar-mapa')));
     await tester.pumpAndSettle();
   }
@@ -61,6 +60,7 @@ void main() {
     await tester.tap(find.text('Reservar para más tarde'));
     await tester.pumpAndSettle();
     expect(find.byType(PantallaReserva), findsOneWidget);
+    expect(find.text('Tu ubicación actual'), findsOneWidget);
 
     await tester.tap(find.text('Fecha y hora'));
     await tester.pumpAndSettle();

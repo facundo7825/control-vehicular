@@ -14,6 +14,9 @@ import '../soporte/montar.dart';
 const _reservado =
     '[{"id":3,"nombre":"Luis Díaz","estado":"reservado_pronto","lat":-26.83,"lng":-65.21,"rumbo":null,"actualizado_en":"2026-10-01T12:00:00+00:00","vehiculo":{"patente":"AC456EF","marca":"Fiat","modelo":"Cronos","color":null}}]';
 
+const _sugerencias =
+    '[{"nombre":"Tribunales","direccion":"Tribunales, 24 de Septiembre 677, Tucumán","lat":-26.83,"lng":-65.2}]';
+
 void main() {
   late EntornoPrueba e;
   late UbicadorFalso ubicador;
@@ -51,6 +54,26 @@ void main() {
     expect(tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Pedir a este chofer')).onPressed, isNull);
   });
 
+  testWidgets('al abrir, el origen es mi ubicación y el mapa se centra ahí', (tester) async {
+    await abrir(tester);
+
+    expect(find.text('Tu ubicación actual'), findsOneWidget);
+    expect(find.byTooltip('Cambiar origen'), findsOneWidget);
+    expect(find.text('origen: Origen'), findsOneWidget);
+    expect(enfoqueDelMapa(tester)!.puntos, [const Coordenada(-26.8241, -65.2226)]);
+  });
+
+  testWidgets('"Mi ubicación" vuelve a centrar el mapa', (tester) async {
+    await abrir(tester);
+    final antes = enfoqueDelMapa(tester)!;
+
+    await tester.tap(find.byTooltip('Mi ubicación'));
+    await tester.pumpAndSettle();
+
+    expect(enfoqueDelMapa(tester)!.puntos, antes.puntos);
+    expect(enfoqueDelMapa(tester), isNot(antes));
+  });
+
   testWidgets('pedir el más cercano con mi ubicación y un destino marcado en el mapa', (tester) async {
     e.http.responder('POST', 'viajes', 201, p.viajeOfrecido);
     e.http.responder('GET', 'viajes/actual', 200, p.viajeActualVacio);
@@ -58,9 +81,7 @@ void main() {
     await abrir(tester);
     expect(tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Pedir el más cercano')).onPressed, isNull);
 
-    await tester.tap(find.byTooltip('Usar mi ubicación'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('tocar-mapa'))); // después del origen se marca el destino
+    await tester.tap(find.byKey(const Key('tocar-mapa'))); // el origen ya está: se marca el destino
     await tester.pumpAndSettle();
     await tester.tap(find.text('Direcciones y motivo (opcional)'));
     await tester.pumpAndSettle();
@@ -108,10 +129,120 @@ void main() {
     ubicador.posicion = null;
 
     await abrir(tester);
+
+    expect(enfoqueDelMapa(tester), isNull);
+    expect(find.text('No pudimos obtener tu ubicación: tocá el mapa o buscá una dirección.'), findsOneWidget);
+    expect(find.widgetWithText(TextField, '¿Desde dónde salís?'), findsOneWidget);
+
     await tester.tap(find.byTooltip('Usar mi ubicación'));
     await tester.pump();
-
     expect(find.text('No pudimos obtener tu ubicación. Marcá el origen tocando el mapa.'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('tocar-mapa'))); // el primer toque es el origen
+    await tester.pumpAndSettle();
+    expect(find.text('origen: Origen'), findsOneWidget);
+    expect(find.widgetWithText(TextField, '¿A dónde vas?'), findsOneWidget);
+  });
+
+  testWidgets('"Cambiar origen" con un toque en el mapa; "Usar mi ubicación" lo deshace', (tester) async {
+    e.http.responder('POST', 'viajes', 201, p.viajeOfrecido);
+
+    await abrir(tester);
+    await tester.tap(find.byTooltip('Cambiar origen'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(TextField, '¿Desde dónde salís?'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('tocar-mapa')));
+    await tester.pumpAndSettle();
+    expect(find.text('Tu ubicación actual'), findsNothing);
+
+    await tester.tap(find.byTooltip('Usar mi ubicación'));
+    await tester.pumpAndSettle();
+    expect(find.text('Tu ubicación actual'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Cambiar origen'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('tocar-mapa'))); // origen
+    await tester.tap(find.byKey(const Key('tocar-mapa'))); // destino
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Pedir el más cercano'));
+    await esperar(tester);
+
+    expect(ultimoCuerpo()['origen_lat'], puntoTocado.lat);
+    expect(ultimoCuerpo()['destino_lat'], puntoTocado.lat);
+  });
+
+  testWidgets('escribir el destino, elegir una sugerencia y pedir', (tester) async {
+    e.http.responder('GET', 'lugares', 200, _sugerencias);
+    e.http.responder('POST', 'viajes', 201, p.viajeOfrecido);
+
+    await abrir(tester);
+    await tester.enterText(find.byKey(const Key('buscar-lugar')), 'tri');
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.enterText(find.byKey(const Key('buscar-lugar')), 'tribu');
+    await tester.pump(const Duration(milliseconds: 399));
+    expect(e.http.pedidos.where((x) => x.uri.path == '/api/lugares'), isEmpty);
+    await tester.pump(const Duration(milliseconds: 1));
+    await esperar(tester);
+
+    final busquedas = e.http.pedidos.where((x) => x.uri.path == '/api/lugares').toList();
+    expect(busquedas.single.uri.queryParameters, {'q': 'tribu', 'lat': '-26.8241', 'lng': '-65.2226'});
+    expect(find.text('Tribunales'), findsOneWidget);
+    expect(find.text('Tribunales, 24 de Septiembre 677, Tucumán'), findsOneWidget);
+
+    await tester.tap(find.text('Tribunales'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Tribunales'), findsNothing); // las sugerencias se cierran
+    expect(find.text('Tribunales, 24 de Septiembre 677, Tucumán'), findsOneWidget); // el destino elegido
+    expect(find.text('destino: Destino'), findsOneWidget);
+    expect(enfoqueDelMapa(tester)!.puntos, [const Coordenada(-26.8241, -65.2226), const Coordenada(-26.83, -65.2)]);
+
+    await tester.tap(find.text('Pedir el más cercano'));
+    await esperar(tester);
+
+    expect(ultimoCuerpo(), {
+      'modo': 'mas_cercano',
+      'origen_lat': -26.8241,
+      'origen_lng': -65.2226,
+      'destino_lat': -26.83,
+      'destino_lng': -65.2,
+      'destino_direccion': 'Tribunales, 24 de Septiembre 677, Tucumán',
+    });
+  });
+
+  testWidgets('si la búsqueda falla se ve "Sin resultados"', (tester) async {
+    e.http.responder('GET', 'lugares', 500, '{"message":"Server Error"}');
+
+    await abrir(tester);
+    await tester.enterText(find.byKey(const Key('buscar-lugar')), 'tribu');
+    await tester.pump(const Duration(milliseconds: 400));
+    await esperar(tester);
+
+    expect(find.text('Sin resultados'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('en un teléfono chico con el teclado abierto el campo y las sugerencias se ven', (tester) async {
+    e.http.responder('GET', 'lugares', 200, _sugerencias);
+
+    await abrir(tester);
+    tester.view.physicalSize = const Size(1080, 1920); // 360 x 640
+    tester.view.viewInsets = const FakeViewPadding(bottom: 900); // teclado de 300
+    addTearDown(tester.view.resetViewInsets);
+    await tester.pumpAndSettle();
+
+    await tester.showKeyboard(find.byKey(const Key('buscar-lugar')));
+    await tester.enterText(find.byKey(const Key('buscar-lugar')), 'tribu');
+    await tester.pump(const Duration(milliseconds: 400));
+    await esperar(tester);
+
+    const visible = Rect.fromLTRB(0, 0, 360, 340);
+    expect(visible.contains(tester.getRect(find.byKey(const Key('buscar-lugar'))).center), isTrue);
+    expect(visible.contains(tester.getCenter(find.text('Tribunales'))), isTrue);
+    await tester.tap(find.text('Tribunales'));
+    await tester.pumpAndSettle();
+    expect(find.text('Tribunales, 24 de Septiembre 677, Tucumán'), findsOneWidget); // el destino elegido
   });
 
   testWidgets('si el backend rechaza el pedido se muestra su mensaje', (tester) async {
@@ -150,7 +281,11 @@ void main() {
     await tester.tap(find.text('Direcciones y motivo (opcional)'));
     await tester.pumpAndSettle();
 
-    expect(tester.widgetList<TextField>(find.byType(TextField)).map((c) => c.maxLength), [255, 255, 255]);
+    final campos = ['Dirección de origen', 'Dirección de destino', 'Motivo'];
+    expect(
+      [for (final c in campos) tester.widget<TextField>(find.widgetWithText(TextField, c)).maxLength],
+      [255, 255, 255],
+    );
   });
 
   testWidgets('después de volver al mapa, las novedades del mismo viaje no lo vuelven a abrir', (tester) async {
