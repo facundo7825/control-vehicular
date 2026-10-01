@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vehiculos_oficiales/src/mapa/mapa.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
 import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real_provider.dart';
+import 'package:vehiculos_oficiales/src/ubicacion/ubicador.dart';
 import 'package:vehiculos_oficiales/src/ui/modulo_app.dart';
 
 import 'dobles.dart';
@@ -49,6 +50,7 @@ Future<void> montarModulo(
   WidgetTester tester,
   EntornoPrueba e, {
   TiempoRealFalso? tiempoReal,
+  Ubicador? ubicador,
   List<Override> extra = const [],
 }) async {
   // Pantalla de teléfono (390 x 844) para que el panel de pedido entre sin desplazar.
@@ -71,6 +73,8 @@ Future<void> montarModulo(
                       overrides: e.overridesDeModulo([
                         tiempoRealProvider.overrideWithValue(tiempoReal ?? TiempoRealFalso()),
                         constructorMapaProvider.overrideWithValue(mapaDePrueba),
+                        // Sin ubicación salvo que el test la dé: nunca el plugin real.
+                        ubicadorProvider.overrideWithValue(ubicador ?? UbicadorFalso()),
                         ...extra,
                       ]),
                     ),

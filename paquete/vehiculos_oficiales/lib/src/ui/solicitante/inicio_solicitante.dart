@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -14,6 +13,7 @@ import '../../solicitante/choferes_mapa.dart';
 import '../../viaje/viaje_actual.dart';
 import '../comunes/comunes.dart';
 import '../modulo_app.dart';
+import 'buscador_lugar.dart';
 
 /// Mapa principal del solicitante con los choferes en turno y el pedido (spec 7, solicitante 1 y 2).
 /// Al abrir, el origen es la ubicación actual y el mapa se centra ahí; sin permiso se marca a mano
@@ -184,7 +184,6 @@ class _PanelPedido extends ConsumerStatefulWidget {
 }
 
 class _PanelPedidoState extends ConsumerState<_PanelPedido> {
-  final _buscar = TextEditingController();
   final _dirOrigen = TextEditingController();
   final _dirDestino = TextEditingController();
   final _motivo = TextEditingController();
@@ -198,7 +197,6 @@ class _PanelPedidoState extends ConsumerState<_PanelPedido> {
 
   @override
   void dispose() {
-    _buscar.dispose();
     _dirOrigen.dispose();
     _dirDestino.dispose();
     _motivo.dispose();
@@ -213,15 +211,12 @@ class _PanelPedidoState extends ConsumerState<_PanelPedido> {
     if (_motivo.text != b.motivo) _motivo.text = b.motivo;
   }
 
-  void _limpiarBusqueda() {
-    _buscar.clear();
-    ref.read(busquedaLugaresProvider.notifier).limpiar();
-  }
-
-  void _elegir(LugarEncontrado lugar) {
-    ref.read(borradorPedidoProvider.notifier).elegirLugar(lugar);
-    _limpiarBusqueda();
-    FocusScope.of(context).unfocus();
+  /// La persona elige qué punto marcar. Lo que estaba escribiendo para el otro punto se borra (solo por
+  /// una acción suya: que llegue o no la ubicación nunca borra lo escrito).
+  void _marcar(PuntoPedido punto) {
+    ref.read(borradorPedidoProvider.notifier).marcarAhora(punto);
+    final escrito = ref.read(busquedaLugaresProvider).punto;
+    if (escrito != null && escrito != punto) ref.read(busquedaLugaresProvider.notifier).limpiar();
   }
 
   Future<void> _usarMiUbicacion() async {
@@ -248,13 +243,8 @@ class _PanelPedidoState extends ConsumerState<_PanelPedido> {
 
   @override
   Widget build(BuildContext context) {
-    ref.listen(borradorPedidoProvider, (anterior, b) {
-      _sincronizar(b);
-      // Lo escrito buscaba el otro punto ("Cambiar origen" a mitad de la búsqueda del destino).
-      if (anterior?.marcando != b.marcando) _limpiarBusqueda();
-    });
+    ref.listen(borradorPedidoProvider, (_, b) => _sincronizar(b));
     final b = ref.watch(borradorPedidoProvider);
-    final busqueda = ref.watch(busquedaLugaresProvider);
     final notifier = ref.read(borradorPedidoProvider.notifier);
     final buscandoOrigen = b.marcando == PuntoPedido.origen;
 
@@ -277,49 +267,18 @@ class _PanelPedidoState extends ConsumerState<_PanelPedido> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   // Arriba de todo: con el teclado abierto, el campo y las sugerencias quedan a la vista.
-                  TextField(
-                    key: const Key('buscar-lugar'),
-                    controller: _buscar,
-                    inputFormatters: [LengthLimitingTextInputFormatter(BusquedaLugaresNotifier.maximo)],
-                    textInputAction: TextInputAction.search,
-                    decoration: InputDecoration(
-                      labelText: buscandoOrigen ? '¿Desde dónde salís?' : '¿A dónde vas?',
-                      hintText: 'Escribí una dirección o un lugar',
-                      prefixIcon: const Icon(Icons.search),
-                      suffixIcon: busqueda.texto.isEmpty
-                          ? null
-                          : IconButton(icon: const Icon(Icons.clear), tooltip: 'Borrar', onPressed: _limpiarBusqueda),
-                    ),
-                    onChanged: ref.read(busquedaLugaresProvider.notifier).escribir,
-                  ),
-                  ...switch (busqueda.estado) {
-                    EstadoBusqueda.inactiva => const <Widget>[],
-                    EstadoBusqueda.buscando => const [ListTile(dense: true, title: Text('Buscando…'))],
-                    EstadoBusqueda.lista when busqueda.resultados.isEmpty => const [
-                      ListTile(dense: true, leading: Icon(Icons.search_off), title: Text('Sin resultados')),
-                    ],
-                    EstadoBusqueda.lista => [
-                      for (final l in busqueda.resultados)
-                        ListTile(
-                          dense: true,
-                          leading: const Icon(Icons.place_outlined),
-                          title: Text(l.nombre),
-                          subtitle: Text(l.direccion, maxLines: 1, overflow: TextOverflow.ellipsis),
-                          onTap: () => _elegir(l),
-                        ),
-                    ],
-                  },
+                  const BuscadorLugar(),
                   ListTile(
                     leading: const Icon(Icons.trip_origin),
                     title: const Text('Origen'),
                     subtitle: Text(b.descripcion(PuntoPedido.origen) ?? sinOrigen),
                     selected: buscandoOrigen,
-                    onTap: () => notifier.marcarAhora(PuntoPedido.origen),
+                    onTap: () => _marcar(PuntoPedido.origen),
                     trailing: b.origenEsMiUbicacion && !buscandoOrigen
                         ? IconButton(
                             icon: const Icon(Icons.edit_location_alt),
                             tooltip: 'Cambiar origen',
-                            onPressed: () => notifier.marcarAhora(PuntoPedido.origen),
+                            onPressed: () => _marcar(PuntoPedido.origen),
                           )
                         : IconButton(
                             icon: const Icon(Icons.my_location),
@@ -332,7 +291,7 @@ class _PanelPedidoState extends ConsumerState<_PanelPedido> {
                     title: const Text('Destino'),
                     subtitle: Text(b.descripcion(PuntoPedido.destino) ?? 'Escribilo arriba o tocá el mapa'),
                     selected: !buscandoOrigen,
-                    onTap: () => notifier.marcarAhora(PuntoPedido.destino),
+                    onTap: () => _marcar(PuntoPedido.destino),
                   ),
                   ExpansionTile(
                     title: const Text('Direcciones y motivo (opcional)'),

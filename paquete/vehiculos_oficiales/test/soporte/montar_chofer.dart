@@ -1,6 +1,5 @@
 import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:vehiculos_oficiales/src/ubicacion/ubicador.dart';
 
 import '../fixtures/payloads.dart' as p;
 import '../fixtures/payloads_chofer.dart' as c;
@@ -38,12 +37,7 @@ Future<void> montarChofer(
   TiempoRealFalso? tiempoReal,
   UbicadorFalso? ubicador,
   List<Override> extra = const [],
-}) => montarModulo(
-  tester,
-  e,
-  tiempoReal: tiempoReal,
-  extra: [ubicadorProvider.overrideWithValue(ubicador ?? UbicadorFalso()), ...extra],
-);
+}) => montarModulo(tester, e, tiempoReal: tiempoReal, ubicador: ubicador, extra: extra);
 
 /// Rutas de los pedidos hechos, sin `/api/`, con su método (p. ej. `POST turnos`).
 List<String> pedidosHechos(EntornoPrueba e) => [

@@ -1,10 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
 import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real.dart';
-import 'package:vehiculos_oficiales/src/ubicacion/ubicador.dart';
 
 import '../fixtures/payloads.dart' as p;
 import '../soporte/dobles.dart';
@@ -29,8 +29,7 @@ void main() {
     ubicador = UbicadorFalso(const Coordenada(-26.8241, -65.2226));
   });
 
-  Future<void> abrir(WidgetTester tester) =>
-      montarModulo(tester, e, extra: [ubicadorProvider.overrideWithValue(ubicador)]);
+  Future<void> abrir(WidgetTester tester) => montarModulo(tester, e, ubicador: ubicador);
 
   Map<String, dynamic> ultimoCuerpo() => jsonDecode(e.http.pedidos.last.cuerpo) as Map<String, dynamic>;
 
@@ -211,6 +210,99 @@ void main() {
     });
   });
 
+  group('mientras llega la ubicación', () {
+    final campo = find.byKey(const Key('buscar-lugar'));
+    String escrito(WidgetTester tester) => tester.widget<TextField>(campo).controller!.text;
+
+    Future<void> buscar(WidgetTester tester) async {
+      await tester.enterText(campo, 'tribu');
+      await tester.pump(const Duration(milliseconds: 400));
+      await esperar(tester);
+    }
+
+    // El Completer se crea dentro del test (zona de fake_async) para que completarlo avance la pantalla.
+    Future<void> abrirSinUbicacionTodavia(WidgetTester tester) {
+      ubicador.retener = Completer();
+      return abrir(tester);
+    }
+
+    setUp(() => e.http.responder('GET', 'lugares', 200, _sugerencias));
+
+    testWidgets('lo que se escribe es el destino y no se borra cuando la ubicación llega', (tester) async {
+      await abrirSinUbicacionTodavia(tester);
+      expect(find.text('Buscando tu ubicación…'), findsOneWidget);
+      expect(find.widgetWithText(TextField, '¿A dónde vas?'), findsOneWidget);
+
+      await buscar(tester);
+      ubicador.retener!.complete();
+      await esperar(tester);
+
+      expect(find.text('Tu ubicación actual'), findsOneWidget);
+      expect(escrito(tester), 'tribu');
+      await tester.tap(find.text('Tribunales'));
+      await tester.pumpAndSettle();
+      expect(find.text('Tribunales, 24 de Septiembre 677, Tucumán'), findsOneWidget);
+      expect(find.text('Tu ubicación actual'), findsOneWidget);
+    });
+
+    testWidgets('elegir el destino y después recibir la ubicación: origen = ubicación, destino = lo elegido', (
+      tester,
+    ) async {
+      e.http.responder('POST', 'viajes', 201, p.viajeOfrecido);
+
+      await abrirSinUbicacionTodavia(tester);
+      await buscar(tester);
+      await tester.tap(find.text('Tribunales'));
+      await tester.pumpAndSettle();
+      final enfoque = enfoqueDelMapa(tester);
+      ubicador.retener!.complete();
+      await esperar(tester);
+
+      expect(find.text('Tu ubicación actual'), findsOneWidget);
+      expect(enfoqueDelMapa(tester), enfoque); // no salta a la ubicación: ya había elegido algo
+      await tester.tap(find.text('Pedir el más cercano'));
+      await esperar(tester);
+      expect(ultimoCuerpo(), {
+        'modo': 'mas_cercano',
+        'origen_lat': -26.8241,
+        'origen_lng': -65.2226,
+        'destino_lat': -26.83,
+        'destino_lng': -65.2,
+        'destino_direccion': 'Tribunales, 24 de Septiembre 677, Tucumán',
+      });
+    });
+
+    testWidgets('un toque en el mapa es el destino', (tester) async {
+      await abrirSinUbicacionTodavia(tester);
+      await tester.tap(find.byKey(const Key('tocar-mapa')));
+      await tester.pumpAndSettle();
+      expect(find.text('destino: Destino'), findsOneWidget);
+      expect(find.text('origen: Origen'), findsNothing);
+
+      ubicador.retener!.complete();
+      await esperar(tester);
+      expect(find.text('origen: Origen'), findsOneWidget);
+      expect(find.text('Tu ubicación actual'), findsOneWidget);
+    });
+
+    testWidgets('si no llega, lo que se estaba escribiendo sigue siendo el destino', (tester) async {
+      ubicador.posicion = null;
+
+      await abrirSinUbicacionTodavia(tester);
+      await buscar(tester);
+      ubicador.retener!.complete();
+      await esperar(tester);
+
+      expect(escrito(tester), 'tribu');
+      expect(find.widgetWithText(TextField, '¿A dónde vas?'), findsOneWidget);
+      await tester.tap(find.text('Tribunales'));
+      await tester.pumpAndSettle();
+      expect(find.text('destino: Destino'), findsOneWidget);
+      expect(find.text('origen: Origen'), findsNothing);
+      expect(find.widgetWithText(TextField, '¿Desde dónde salís?'), findsOneWidget); // ahora, el origen
+    });
+  });
+
   testWidgets('si la búsqueda falla se ve "Sin resultados"', (tester) async {
     e.http.responder('GET', 'lugares', 500, '{"message":"Server Error"}');
 
@@ -295,7 +387,7 @@ void main() {
     e.http.responder('GET', 'choferes', 200, p.choferes);
     final tr = TiempoRealFalso();
 
-    await montarModulo(tester, e, tiempoReal: tr, extra: [ubicadorProvider.overrideWithValue(ubicador)]);
+    await montarModulo(tester, e, tiempoReal: tr, ubicador: ubicador);
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
     expect(find.text('Tenés un viaje en curso.'), findsOneWidget);

@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
-import 'package:vehiculos_oficiales/src/ubicacion/ubicador.dart';
 import 'package:vehiculos_oficiales/src/ui/solicitante/inicio_solicitante.dart';
 import 'package:vehiculos_oficiales/src/ui/solicitante/pantalla_reserva.dart';
 
@@ -34,10 +33,8 @@ void main() {
   Future<void> abrir(WidgetTester tester) => montarModulo(
     tester,
     e,
-    extra: [
-      ubicadorProvider.overrideWithValue(UbicadorFalso(const Coordenada(-26.8241, -65.2226))),
-      elegirFechaHoraProvider.overrideWithValue((_, _) async => _cuando),
-    ],
+    ubicador: UbicadorFalso(const Coordenada(-26.8241, -65.2226)),
+    extra: [elegirFechaHoraProvider.overrideWithValue((_, _) async => _cuando)],
   );
 
   /// El origen es la ubicación actual; el destino se marca en el mapa.

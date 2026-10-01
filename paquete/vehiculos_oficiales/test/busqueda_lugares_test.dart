@@ -65,6 +65,27 @@ void main() {
     });
   });
 
+  test('recuerda para qué punto se empezó a escribir, aunque después cambie lo que se marca', () {
+    fakeAsync((async) {
+      final c = crear();
+      final borrador = c.read(borradorPedidoProvider.notifier);
+      expect(leer(c).punto, isNull);
+
+      escribir(c, 't');
+      expect(leer(c).punto, PuntoPedido.destino);
+      borrador.marcarAhora(PuntoPedido.origen); // p. ej. la ubicación no llegó
+      escribir(c, 'tribu');
+      expect(leer(c).punto, PuntoPedido.destino);
+
+      escribir(c, '');
+      expect(leer(c).punto, isNull);
+      escribir(c, 'tri');
+      expect(leer(c).punto, PuntoPedido.origen);
+      c.read(busquedaLugaresProvider.notifier).limpiar();
+      expect(leer(c).punto, isNull);
+    });
+  });
+
   test('con menos de 3 letras no consulta y borra las sugerencias', () {
     fakeAsync((async) {
       final c = crear();

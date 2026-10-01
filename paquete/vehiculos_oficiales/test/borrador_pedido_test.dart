@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vehiculos_oficiales/src/mapa/mapa.dart';
@@ -25,7 +27,11 @@ void main() {
     c = ProviderContainer.test(overrides: [ubicadorProvider.overrideWithValue(ubicador)]);
   });
 
-  test('el primer toque marca el origen y el segundo el destino', () {
+  test('sin ubicación, el primer toque marca el origen y el segundo el destino', () async {
+    ubicador.posicion = null;
+    await notifier().ubicar();
+    expect(borrador().marcando, PuntoPedido.origen);
+
     notifier().marcar(const Coordenada(1, 1));
     expect(borrador().marcando, PuntoPedido.destino);
     notifier().marcar(const Coordenada(2, 2));
@@ -122,6 +128,82 @@ void main() {
       expect(borrador().enfoque!.puntos, [_aqui]);
       expect(borrador().enfoque, isNot(primero));
     });
+
+    test('mientras se busca la ubicación, lo que se marca es el destino; al llegar, el origen es ella', () async {
+      ubicador.retener = Completer();
+      expect(borrador().marcando, PuntoPedido.destino);
+      final ubicando = notifier().ubicar();
+
+      notifier().marcar(const Coordenada(2, 2));
+      expect(borrador().destino, const Coordenada(2, 2));
+      expect(borrador().origen, isNull);
+      ubicador.retener!.complete();
+      await ubicando;
+
+      expect(borrador().origen, _aqui);
+      expect(borrador().origenEsMiUbicacion, isTrue);
+      expect(borrador().destino, const Coordenada(2, 2));
+      expect(borrador().marcando, PuntoPedido.destino);
+      // Ya había elegido algo: el mapa no salta a la ubicación.
+      expect(borrador().enfoque, isNull);
+    });
+
+    test('si la ubicación no llega después de elegir el destino, lo que sigue es el origen', () async {
+      ubicador
+        ..posicion = null
+        ..retener = Completer();
+      final ubicando = notifier().ubicar();
+      notifier().elegirLugar(_tribunales);
+      final enfoque = borrador().enfoque;
+      ubicador.retener!.complete();
+      await ubicando;
+
+      expect(borrador().destino, _tribunales.coordenada);
+      expect(borrador().ubicacion, EstadoUbicacion.noDisponible);
+      expect(borrador().marcando, PuntoPedido.origen);
+      expect(borrador().enfoque, enfoque);
+    });
+
+    test('elegir un lugar para un punto dado (la búsqueda empezó antes de que cambiara lo que se marca)', () async {
+      ubicador.posicion = null;
+      await notifier().ubicar(); // ahora se marca el origen
+
+      notifier().elegirLugar(_tribunales, punto: PuntoPedido.destino);
+
+      expect(borrador().destino, _tribunales.coordenada);
+      expect(borrador().origen, isNull);
+      expect(borrador().marcando, PuntoPedido.origen);
+    });
+
+    test('"Mi ubicación" no borra la dirección de origen escrita cuando el origen es la ubicación', () async {
+      await notifier().ubicar();
+      notifier().direccion(PuntoPedido.origen, 'Puerta 2');
+
+      await notifier().ubicar();
+
+      expect(borrador().direccionOrigen, 'Puerta 2');
+      expect(borrador().descripcion(PuntoPedido.origen), 'Puerta 2');
+      notifier().fijar(PuntoPedido.destino, const Coordenada(2, 2));
+      expect(borrador().pedido().toJson()['origen_direccion'], 'Puerta 2');
+    });
+
+    test(
+      '"Elegir otro": un origen sin dirección a pasos de la ubicación actual sigue siendo "Tu ubicación actual"',
+      () async {
+        await notifier().ubicar();
+        final v = viaje(estado: 'sin_chofer');
+        final j = jsonViaje(v, conChofer: false)
+          ..['origen'] = {'lat': _aqui.lat + 0.0003, 'lng': _aqui.lng, 'direccion': null}; // ~33 m
+        notifier().desdeViaje(Viaje.fromJson(j));
+        expect(borrador().origenEsMiUbicacion, isTrue);
+        expect(borrador().descripcion(PuntoPedido.origen), 'Tu ubicación actual');
+
+        j['origen'] = {'lat': _aqui.lat + 0.01, 'lng': _aqui.lng, 'direccion': null}; // ~1 km
+        notifier().desdeViaje(Viaje.fromJson(j));
+        expect(borrador().origenEsMiUbicacion, isFalse);
+        expect(borrador().descripcion(PuntoPedido.origen), contains(','));
+      },
+    );
 
     test('sin centrar ("Elegir otro" con un origen elegido a mano) el mapa sigue mirando el pedido', () async {
       notifier().desdeViaje(viaje(estado: 'sin_chofer'));

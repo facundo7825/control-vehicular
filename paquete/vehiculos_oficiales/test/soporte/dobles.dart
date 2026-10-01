@@ -194,8 +194,14 @@ class UbicadorFalso implements Ubicador {
 
   void fallar(Object error) => _gps?.addError(error);
 
+  /// Si no es nulo, `actual()` espera a que el test lo complete (el GPS tardando en responder).
+  Completer<void>? retener;
+
   @override
-  Future<Coordenada?> actual() async => posicion;
+  Future<Coordenada?> actual() async {
+    await retener?.future;
+    return posicion;
+  }
 
   @override
   Future<PermisoUbicacion> pedirPermiso() async {

@@ -12,9 +12,18 @@ import 'borrador_pedido.dart';
 enum EstadoBusqueda { inactiva, buscando, lista }
 
 class BusquedaLugares {
-  const BusquedaLugares({this.texto = '', this.estado = EstadoBusqueda.inactiva, this.resultados = const []});
+  const BusquedaLugares({
+    this.texto = '',
+    this.estado = EstadoBusqueda.inactiva,
+    this.resultados = const [],
+    this.punto,
+  });
 
   final String texto;
+
+  /// Para qué punto del pedido se empezó a escribir; nulo con el campo vacío. Si después cambia lo que se
+  /// marca (p. ej. la ubicación no llegó), lo escrito sigue siendo para este punto.
+  final PuntoPedido? punto;
   final EstadoBusqueda estado;
   final List<LugarEncontrado> resultados;
 }
@@ -45,11 +54,12 @@ class BusquedaLugaresNotifier extends Notifier<BusquedaLugares> {
   void escribir(String texto) {
     _espera?.cancel();
     final t = texto.trim();
+    final punto = t.isEmpty ? null : state.punto ?? ref.read(borradorPedidoProvider).marcando;
     if (t.length < minimo) {
-      state = BusquedaLugares(texto: t);
+      state = BusquedaLugares(texto: t, punto: punto);
       return;
     }
-    state = BusquedaLugares(texto: t, estado: EstadoBusqueda.buscando);
+    state = BusquedaLugares(texto: t, estado: EstadoBusqueda.buscando, punto: punto);
     _espera = Timer(espera, () => _buscar(t));
   }
 
@@ -68,6 +78,6 @@ class BusquedaLugaresNotifier extends Notifier<BusquedaLugares> {
       resultados = const [];
     }
     if (!ref.mounted || state.texto != texto || state.estado != EstadoBusqueda.buscando) return;
-    state = BusquedaLugares(texto: texto, estado: EstadoBusqueda.lista, resultados: resultados);
+    state = BusquedaLugares(texto: texto, estado: EstadoBusqueda.lista, resultados: resultados, punto: state.punto);
   }
 }
