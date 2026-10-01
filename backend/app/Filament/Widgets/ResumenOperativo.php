@@ -29,12 +29,12 @@ class ResumenOperativo extends StatsOverviewWidget
 
         return [
             Stat::make('Viajes hoy', $hoy['total'])
-                ->description("{$hoy['finalizados']} finalizados · {$hoy['cancelados']} cancelados")
+                ->description(self::cantidad($hoy['finalizados'], 'finalizado').' · '.self::cantidad($hoy['cancelados'], 'cancelado'))
                 ->url(ViajeResource::getUrl('index')),
             Stat::make('Espera promedio hoy', $espera === null ? '—' : $this->minutos($espera))
                 ->description('Del pedido a la llegada del chofer'),
             Stat::make('Choferes en turno', $choferes['total'])
-                ->description("{$choferes['libres']} libres · {$choferes['en_viaje']} en viaje"),
+                ->description(self::cantidad($choferes['libres'], 'libre')." · {$choferes['en_viaje']} en viaje"),
             Stat::make('Alertas sin resolver', $alertas)
                 ->color($alertas > 0 ? 'danger' : 'success')
                 ->url(AlertaResource::getUrl('index')),
@@ -45,6 +45,12 @@ class ResumenOperativo extends StatsOverviewWidget
                 ->color($sinSenal->isNotEmpty() ? 'danger' : 'success')
                 ->description($sinSenal->pluck('nombre')->join(', ') ?: 'Ninguno'),
         ];
+    }
+
+    /** "1 finalizado", "2 finalizados". */
+    private static function cantidad(int $n, string $singular): string
+    {
+        return $n === 1 ? "1 $singular" : "$n {$singular}s";
     }
 
     private function minutos(float $minutos): string

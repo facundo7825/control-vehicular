@@ -77,10 +77,10 @@ it('muestra los números del día en el tablero', function () {
 
     Livewire::test(ResumenOperativo::class)
         ->assertSee('Viajes hoy')
-        ->assertSee('1 finalizados · 0 cancelados')
+        ->assertSee('1 finalizado · 0 cancelados')->assertDontSee('1 finalizados')
         ->assertSee('12 min')
         ->assertDontSee('—')
-        ->assertSee('1 libres · 0 en viaje')
+        ->assertSee('1 libre · 0 en viaje')->assertDontSee('1 libres')
         ->assertSee('Alertas sin resolver');
 });
 
@@ -137,4 +137,21 @@ it('los gráficos se dibujan con sus series', function () {
     $this->get('/admin')->assertOk()
         ->assertSeeLivewire(ViajesPorDia::class)
         ->assertSeeLivewire(PedidosPorHora::class);
+});
+
+it('el resumen usa plural salvo para uno', function () {
+    foreach (range(1, 2) as $i) {
+        Viaje::factory()->create(['estado' => EstadoViaje::Cancelado, 'cancelado_en' => now()]);
+    }
+    choferEnTurno();
+    choferEnTurno();
+
+    Livewire::test(ResumenOperativo::class)
+        ->assertSee('0 finalizados · 2 cancelados')
+        ->assertSee('2 libres · 0 en viaje');
+
+    Viaje::factory()->create(['estado' => EstadoViaje::Cancelado, 'cancelado_en' => now()]);
+    Viaje::query()->where('estado', EstadoViaje::Cancelado)->limit(2)->delete();
+
+    Livewire::test(ResumenOperativo::class)->assertSee('0 finalizados · 1 cancelado')->assertDontSee('1 cancelados');
 });
