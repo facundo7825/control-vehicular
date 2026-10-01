@@ -24,6 +24,14 @@ return [
         'google_js_api_key' => env('GOOGLE_MAPS_JS_API_KEY'),
     ],
 
+    // Búsqueda de lugares para el destino del pedido.
+    'lugares' => [
+        // nominatim (OpenStreetMap, solo desarrollo/demos) | google (Places, usa mapas.google_api_key) | falso
+        'driver' => env('LUGARES_DRIVER', 'nominatim'),
+        // La política de Nominatim exige un User-Agent identificable de la aplicación.
+        'user_agent' => env('LUGARES_USER_AGENT', 'ControlVehiculos/1.0 (demo; facundo7825@gmail.com)'),
+    ],
+
     'notificaciones' => [
         // registro | fcm
         'driver' => env('NOTIFICACIONES_DRIVER', 'registro'),

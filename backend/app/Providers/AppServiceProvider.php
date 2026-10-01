@@ -29,6 +29,12 @@ class AppServiceProvider extends ServiceProvider
             default => new \App\Mapas\ServicioMapasFalso(),
         });
 
+        $this->app->bind(\App\Mapas\BuscadorLugares::class, fn () => match (config('vehiculos.lugares.driver')) {
+            'google' => new \App\Mapas\BuscadorGoogle((string) config('vehiculos.mapas.google_api_key')),
+            'falso' => new \App\Mapas\BuscadorFalso(),
+            default => new \App\Mapas\BuscadorNominatim((string) config('vehiculos.lugares.user_agent')),
+        });
+
         $this->app->bind(\App\Notificaciones\Notificador::class, fn ($app) => match (config('vehiculos.notificaciones.driver')) {
             'fcm' => new \App\Notificaciones\NotificadorFcm($app->make(\Kreait\Firebase\Contract\Messaging::class)),
             default => new \App\Notificaciones\NotificadorRegistro(),

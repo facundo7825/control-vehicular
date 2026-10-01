@@ -9,6 +9,7 @@ Route::middleware(['auth:sanctum', 'activo'])->group(function () {
     Route::get('/yo', [AuthController::class, 'yo']);
     Route::get('/configuracion', \App\Http\Controllers\ConfiguracionController::class);
     Route::get('/choferes', \App\Http\Controllers\MapaController::class);
+    Route::get('/lugares', \App\Http\Controllers\LugaresController::class);
     Route::get('/viajes/actual', [\App\Http\Controllers\ViajeController::class, 'actual']);
     Route::get('/viajes/{viaje}', [\App\Http\Controllers\ViajeController::class, 'show'])->whereNumber('viaje');
     Route::get('/viajes', [\App\Http\Controllers\ViajeController::class, 'index']);
