@@ -32,6 +32,15 @@ return [
         'user_agent' => env('LUGARES_USER_AGENT', 'VehiculosOficiales/1.0 (+https://github.com/facundo7825/control-vehicular)'),
     ],
 
+    // Recorrido con indicaciones (GET /api/ruta).
+    'rutas' => [
+        // osrm (servidor público de OSRM, solo desarrollo/demos) | google (Directions, usa mapas.google_api_key) | falso
+        'driver' => env('RUTAS_DRIVER', 'osrm'),
+        // Un OSRM propio en producción; el público pide User-Agent identificable y como mucho 1 pedido por segundo.
+        'osrm_url' => env('RUTAS_OSRM_URL', 'https://router.project-osrm.org'),
+        'user_agent' => env('RUTAS_USER_AGENT', env('LUGARES_USER_AGENT', 'VehiculosOficiales/1.0 (+https://github.com/facundo7825/control-vehicular)')),
+    ],
+
     'notificaciones' => [
         // registro | fcm
         'driver' => env('NOTIFICACIONES_DRIVER', 'registro'),

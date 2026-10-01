@@ -2,7 +2,29 @@
 
 namespace App\Providers;
 
+use App\Identidad\EndpointPoderJudicial;
+use App\Identidad\IdentidadSimulada;
+use App\Identidad\ProveedorIdentidad;
+use App\Mapas\BuscadorFalso;
+use App\Mapas\BuscadorGoogle;
+use App\Mapas\BuscadorLugares;
+use App\Mapas\BuscadorNominatim;
+use App\Mapas\GoogleMaps;
+use App\Mapas\RutasFalso;
+use App\Mapas\RutasGoogle;
+use App\Mapas\RutasOsrm;
+use App\Mapas\ServicioMapas;
+use App\Mapas\ServicioMapasFalso;
+use App\Mapas\ServicioRutas;
+use App\Notificaciones\Notificador;
+use App\Notificaciones\NotificadorFcm;
+use App\Notificaciones\NotificadorRegistro;
+use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Http\Request;
+use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
+use Kreait\Firebase\Contract\Messaging;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -11,7 +33,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        $this->app->bind(\App\Identidad\ProveedorIdentidad::class, function ($app) {
+        $this->app->bind(ProveedorIdentidad::class, function ($app) {
             $driver = config('vehiculos.identidad.driver');
 
             if ($driver === 'simulada' && $app->isProduction()) {
@@ -19,25 +41,31 @@ class AppServiceProvider extends ServiceProvider
             }
 
             return match ($driver) {
-                'poder_judicial' => new \App\Identidad\EndpointPoderJudicial(),
-                default => new \App\Identidad\IdentidadSimulada(),
+                'poder_judicial' => new EndpointPoderJudicial,
+                default => new IdentidadSimulada,
             };
         });
 
-        $this->app->bind(\App\Mapas\ServicioMapas::class, fn () => match (config('vehiculos.mapas.driver')) {
-            'google' => new \App\Mapas\GoogleMaps((string) config('vehiculos.mapas.google_api_key')),
-            default => new \App\Mapas\ServicioMapasFalso(),
+        $this->app->bind(ServicioMapas::class, fn () => match (config('vehiculos.mapas.driver')) {
+            'google' => new GoogleMaps((string) config('vehiculos.mapas.google_api_key')),
+            default => new ServicioMapasFalso,
         });
 
-        $this->app->bind(\App\Mapas\BuscadorLugares::class, fn () => match (config('vehiculos.lugares.driver')) {
-            'google' => new \App\Mapas\BuscadorGoogle((string) config('vehiculos.mapas.google_api_key')),
-            'falso' => new \App\Mapas\BuscadorFalso(),
-            default => new \App\Mapas\BuscadorNominatim((string) config('vehiculos.lugares.user_agent')),
+        $this->app->bind(BuscadorLugares::class, fn () => match (config('vehiculos.lugares.driver')) {
+            'google' => new BuscadorGoogle((string) config('vehiculos.mapas.google_api_key')),
+            'falso' => new BuscadorFalso,
+            default => new BuscadorNominatim((string) config('vehiculos.lugares.user_agent')),
         });
 
-        $this->app->bind(\App\Notificaciones\Notificador::class, fn ($app) => match (config('vehiculos.notificaciones.driver')) {
-            'fcm' => new \App\Notificaciones\NotificadorFcm($app->make(\Kreait\Firebase\Contract\Messaging::class)),
-            default => new \App\Notificaciones\NotificadorRegistro(),
+        $this->app->bind(ServicioRutas::class, fn () => match (config('vehiculos.rutas.driver')) {
+            'google' => new RutasGoogle((string) config('vehiculos.mapas.google_api_key')),
+            'falso' => new RutasFalso,
+            default => new RutasOsrm((string) config('vehiculos.rutas.user_agent'), (string) config('vehiculos.rutas.osrm_url')),
+        });
+
+        $this->app->bind(Notificador::class, fn ($app) => match (config('vehiculos.notificaciones.driver')) {
+            'fcm' => new NotificadorFcm($app->make(Messaging::class)),
+            default => new NotificadorRegistro,
         });
     }
 
@@ -46,13 +74,20 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        \Illuminate\Http\Resources\Json\JsonResource::withoutWrapping();
+        JsonResource::withoutWrapping();
 
         // Búsqueda de lugares: 30 por minuto y por usuario, para no agotar el servicio externo.
-        \Illuminate\Support\Facades\RateLimiter::for('lugares', fn (\Illuminate\Http\Request $request) => \Illuminate\Cache\RateLimiting\Limit::perMinute(30)
+        RateLimiter::for('lugares', fn (Request $request) => Limit::perMinute(30)
             ->by((string) $request->user()?->id ?: $request->ip())
-            ->response(fn (\Illuminate\Http\Request $request, array $headers) => response()->json(
+            ->response(fn (Request $request, array $headers) => response()->json(
                 ['message' => 'Demasiadas búsquedas. Probá de nuevo en un minuto.'], 429, $headers,
+            )));
+
+        // Recorridos: 60 por minuto y por usuario (la app recalcula como mucho cada 30 s).
+        RateLimiter::for('rutas', fn (Request $request) => Limit::perMinute(60)
+            ->by((string) $request->user()?->id ?: $request->ip())
+            ->response(fn (Request $request, array $headers) => response()->json(
+                ['message' => 'Demasiados pedidos de recorrido. Probá de nuevo en un minuto.'], 429, $headers,
             )));
     }
 }
