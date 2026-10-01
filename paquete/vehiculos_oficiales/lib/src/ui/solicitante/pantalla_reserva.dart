@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../avisos/notificaciones_locales.dart';
 import '../../entorno.dart';
 import '../../modelos/modelos.dart';
 import '../../solicitante/borrador_pedido.dart';
@@ -99,6 +102,8 @@ class _PantallaReservaState extends ConsumerState<PantallaReserva> {
           );
       borrador.limpiar();
       if (!mounted) return;
+      // Android 13+: la respuesta del chofer se avisa con una notificación si la app está en segundo plano.
+      unawaited(ref.read(notificacionesLocalesProvider).pedirPermiso());
       final texto = reserva.estado == EstadoViaje.aceptado
           ? 'Reserva confirmada para ${formatearFechaHora(reserva.programadoPara!)}.'
           : 'Solicitud enviada. Te avisamos cuando el chofer responda.';

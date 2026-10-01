@@ -4,10 +4,9 @@ import 'package:go_router/go_router.dart';
 
 import '../../viaje/viaje_actual.dart';
 import '../modulo_app.dart';
-import 'pantalla_oferta.dart';
 
 /// Spec 5.2 y 5.6: un viaje que llega ya asignado (obligatorio, o asignado por un administrador) no se ofrece:
-/// se avisa a pantalla completa, con un único botón.
+/// se avisa a pantalla completa, con un único botón. El sonido lo pone `AvisosViaje`.
 class ViajeAsignado extends ConsumerStatefulWidget {
   const ViajeAsignado({super.key});
 
@@ -16,12 +15,6 @@ class ViajeAsignado extends ConsumerStatefulWidget {
 }
 
 class _ViajeAsignadoState extends ConsumerState<ViajeAsignado> {
-  @override
-  void initState() {
-    super.initState();
-    ref.read(alertaOfertaProvider)();
-  }
-
   void _verViaje() {
     ref.read(viajeActualProvider.notifier).verViajeAsignado();
     context.go(Rutas.viajeChofer);

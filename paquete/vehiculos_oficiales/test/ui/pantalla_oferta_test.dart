@@ -1,9 +1,11 @@
 import 'dart:convert';
 
 import 'package:clock/clock.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vehiculos_oficiales/src/api/cliente_api.dart';
 import 'package:vehiculos_oficiales/src/api/reloj_servidor.dart';
+import 'package:vehiculos_oficiales/src/avisos/reproductor_sonidos.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
 import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real.dart';
 import 'package:vehiculos_oficiales/src/ui/chofer/mapa_chofer.dart';
@@ -28,22 +30,17 @@ Map<String, dynamic> ofertaCreada(Duration vence) => {
 void main() {
   late EntornoPrueba e;
   late TiempoRealFalso tr;
-  late int alertas;
 
   setUp(() {
     e = entornoChofer();
     tr = TiempoRealFalso();
-    alertas = 0;
   });
 
   Future<void> abrir(WidgetTester tester, {RelojServidor? reloj}) => montarChofer(
     tester,
     e,
     tiempoReal: tr,
-    extra: [
-      alertaOfertaProvider.overrideWithValue(() => alertas++),
-      if (reloj != null) relojServidorProvider.overrideWithValue(reloj),
-    ],
+    extra: [if (reloj != null) relojServidorProvider.overrideWithValue(reloj)],
   );
 
   /// Llega la oferta por el socket y se abre su pantalla, sin que pase el tiempo.
@@ -76,17 +73,56 @@ void main() {
     expect(find.text('10 s'), findsOneWidget);
   });
 
-  testWidgets('vibra y suena al abrir y cada 5 s', (tester) async {
+  testWidgets('el timbre suena en bucle y vibra cada 2 s mientras está abierta', (tester) async {
     await abrir(tester);
     await llegaOferta(tester, const Duration(seconds: 30));
-    expect(alertas, 1);
+    expect(e.sonidos.enBucle, Sonido.oferta);
+    expect(e.sonidos.vibraciones, 1);
 
     await tester.pump(const Duration(seconds: 4));
-    expect(alertas, 1);
-    await tester.pump(const Duration(seconds: 1));
-    expect(alertas, 2);
-    await tester.pump(const Duration(seconds: 5));
-    expect(alertas, 3);
+    expect(e.sonidos.vibraciones, 3);
+    expect(e.sonidos.bucles, 1);
+  });
+
+  testWidgets('el timbre se corta al tocar "Aceptar", antes de la respuesta', (tester) async {
+    final demora = e.http.demorar('POST', 'ofertas/1/aceptar');
+
+    await abrir(tester);
+    await llegaOferta(tester, const Duration(seconds: 30));
+    await tester.tap(find.text('Aceptar'));
+    await tester.pump();
+    expect(e.sonidos.enBucle, isNull);
+
+    demora.complete((200, p.viajeAceptado));
+    await esperar(tester);
+    expect(e.sonidos.sonados, isEmpty);
+  });
+
+  testWidgets('el timbre se corta al rechazar', (tester) async {
+    e.http.responder('POST', 'ofertas/1/rechazar', 204);
+
+    await abrir(tester);
+    await llegaOferta(tester, const Duration(seconds: 30));
+    await tester.tap(find.text('Rechazar'));
+    await esperar(tester);
+
+    expect(e.sonidos.enBucle, isNull);
+  });
+
+  testWidgets('el timbre se corta al vencer y al cerrar el módulo', (tester) async {
+    await abrir(tester);
+    await llegaOferta(tester, const Duration(seconds: 3));
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pump();
+    expect(find.text('La oferta venció'), findsOneWidget);
+    expect(e.sonidos.enBucle, isNull);
+
+    tr.emitir('chofer.2', Eventos.ofertaCreada, {...ofertaCreada(const Duration(seconds: 30)), 'oferta_id': 2});
+    await tester.pump();
+    expect(e.sonidos.enBucle, Sonido.oferta);
+
+    await tester.pumpWidget(const SizedBox()); // se cierra el módulo
+    expect(e.sonidos.enBucle, isNull);
   });
 
   testWidgets('aceptar: POST /ofertas/1/aceptar y pasa al viaje', (tester) async {
@@ -174,7 +210,7 @@ void main() {
     expect(find.byType(ViajeAsignado), findsOneWidget);
     expect(find.text('Es un viaje obligatorio: no se puede rechazar.'), findsOneWidget);
     expect(find.text('Rechazar'), findsNothing);
-    expect(alertas, 1);
+    expect(e.sonidos.sonados, [Sonido.oferta]);
 
     await tester.tap(find.text('Ver viaje'));
     await esperar(tester);
@@ -224,7 +260,7 @@ void main() {
     await tester.pump(const Duration(seconds: 3));
     await tester.pump();
     expect(find.text('La oferta venció'), findsOneWidget);
-    expect(alertas, 1);
+    expect(e.sonidos.bucles, 1);
 
     tr.emitir('chofer.2', Eventos.ofertaCreada, {...ofertaCreada(const Duration(seconds: 30)), 'oferta_id': 2});
     await tester.pump();
@@ -232,7 +268,7 @@ void main() {
 
     expect(find.text('La oferta venció'), findsNothing);
     expect(find.text('Aceptar'), findsOneWidget);
-    expect(alertas, 2);
+    expect(e.sonidos.bucles, 2);
   });
 
   testWidgets('una oferta pendiente al abrir el módulo se muestra enseguida', (tester) async {

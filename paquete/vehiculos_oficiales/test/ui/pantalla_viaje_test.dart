@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:vehiculos_oficiales/src/avisos/reproductor_sonidos.dart';
 import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real.dart';
 import 'package:vehiculos_oficiales/src/ui/comunes/comunes.dart';
 import 'package:vehiculos_oficiales/src/ui/solicitante/inicio_solicitante.dart';
@@ -66,6 +67,7 @@ void main() {
 
     expect(find.text('Viaje cancelado'), findsWidgets);
     expect(e.http.pedidos.last.uri.path, '/api/viajes/1/cancelar');
+    expect(e.sonidos.sonados, isEmpty); // lo canceló él mismo
 
     await tester.tap(find.text('Volver al mapa'));
     await tester.pumpAndSettle();
@@ -95,6 +97,28 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('En viaje'), findsWidgets);
     expect(find.text('Cancelar viaje'), findsNothing); // spec 5.6: no se cancela en curso
+  });
+
+  testWidgets('el chofer llegó: suena; en segundo plano además sale la notificación', (tester) async {
+    e.http.responder('GET', 'viajes/actual', 200, actualCon(viajeJson(estado: 'en_camino')));
+    e.http.responder('GET', 'viajes/1/eta', 200, etaJson());
+    addTearDown(() => tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed));
+
+    await abrir(tester);
+    expect(e.sonidos.sonados, isEmpty); // ya estaba en camino al abrir
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    tr.emitir('viaje.1', Eventos.viajeActualizado, p.json(viajeJson(estado: 'llego')));
+    await tester.pump();
+
+    expect(e.sonidos.sonados, [Sonido.llego]);
+    expect(e.notificaciones.mostradas.single.$1, 'El chofer llegó');
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    tr.emitir('viaje.1', Eventos.viajeActualizado, p.json(viajeJson(estado: 'cancelado')));
+    await tester.pump();
+    expect(e.sonidos.sonados, [Sonido.llego, Sonido.cancelado]);
+    expect(e.notificaciones.mostradas, hasLength(1));
   });
 
   testWidgets('llamar marca solo dígitos y un + inicial', (tester) async {

@@ -1,0 +1,143 @@
+import 'dart:async';
+
+import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../api/reloj_servidor.dart';
+import '../modelos/modelos.dart';
+import '../push/push_modulo.dart';
+import '../sesion/sesion.dart';
+import '../viaje/viaje_actual.dart';
+import 'notificaciones_locales.dart';
+import 'reproductor_sonidos.dart';
+
+/// Avisos con sonido (y, con la app en segundo plano, notificación local) de las novedades del viaje
+/// actual. Se dispara con cada transición del viaje (el mismo viaje, de un estado a otro): nunca al cargar
+/// un viaje que ya estaba en ese estado, ni con un evento repetido o atrasado (`ViajeActualNotifier` ya los
+/// descarta). Lo arranca la raíz del módulo con la sesión lista, para los dos roles.
+final avisosViajeProvider = NotifierProvider<AvisosViaje, void>(AvisosViaje.new);
+
+class AvisosViaje extends Notifier<void> {
+  static const intervaloVibracion = Duration(seconds: 2);
+
+  /// Oferta cuyo timbre suena en bucle (nula si no suena ninguno).
+  int? _ofertaSonando;
+  ReproductorSonidos? _bucle;
+  Timer? _vibracion;
+  Timer? _vencimiento;
+
+  /// Solicitante: reservas cuya aceptación ya se avisó (llegan por push, que puede repetirse).
+  final _reservasAvisadas = <int>{};
+
+  late Usuario _usuario;
+
+  @override
+  void build() {
+    _usuario = ref.watch(usuarioProvider);
+    ref.onDispose(_cortarBucle);
+    ref.listen(viajeActualProvider, (antes, ahora) => _alCambiar(antes?.value, ahora.value));
+    if (!_usuario.esChofer) {
+      final escucha = ref.watch(pushModuloProvider).avisos.listen(_alPush);
+      ref.onDispose(() => unawaited(escucha.cancel()));
+    }
+  }
+
+  /// Chofer: tocó "Aceptar" o "Rechazar" en la oferta [ofertaId]; el timbre se corta ya, sin esperar la
+  /// respuesta. Si ya suena otra oferta, no la toca.
+  void silenciarOferta(int ofertaId) {
+    if (_ofertaSonando == ofertaId) _cortarBucle();
+  }
+
+  void _alCambiar(SeguimientoViaje? antes, SeguimientoViaje? ahora) {
+    if (ahora == null) return;
+    if (_usuario.esChofer) {
+      _ofertas(ahora.oferta);
+      if (ahora.asignadoSinOferta && !(antes?.asignadoSinOferta == true && antes?.viaje?.id == ahora.viaje?.id)) {
+        _avisar(Sonido.oferta, 'Viaje asignado', 'Tenés un viaje asignado. Tocá para verlo.');
+      }
+    }
+    final previo = antes?.viaje;
+    final viaje = ahora.viaje;
+    // Solo transiciones del mismo viaje: un viaje que aparece (carga inicial, pedido nuevo) no suena.
+    if (previo == null || viaje == null || previo.id != viaje.id || previo.estado == viaje.estado) return;
+    _transicion(previo.estado, viaje);
+  }
+
+  void _transicion(EstadoViaje antes, Viaje viaje) {
+    final propio = ref.read(viajeActualProvider.notifier).canceladoPorMi(viaje.id);
+    switch (viaje.estado) {
+      case EstadoViaje.cancelado when !propio:
+        _avisar(
+          Sonido.cancelado,
+          'Viaje cancelado',
+          _usuario.esChofer ? 'Te cancelaron el viaje.' : 'Tu viaje fue cancelado.',
+        );
+      case EstadoViaje.sinChofer when !_usuario.esChofer:
+        _avisar(Sonido.cancelado, 'Viaje cancelado', 'No hay choferes disponibles. Podés volver a pedirlo.');
+      // Inmediato: el chofer canceló y el viaje vuelve a buscar otro.
+      case EstadoViaje.buscando || EstadoViaje.ofrecido when !_usuario.esChofer && antes.conChofer:
+        _avisar(Sonido.cancelado, 'Tu chofer canceló', 'Estamos buscando otro chofer.');
+      case EstadoViaje.aceptado || EstadoViaje.enCamino when !_usuario.esChofer && !antes.conChofer:
+        _avisar(Sonido.aceptado, 'Tu viaje fue aceptado', _conChofer(viaje));
+      case EstadoViaje.llego when !_usuario.esChofer:
+        _avisar(Sonido.llego, 'El chofer llegó', 'Te está esperando en ${viaje.origen.descripcion}.');
+      default:
+        break;
+    }
+  }
+
+  static String _conChofer(Viaje v) => v.chofer == null ? 'Ya tenés chofer.' : 'Te busca ${v.chofer!.nombre}.';
+
+  /// Solicitante: una reserva aceptada (llega por push: la reserva no es el viaje actual hasta que arranca).
+  void _alPush(AvisoPush aviso) {
+    final id = aviso.viajeId;
+    if (aviso.tipo != 'viaje' || aviso.estado != EstadoViaje.aceptado.valor || id == null) return;
+    // El viaje actual se avisa con su transición (el push solo lo hace refrescar).
+    if (ref.read(viajeActualProvider).value?.viaje?.id == id) return;
+    if (!_reservasAvisadas.add(id)) return;
+    _avisar(Sonido.aceptado, 'Tu reserva fue aceptada', 'Ya tenés chofer para la reserva.');
+  }
+
+  /// Chofer: una oferta nueva suena en bucle, con vibración cada 2 s, hasta que se responde, vence o se va.
+  void _ofertas(Oferta? oferta) {
+    if (oferta?.id == _ofertaSonando) return;
+    _cortarBucle();
+    if (oferta == null) return;
+    final restante = ref.read(relojServidorProvider).restante(oferta.venceEn);
+    if (restante <= Duration.zero) return;
+
+    _ofertaSonando = oferta.id;
+    final r = ref.read(reproductorSonidosProvider);
+    _bucle = r;
+    unawaited(r.repetir(Sonido.oferta));
+    unawaited(r.vibrar());
+    _vibracion = Timer.periodic(intervaloVibracion, (_) => unawaited(r.vibrar()));
+    // Por si nadie la da por vencida (sin la pantalla de la oferta, p. ej. en segundo plano).
+    _vencimiento = Timer(restante, _cortarBucle);
+    _notificar('Nuevo viaje ofrecido', 'Hacia ${oferta.viaje.destino.descripcion}. Respondé antes de que venza.');
+  }
+
+  void _cortarBucle() {
+    _vibracion?.cancel();
+    _vencimiento?.cancel();
+    _vibracion = null;
+    _vencimiento = null;
+    _ofertaSonando = null;
+    // El mismo reproductor que lo arrancó (en onDispose no se puede leer otro provider).
+    final r = _bucle;
+    _bucle = null;
+    if (r != null) unawaited(r.detenerBucle());
+  }
+
+  void _avisar(Sonido sonido, String titulo, String texto) {
+    unawaited(ref.read(reproductorSonidosProvider).reproducir(sonido));
+    _notificar(titulo, texto);
+  }
+
+  /// La notificación sale solo con la app en segundo plano (cualquier estado distinto de `resumed`).
+  void _notificar(String titulo, String texto) {
+    final ciclo = WidgetsBinding.instance.lifecycleState;
+    if (ciclo == null || ciclo == AppLifecycleState.resumed) return;
+    unawaited(ref.read(notificacionesLocalesProvider).mostrar(titulo: titulo, texto: texto));
+  }
+}
