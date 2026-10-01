@@ -5,7 +5,7 @@ Qué tiene que hacer la app principal para embeber el módulo. `host_prueba/` (e
 ## 1. Versiones
 
 - Flutter **3.41** o más nuevo, Dart **3.11** o más nuevo (`environment` de `pubspec.yaml` del paquete).
-- El módulo usa **Riverpod 3** (`flutter_riverpod ^3.3.2`), `go_router ^17.5.0`, `dio ^5.11.1`, `geolocator ^14.1.1`, `google_maps_flutter ^2.18.1`, `url_launcher ^6.3.2`, `flutter_secure_storage ^11.2.0`, `path_provider ^2.1.6` y `dart_pusher_channels ^1.3.1`. Varios son plugins de Flutter (con código nativo, como `path_provider`): tienen que resolverse en el `pubspec.lock` de la app principal. Si la app principal usa alguno, tiene que poder resolver esas versiones (en particular, no puede seguir en Riverpod 2).
+- El módulo usa **Riverpod 3** (`flutter_riverpod ^3.3.2`), `go_router ^17.5.0`, `dio ^5.11.1`, `geolocator ^14.1.1`, `google_maps_flutter ^2.18.1`, `flutter_map ^8.3.2` y `latlong2 ^0.10.1` (mapa de OpenStreetMap sin clave, ver 2), `url_launcher ^6.3.2`, `flutter_secure_storage ^11.2.0`, `path_provider ^2.1.6` y `dart_pusher_channels ^1.3.1`. Varios son plugins de Flutter (con código nativo, como `path_provider`): tienen que resolverse en el `pubspec.lock` de la app principal. Si la app principal usa alguno, tiene que poder resolver esas versiones (en particular, no puede seguir en Riverpod 2).
 - El módulo arma su propio `ProviderScope` y su propio router: no hace falta envolverlo en nada.
 
 Dependencia (ruta o git, según cómo se distribuya):
@@ -40,7 +40,9 @@ VehiculosOficiales.abrir(
 
 - `sesion`: el token de sesión del PJ; el backend lo valida contra el servicio de identidad.
 - `onSesionInvalida`: se llama **una sola vez** si el backend responde 401 (token vencido o inválido). La app decide qué hacer (normalmente, cerrar sesión y volver a su login).
-- `googleMapsApiKey` de la configuración es solo informativa: la clave real va en el manifiesto de Android y en el `AppDelegate` de iOS (ver 4 y 5).
+- `googleMapsApiKey` elige el mapa:
+  - **Con clave**, el módulo usa **Google Maps**. La clave tiene que estar además en el manifiesto de Android y en el `AppDelegate` de iOS (ver 4 y 5); en web, la página tiene que cargar el script de Maps JavaScript con esa clave.
+  - **Vacía** (el valor por defecto), usa **OpenStreetMap** (`flutter_map`, teselas de `tile.openstreetmap.org`, con la atribución "© OpenStreetMap contributors" que pide la licencia). Es **solo para desarrollo y demos**: los servidores públicos de teselas de OpenStreetMap no admiten tráfico de producción (ver su [política de uso](https://operations.osmfoundation.org/policies/tiles/)). En producción hay que configurar la clave de Google.
 
 ## 3. Notificaciones push (FCM)
 
