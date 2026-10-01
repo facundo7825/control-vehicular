@@ -14,7 +14,7 @@ use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 
-/** Alertas del panel (spec 8.6): reservas sin turno y choferes sin señal durante un viaje. */
+/** Alertas del panel (spec 8.6): reservas sin turno, viajes sin chofer y choferes sin señal durante un viaje. */
 class AlertaResource extends Resource
 {
     protected static ?string $model = Alerta::class;
@@ -27,9 +27,11 @@ class AlertaResource extends Resource
 
     protected static ?int $navigationSort = 15;
 
-    private const TIPOS = [
+    /** Etiqueta de cada tipo de alerta; también la usa el aviso en vivo (AvisoAlertas). */
+    public const TIPOS = [
         Alerta::RESERVA_SIN_TURNO => 'Reserva sin turno',
         Alerta::CHOFER_SIN_SENAL => 'Chofer sin señal',
+        Alerta::VIAJE_SIN_CHOFER => 'Viaje sin chofer',
     ];
 
     public static function getNavigationBadge(): ?string

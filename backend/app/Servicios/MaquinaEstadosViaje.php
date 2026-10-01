@@ -4,10 +4,11 @@ namespace App\Servicios;
 
 use App\Enums\EstadoViaje as E;
 use App\Enums\ResultadoOferta;
-use App\Events\EstadoChoferActualizado;
 use App\Events\ViajeActualizado;
 use App\Excepciones\TransicionInvalida;
+use App\Models\Alerta;
 use App\Models\OfertaViaje;
+use App\Models\Usuario;
 use App\Models\Viaje;
 use Illuminate\Support\Facades\DB;
 
@@ -146,15 +147,38 @@ class MaquinaEstadosViaje
         }
         $viaje->save();
 
+        $this->actualizarAlertaSinChofer($viaje, $desde);
+
         ViajeActualizado::dispatch($viaje, $choferAnterior !== $viaje->chofer_id ? $choferAnterior : null, $conOferta, $porAdmin);
         foreach (array_unique(array_filter([$choferAnterior, $viaje->chofer_id])) as $choferId) {
             $this->emitirEstadoChofer($choferId);
         }
     }
 
+    /**
+     * Alerta del panel "viaje sin chofer": se crea al entrar en sin_chofer (una pendiente por viaje como
+     * máximo) y se resuelve sola al salir (asignado, cancelado o de vuelta a buscar). Corre dentro de la
+     * misma transacción que el cambio de estado.
+     */
+    private function actualizarAlertaSinChofer(Viaje $viaje, E $desde): void
+    {
+        $pendiente = Alerta::pendientes()->where('tipo', Alerta::VIAJE_SIN_CHOFER)->where('viaje_id', $viaje->id);
+
+        if ($viaje->estado === E::SinChofer && ! $pendiente->exists()) {
+            $solicitante = $viaje->solicitante?->nombre;
+            Alerta::create([
+                'tipo' => Alerta::VIAJE_SIN_CHOFER,
+                'viaje_id' => $viaje->id,
+                'mensaje' => "El viaje #{$viaje->id}".($solicitante ? " ($solicitante)" : '').' quedó sin chofer.',
+            ]);
+        } elseif ($desde === E::SinChofer && $viaje->estado !== E::SinChofer) {
+            $pendiente->update(['resuelta_en' => now()]);
+        }
+    }
+
     private function emitirEstadoChofer(int $choferId): void
     {
-        $chofer = \App\Models\Usuario::find($choferId);
+        $chofer = Usuario::find($choferId);
         $this->aviso->publicarSiCambio($chofer);
     }
 }

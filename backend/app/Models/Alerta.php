@@ -14,6 +14,9 @@ class Alerta extends Model
     /** Spec 9: chofer sin señal durante un viaje. Se resuelve sola (AlertasSinSenal). */
     public const CHOFER_SIN_SENAL = 'chofer_sin_senal';
 
+    /** Un viaje (inmediato o reserva) quedó sin chofer. Se resuelve sola al salir de sin_chofer (MaquinaEstadosViaje). */
+    public const VIAJE_SIN_CHOFER = 'viaje_sin_chofer';
+
     protected $table = 'alertas';
 
     protected $fillable = ['tipo', 'viaje_id', 'chofer_id', 'mensaje', 'resuelta_en'];
