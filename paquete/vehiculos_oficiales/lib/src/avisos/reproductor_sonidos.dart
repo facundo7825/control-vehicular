@@ -104,6 +104,12 @@ class ReproductorAudioplayers implements ReproductorSonidos {
   /// (el nativo tarda) cuando llegó el corte, al terminar se calla: el timbre nunca queda sonando solo.
   int _generacionBucle = 0;
 
+  /// Las operaciones del bucle (arrancar, cortar, liberar) corren de a una, en orden: el `detener` final de
+  /// un arranque viejo nunca puede callar a un timbre más nuevo, que recién empieza cuando el viejo terminó.
+  Future<void> _colaBucle = Future.value();
+
+  Future<void> _enCola(Future<void> Function() accion) => _colaBucle = _colaBucle.then((_) => _intentar(accion));
+
   @override
   Future<void> reproducir(Sonido sonido) => _intentar(() async {
     final p = _unaVez ??= _crear();
@@ -112,36 +118,41 @@ class ReproductorAudioplayers implements ReproductorSonidos {
   });
 
   @override
-  Future<void> repetir(Sonido sonido) => _intentar(() async {
+  Future<void> repetir(Sonido sonido) {
     final generacion = ++_generacionBucle;
-    final p = _bucle ??= _crear();
-    await p.detener();
-    if (generacion != _generacionBucle) return;
-    try {
-      await p.tocar(sonido.archivo, enBucle: true, contexto: contextoBucle);
-    } finally {
-      if (generacion != _generacionBucle) await p.detener();
-    }
-  });
+    return _enCola(() async {
+      if (generacion != _generacionBucle) return; // lo cortaron antes de empezar
+      final p = _bucle ??= _crear();
+      await p.detener();
+      if (generacion != _generacionBucle) return;
+      try {
+        await p.tocar(sonido.archivo, enBucle: true, contexto: contextoBucle);
+      } finally {
+        if (generacion != _generacionBucle) await p.detener();
+      }
+    });
+  }
 
   @override
   Future<void> detenerBucle() {
     _generacionBucle++;
-    return _intentar(() async => _bucle?.detener());
+    return _enCola(() async => _bucle?.detener());
   }
 
   @override
   Future<void> vibrar() => _intentar(HapticFeedback.vibrate);
 
   @override
-  Future<void> liberar() async {
+  Future<void> liberar() {
     _generacionBucle++;
-    final unaVez = _unaVez;
-    final bucle = _bucle;
-    _unaVez = null;
-    _bucle = null;
-    await _intentar(() async => unaVez?.liberar());
-    await _intentar(() async => bucle?.liberar());
+    return _enCola(() async {
+      final unaVez = _unaVez;
+      final bucle = _bucle;
+      _unaVez = null;
+      _bucle = null;
+      await _intentar(() async => unaVez?.liberar());
+      await _intentar(() async => bucle?.liberar());
+    });
   }
 
   static Future<void> _intentar(Future<void> Function() accion) async {

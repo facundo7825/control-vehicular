@@ -48,9 +48,10 @@ void main() {
     await pumpEventQueue();
     final j = jugadores.single;
 
-    await r.detenerBucle(); // llega antes de que el reproductor termine de preparar el sonido
+    // Llega antes de que el reproductor termine de preparar el sonido (corre cuando el arranque termina).
+    final corte = r.detenerBucle();
     j.demora!.complete();
-    await pumpEventQueue();
+    await corte;
 
     expect(j.sonando, isFalse);
   });
@@ -58,12 +59,29 @@ void main() {
   test('un bucle nuevo después de detener sí suena', () async {
     unawaited(r.repetir(Sonido.oferta));
     await pumpEventQueue();
-    await r.detenerBucle();
+    final corte = r.detenerBucle();
     final j = jugadores.single..demora!.complete();
-    await pumpEventQueue();
+    await corte;
 
     j.demora = null;
     await r.repetir(Sonido.oferta);
+    expect(j.sonando, isTrue);
+    expect(j.enBucle, isTrue);
+  });
+
+  test('un arranque viejo que termina tarde no calla al bucle nuevo', () async {
+    unawaited(r.repetir(Sonido.oferta)); // A: tarda en preparar el sonido
+    await pumpEventQueue();
+    final j = jugadores.single;
+    final demoraA = j.demora!;
+    j.demora = null;
+
+    unawaited(r.detenerBucle());
+    unawaited(r.repetir(Sonido.oferta)); // B
+    await pumpEventQueue();
+    demoraA.complete(); // recién ahora termina A
+    await pumpEventQueue();
+
     expect(j.sonando, isTrue);
     expect(j.enBucle, isTrue);
   });
@@ -73,8 +91,8 @@ void main() {
     unawaited(r.reproducir(Sonido.llego));
     await pumpEventQueue();
 
-    final bucle = jugadores[0].contextos.single;
-    final unaVez = jugadores[1].contextos.single;
+    final bucle = jugadores.singleWhere((j) => j.enBucle == true).contextos.single;
+    final unaVez = jugadores.singleWhere((j) => j.enBucle == false).contextos.single;
     expect(bucle.android.usageType, AndroidUsageType.notificationRingtone);
     expect(unaVez.android.usageType, AndroidUsageType.notification);
     for (final c in [bucle, unaVez]) {
