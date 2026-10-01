@@ -53,9 +53,9 @@ Datos de demo: vehículos AB123CD, AC456EF y AD789GH; "Juez" marcado como cargo 
 
 ## 2. Guion sugerido
 
-1. **Panel** (`/admin`): mostrar usuarios y roles, vehículos, cargos prioritarios, parámetros y el **mapa en vivo**.
+1. **Panel** (`/admin`): mostrar usuarios y roles, vehículos, cargos prioritarios, parámetros y el **mapa en vivo** (OpenStreetMap sin clave): todos los choferes con turno abierto, con color por estado (libre verde, en viaje azul, reservado pronto ámbar, sin señal gris), y los viajes activos con origen y destino unidos por una línea. Se actualiza cada 10 s.
 2. **Celular — inicio de turno:** abrir host_prueba → "Carlos Chofer" → Herramientas → *Vehículos oficiales* → elegir un vehículo → aceptar el permiso de ubicación. Aparece la notificación fija "Turno activo – compartiendo ubicación". En el panel, Carlos aparece en el mapa como **libre**.
-3. **Compu — pedido inmediato:** en http://localhost:5000 entrar como "Ana Pérez" → *Vehículos oficiales* → tocar el mapa para marcar origen y destino (cerca de donde está el celular) → *Pedir el más cercano*.
+3. **Compu — pedido inmediato:** en http://localhost:5000 entrar como "Ana Pérez" → *Vehículos oficiales* → permitir la ubicación en Chrome: el mapa se centra ahí y el **origen es la ubicación actual**. Escribir el destino (p. ej. una calle de la ciudad) y tocar la **lupa** o Enter → elegir una sugerencia (también se puede tocar el mapa) → *Pedir el más cercano*. Con "Cambiar origen" se puede marcar otro origen.
 4. **Celular — oferta:** aparece la oferta a pantalla completa con la cuenta regresiva → *Aceptar* → *Voy en camino* → *Llegué* → *Iniciar viaje* → *Finalizar*. Mientras tanto, en la compu Ana ve el estado, el auto acercándose y el **tiempo estimado de llegada**.
 5. **Viaje obligatorio:** en la compu salir y entrar como "Jorge Juez" → pedir un viaje. El celular muestra **"Viaje asignado"** sin opción de rechazar ni cancelar.
 6. **Reserva:** como Ana → *Reservar para más tarde* → mañana a las 10:00 → elegir a Carlos → confirmar. En el celular: *Agenda* → la solicitud → *Aceptar*. En el mapa del chofer aparece la próxima reserva.
@@ -67,5 +67,7 @@ Datos de demo: vehículos AB123CD, AC456EF y AD789GH; "Juez" marcado como cargo 
 
 - **El celular no conecta** ("Error de conexión"): misma red Wi-Fi, firewall abierto (paso 0.1), y que la compu no haya cambiado de IP (si cambió, volver a compilar).
 - **"Sin señal de GPS por ahora"** en el celular: activar la ubicación y salir a un lugar con señal; el aviso se va solo cuando llegan posiciones.
+- **La búsqueda de destino dice "Sin resultados":** usa el buscador gratuito de OpenStreetMap (Nominatim), que no autocompleta: hay que tocar la lupa o Enter. Si no responde (sin internet o bloqueado), el backend deja de consultarlo por un minuto; mientras tanto se puede tocar el mapa para marcar el destino.
+- **Chrome no toma la ubicación:** solo la pide en `http://localhost`. Si se abrió por IP, el origen se marca a mano.
 - **La oferta no llega:** el chofer tiene que estar **libre** (turno abierto y ubicación reciente). Revisarlo en el mapa del panel.
 - **Reserva rechazada por anticipación:** se pide con al menos 60 minutos de anticipación (parámetro editable en el panel).
