@@ -38,6 +38,9 @@ class MaquinaEstadosViaje
     /** Estados desde los que el admin puede reasignar el viaje a otro chofer (queda aceptado). */
     private const REASIGNABLES = [E::Buscando, E::Ofrecido, E::Aceptado, E::EnCamino, E::Llego, E::SinChofer];
 
+    /** Estados en los que el viaje todavía no tiene chofer: el admin puede asignarlo a mano. */
+    private const SIN_ASIGNAR = [E::Buscando, E::Ofrecido, E::SinChofer];
+
     private const MARCAS = [
         'aceptado' => 'aceptado_en',
         'llego' => 'llego_en',
@@ -78,11 +81,23 @@ class MaquinaEstadosViaje
      */
     public function reasignar(Viaje $viaje, int $choferId, ?int $vehiculoId): void
     {
-        DB::transaction(function () use ($viaje, $choferId, $vehiculoId) {
+        $this->asignarDirecto($viaje, $choferId, $vehiculoId, self::REASIGNABLES, 'reasignarse');
+    }
+
+    /** El admin asigna a mano un viaje que todavía no tiene chofer (buscando, ofrecido o sin chofer). */
+    public function asignar(Viaje $viaje, int $choferId, ?int $vehiculoId): void
+    {
+        $this->asignarDirecto($viaje, $choferId, $vehiculoId, self::SIN_ASIGNAR, 'asignarse');
+    }
+
+    /** @param  array<int, E>  $desde */
+    private function asignarDirecto(Viaje $viaje, int $choferId, ?int $vehiculoId, array $desde, string $accion): void
+    {
+        DB::transaction(function () use ($viaje, $choferId, $vehiculoId, $desde, $accion) {
             $this->sincronizarConFilaBloqueada($viaje);
 
-            if (! in_array($viaje->estado, self::REASIGNABLES, true)) {
-                throw new TransicionInvalida("El viaje no puede reasignarse en estado {$viaje->estado->value}.");
+            if (! in_array($viaje->estado, $desde, true)) {
+                throw new TransicionInvalida("El viaje no puede {$accion} en estado {$viaje->estado->value}.");
             }
 
             $this->guardar($viaje, E::Aceptado, [
