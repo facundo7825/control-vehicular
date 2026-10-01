@@ -29,7 +29,7 @@ return [
         // nominatim (OpenStreetMap, solo desarrollo/demos) | google (Places, usa mapas.google_api_key) | falso
         'driver' => env('LUGARES_DRIVER', 'nominatim'),
         // La política de Nominatim exige un User-Agent identificable de la aplicación.
-        'user_agent' => env('LUGARES_USER_AGENT', 'ControlVehiculos/1.0 (demo; facundo7825@gmail.com)'),
+        'user_agent' => env('LUGARES_USER_AGENT', 'VehiculosOficiales/1.0 (+https://github.com/facundo7825/control-vehicular)'),
     ],
 
     'notificaciones' => [
