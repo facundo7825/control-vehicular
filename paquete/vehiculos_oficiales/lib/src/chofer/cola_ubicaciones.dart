@@ -21,6 +21,12 @@ class ColaUbicaciones {
     }
   }
 
+  /// Todos, en orden (para guardarlos en disco).
+  List<PuntoGps> get puntos => _puntos.values.toList();
+
+  /// Agrega puntos guardados (al retomar un turno), con las mismas reglas que [agregar].
+  void cargar(Iterable<PuntoGps> puntos) => puntos.forEach(agregar);
+
   /// Los [n] más viejos, en orden.
   List<PuntoGps> primeros(int n) => _puntos.values.take(n).toList();
 

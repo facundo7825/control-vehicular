@@ -6,6 +6,7 @@ use App\Enums\EstadoViaje;
 use App\Enums\ResultadoOferta;
 use App\Enums\TipoViaje;
 use App\Http\Resources\ViajeResource;
+use App\Excepciones\AccionNoPermitida;
 use App\Models\OfertaViaje;
 use App\Models\Viaje;
 use App\Servicios\ServicioViaje;
@@ -96,6 +97,20 @@ class ViajeController extends Controller
                 'viaje' => new ViajeResource($oferta->viaje->load(self::RELACIONES)),
             ] : null,
         ]);
+    }
+
+    /** Detalle de un viaje: lo ve su solicitante, su chofer actual o un admin. */
+    public function show(Request $request, Viaje $viaje): ViajeResource
+    {
+        $usuario = $request->user();
+
+        if (! $usuario->esAdmin()
+            && $viaje->solicitante_id !== $usuario->id
+            && $viaje->chofer_id !== $usuario->id) {
+            throw new AccionNoPermitida('Este viaje no es tuyo.');
+        }
+
+        return new ViajeResource($viaje->load(self::RELACIONES));
     }
 
     public function avanzar(Request $request, Viaje $viaje): ViajeResource

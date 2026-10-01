@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -23,15 +24,17 @@ void main() {
   late ApiChofer api;
   late UbicadorFalso gps;
   late TiempoRealFalso tr;
+  late AlmacenColaMemoria almacen;
 
   setUp(() {
     api = ApiChofer();
     gps = UbicadorFalso();
     tr = TiempoRealFalso();
+    almacen = AlmacenColaMemoria();
   });
 
   ProviderContainer crear() {
-    final c = EntornoPrueba().contenedor([
+    final c = (EntornoPrueba()..almacenCola = almacen).contenedor([
       apiProvider.overrideWithValue(api),
       ubicadorProvider.overrideWithValue(gps),
       tiempoRealProvider.overrideWithValue(tr),
@@ -542,6 +545,218 @@ void main() {
       expect(gps.siguiendo, isFalse);
       async.elapse(const Duration(minutes: 1));
       expect(envios(), 0);
+    });
+  });
+
+  group('cola persistente', () {
+    test('los puntos sin enviar se guardan, como mucho una escritura cada 5 s', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        crear();
+        async.flushMicrotasks();
+        api.erroresUbicacion.addAll(List.filled(5, const SinConexion()));
+
+        gps.emitir(punto(0));
+        async.elapse(const Duration(seconds: 4));
+        expect(almacen.escrituras, isEmpty);
+        async.elapse(const Duration(seconds: 1));
+        expect(segundos(almacen.escrituras.single), [0]);
+        expect(almacen.turnoId, 1);
+
+        // Un punto encolado por segundo durante 20 s: 4 escrituras, no 20.
+        almacen.escrituras.clear();
+        for (var s = 1; s <= 20; s++) {
+          gps.emitir(punto(s * 10));
+          async.elapse(const Duration(seconds: 1));
+        }
+        expect(almacen.escrituras, hasLength(4));
+        expect(segundos(almacen.puntos), [for (var s = 0; s <= 20; s++) s * 10]);
+      });
+    });
+
+    test('tras un envío confirmado lo guardado refleja la cola reducida', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        crear();
+        async.flushMicrotasks();
+
+        gps.emitir(punto(0));
+        async.elapse(const Duration(seconds: 5));
+        expect(segundos(almacen.puntos), [0]);
+        gps.emitir(punto(10));
+        async.elapse(const Duration(seconds: 5)); // sale el lote [0, 10]
+        expect(segundos(api.lotes.single), [0, 10]);
+        expect(almacen.puntos, isEmpty);
+        expect(almacen.turnoId, 1);
+      });
+    });
+
+    test('con la cola vacía no se reescribe lo guardado si ya estaba vacío', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        crear();
+        async.flushMicrotasks();
+
+        // Cada punto sale antes de que venza su guardado periódico: solo quedan los guardados de después
+        // de cada envío, todos con la cola vacía.
+        for (var s = 0; s < 5; s++) {
+          async.elapse(const Duration(seconds: 9));
+          gps.emitir(punto(s * 10 + 9));
+          async.elapse(const Duration(seconds: 1));
+        }
+        expect(api.lotes, hasLength(5));
+        expect(almacen.escrituras, [isEmpty]);
+
+        // Un guardado con puntos vuelve a habilitar el vacío siguiente (lo guardado refleja la cola reducida).
+        gps.emitir(punto(59));
+        async.elapse(const Duration(seconds: 5));
+        expect(segundos(almacen.puntos), [59]);
+        async.elapse(const Duration(seconds: 5));
+        expect(api.lotes, hasLength(6));
+        expect(almacen.puntos, isEmpty);
+        expect(almacen.escrituras, hasLength(3));
+      });
+    });
+
+    test('al reiniciar con el mismo turno abierto, lo guardado vuelve a la cola y sale en orden', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        almacen
+          ..turnoId = 1
+          ..puntos = [punto(10), punto(0)];
+        crear();
+        async.flushMicrotasks();
+
+        gps.emitir(punto(30));
+        async.elapse(const Duration(seconds: 10));
+        expect(segundos(api.lotes.single), [0, 10, 30]);
+      });
+    });
+
+    test('cerrar el módulo guarda lo pendiente y al volver a abrirlo se retoma', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        final c1 = crear();
+        async.flushMicrotasks();
+        gps
+          ..emitir(punto(0))
+          ..emitir(punto(10));
+        c1.dispose();
+        async.flushMicrotasks();
+        expect(segundos(almacen.puntos), [0, 10]);
+
+        gps = UbicadorFalso();
+        crear();
+        async.flushMicrotasks();
+        async.elapse(const Duration(seconds: 10));
+        expect(segundos(api.lotes.single), [0, 10]);
+      });
+    });
+
+    test('lo guardado de otro turno se descarta', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        almacen
+          ..turnoId = 99
+          ..puntos = [punto(0)];
+        crear();
+        async.flushMicrotasks();
+
+        expect(almacen.guardado, isFalse);
+        gps.emitir(punto(30));
+        async.elapse(const Duration(seconds: 10));
+        expect(segundos(api.lotes.single), [30]);
+      });
+    });
+
+    test('sin turno al abrir se borra lo guardado', () {
+      fakeAsync((async) {
+        almacen
+          ..turnoId = 1
+          ..puntos = [punto(0)];
+        crear();
+        async.flushMicrotasks();
+
+        expect(almacen.guardado, isFalse);
+      });
+    });
+
+    test('finalizar el turno borra lo guardado y no se vuelve a escribir', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        final c = crear();
+        async.flushMicrotasks();
+        api.erroresUbicacion.add(const SinConexion());
+        gps.emitir(punto(0));
+        async.elapse(const Duration(seconds: 5));
+        expect(almacen.guardado, isTrue);
+
+        c.read(turnoProvider.notifier).finalizar();
+        async.flushMicrotasks();
+        expect(c.read(turnoProvider).value, isNull);
+        expect(almacen.guardado, isFalse);
+
+        final escrituras = almacen.escrituras.length;
+        async.elapse(const Duration(minutes: 1));
+        c.dispose();
+        async.flushMicrotasks();
+        expect(almacen.escrituras, hasLength(escrituras));
+        expect(almacen.guardado, isFalse);
+      });
+    });
+
+    test('un 422 "Iniciá un turno…" del envío borra lo guardado', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        crear();
+        async.flushMicrotasks();
+        gps.emitir(punto(0));
+        async.elapse(const Duration(seconds: 5));
+        expect(almacen.guardado, isTrue);
+
+        api
+          ..turno = null
+          ..erroresUbicacion.add(const ErrorNegocio('Iniciá un turno para compartir tu ubicación.'));
+        async.elapse(const Duration(seconds: 5));
+
+        expect(gps.siguiendo, isFalse);
+        expect(almacen.guardado, isFalse);
+      });
+    });
+
+    test('después de un 401 no se vuelve a escribir lo pendiente', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        final c = crear();
+        async.flushMicrotasks();
+
+        c.read(avisoSesionProvider).avisar();
+        gps.emitir(punto(0));
+        async.elapse(const Duration(seconds: 5));
+        c.dispose();
+        async.flushMicrotasks();
+
+        expect(almacen.escrituras, isEmpty);
+      });
+    });
+
+    test('un almacén que falla no rompe el rastreo', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        almacen.error = const FileSystemException('disco lleno');
+        final c = crear();
+        async.flushMicrotasks();
+        expect(gps.siguiendo, isTrue);
+
+        gps.emitir(punto(0));
+        async.elapse(const Duration(seconds: 10));
+        expect(segundos(api.lotes.single), [0]);
+        expect(gps.siguiendo, isTrue);
+
+        c.read(turnoProvider.notifier).finalizar();
+        async.flushMicrotasks();
+        expect(c.read(turnoProvider).value, isNull);
+      });
     });
   });
 }

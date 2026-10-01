@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/errores_api.dart';
+import '../chofer/almacen_cola.dart';
 import '../entorno.dart';
 import '../modelos/modelos.dart';
 import 'almacen_token.dart';
@@ -62,6 +63,7 @@ class SesionNotifier extends Notifier<EstadoSesion> {
     aviso.escuchar(() {
       state = const SesionVencida();
       unawaited(_almacenar('borrar', (a) => a.borrar()));
+      unawaited(_borrarCola());
     });
     Future.microtask(iniciar);
     return const SesionIniciando();
@@ -81,14 +83,19 @@ class SesionNotifier extends Notifier<EstadoSesion> {
       api.cliente.token = r.token;
       // Si no se puede guardar, igual se sigue: solo se pierde el respaldo ante una caída del PJ.
       await _almacenar('guardar', (a) => a.guardar(tokenPJ, r.token));
-      if (ref.mounted) state = SesionLista(r.usuario);
+      if (ref.mounted) _lista(SesionLista(r.usuario));
     } on SesionInvalida {
       // El aviso ya pasó el estado a SesionVencida y llamó a la app principal.
     } on AccesoDenegado catch (e) {
       if (ref.mounted) state = SesionDeshabilitada(e.mensaje);
     } on ServicioNoDisponible {
       final respaldo = await _conTokenGuardado(tokenPJ);
-      if (ref.mounted) state = respaldo ?? const SesionIdentidadNoDisponible();
+      if (!ref.mounted) return;
+      if (respaldo != null) {
+        _lista(respaldo);
+      } else {
+        state = const SesionIdentidadNoDisponible();
+      }
     } on ErrorApi catch (e) {
       if (ref.mounted) state = SesionConError(e.mensaje);
     } catch (e) {
@@ -108,8 +115,25 @@ class SesionNotifier extends Notifier<EstadoSesion> {
     }
   }
 
+  /// Spec 10: la cola de ubicaciones solo la retoma el turno del chofer. Si la sesión es de alguien que no
+  /// es chofer (otro usuario en el mismo teléfono, o un chofer que cambió de rol), nadie la borraría.
+  void _lista(SesionLista lista) {
+    state = lista;
+    if (!lista.usuario.esChofer) unawaited(_borrarCola());
+  }
+
+  /// Spec 10: al cerrarse la sesión (401) no quedan en el dispositivo ubicaciones del turno sin enviar.
+  /// Nunca lanza.
+  Future<void> _borrarCola() async {
+    try {
+      await ref.read(almacenColaProvider).borrar();
+    } catch (e) {
+      debugPrint('vehiculos_oficiales: no se pudo borrar la cola de ubicaciones guardada (${e.runtimeType}).');
+    }
+  }
+
   /// Spec 9: si el PJ no responde pero el token Sanctum de esta misma sesión sigue vigente, se sigue.
-  Future<EstadoSesion?> _conTokenGuardado(String tokenPJ) async {
+  Future<SesionLista?> _conTokenGuardado(String tokenPJ) async {
     final guardado = await _almacenar('leer', (a) => a.leer(tokenPJ));
     if (guardado == null) return null;
 

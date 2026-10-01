@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../api/api_vehiculos.dart';
 import '../api/errores_api.dart';
 import '../entorno.dart';
 import '../modelos/modelos.dart';
@@ -83,6 +84,8 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
     });
 
     final inicial = await _consultar(null);
+    // Descartado mientras consultaba: el onDispose ya corrió y no cancelaría un canal abierto ahora.
+    if (!ref.mounted) return inicial;
     _seguir(inicial.viaje);
     return inicial;
   }
@@ -234,9 +237,16 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
       final historial = (await api.misViajes()).historial;
       viaje = historial.where((v) => v.id == previo.id).firstOrNull;
     }
-    // Un viaje ya terminado se queda en pantalla hasta que el usuario lo descarte.
-    if (viaje == null && previo != null && previo.estado.terminado) viaje = previo;
+    // El chofer lo busca por su id (el historial no trae viajes que ya no son suyos).
+    if (viaje == null && previo != null && !previo.estado.terminado && _esSuyo(previo) && ref.mounted) {
+      viaje = await _comoTermino(api, previo);
+    }
+    // Un viaje ya terminado (o, para el chofer, que ya no es suyo) se queda en pantalla hasta que el
+    // usuario lo descarte.
+    if (viaje == null && previo != null && (previo.estado.terminado || _yaNoEsSuyo(previo))) viaje = previo;
     _recordarFinal(viaje);
+    // Descartado mientras se consultaba: quien llamó ya no usa el resultado (y el estado no se puede leer).
+    if (!ref.mounted) return SeguimientoViaje(viaje: viaje, oferta: actual.oferta);
 
     UbicacionChofer? ubicacion = viaje?.chofer?.id == state.value?.viaje?.chofer?.id
         ? state.value?.ubicacionChofer
@@ -261,6 +271,48 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
     }
     return SeguimientoViaje(viaje: viaje, oferta: actual.oferta, ubicacionChofer: ubicacion);
   }
+
+  /// Chofer: el viaje es suyo (lo tiene asignado).
+  bool _esSuyo(Viaje v) => _usuario.esChofer && v.chofer?.id == _usuario.id;
+
+  /// Chofer: el viaje que seguía se lo reasignaron a otro o volvió a buscar chofer.
+  bool _yaNoEsSuyo(Viaje v) => _usuario.esChofer && v.chofer?.id != _usuario.id;
+
+  /// Chofer: el viaje que seguía ya no está en `viajes/actual` (terminó o se lo sacaron mientras no había
+  /// socket). Devuelve cómo quedó para mostrar su pantalla de fin, o `null` si no se puede saber (se vuelve
+  /// al mapa, como sin esta consulta). Un 403 es "ya no es tuyo": el mismo viaje, sin chofer.
+  Future<Viaje?> _comoTermino(ApiVehiculos api, Viaje previo) async {
+    try {
+      final v = await api.viaje(previo.id);
+      if (_revive(v)) return null;
+      return v.estado.terminado || _yaNoEsSuyo(v) ? v : null;
+    } on SesionInvalida {
+      rethrow;
+    } on AccesoDenegado {
+      return _sinChofer(previo);
+    } on ErrorApi {
+      return null;
+    }
+  }
+
+  static Viaje _sinChofer(Viaje v) => Viaje(
+    id: v.id,
+    tipo: v.tipo,
+    modo: v.modo,
+    estado: v.estado,
+    obligatorio: v.obligatorio,
+    origen: v.origen,
+    destino: v.destino,
+    motivo: v.motivo,
+    programadoPara: v.programadoPara,
+    duracionEstimadaMin: v.duracionEstimadaMin,
+    solicitante: v.solicitante,
+    aceptadoEn: v.aceptadoEn,
+    llegoEn: v.llegoEn,
+    iniciadoEn: v.iniciadoEn,
+    finalizadoEn: v.finalizadoEn,
+    canceladoEn: v.canceladoEn,
+  );
 
   /// Un evento que no se puede leer (p. ej. un estado nuevo del backend) se ignora: el respaldo o el
   /// próximo evento traen el estado.

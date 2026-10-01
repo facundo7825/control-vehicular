@@ -358,6 +358,129 @@ void main() {
     });
   });
 
+  group('sin socket, el viaje desaparece de viajes/actual: se consulta cómo terminó', () {
+    /// Socket caído, viaje 1 "en_camino" del chofer; en el servidor ya no es su viaje actual.
+    ProviderContainer desaparecido(FakeAsync async) {
+      tr = TiempoRealFalso(estado: EstadoConexion.desconectado);
+      api.actual = ViajeActual(viaje: viaje(estado: 'en_camino', conChofer: true));
+      final c = crear();
+      async.flushMicrotasks();
+      api.actual = ViajeActual.vacio;
+      return c;
+    }
+
+    for (final final_ in ['cancelado', 'finalizado']) {
+      test('$final_: se muestra terminado hasta descartarlo y no revive', () {
+        fakeAsync((async) {
+          final c = desaparecido(async);
+          api.detalles[1] = viaje(estado: final_, conChofer: true);
+
+          async.elapse(const Duration(seconds: 10));
+          expect(api.consultasDetalle, [1]);
+          expect(leer(c).viaje!.estado.valor, final_);
+
+          async.elapse(const Duration(seconds: 10)); // sigue en pantalla, sin otra consulta del detalle
+          expect(leer(c).viaje!.estado.valor, final_);
+          expect(api.consultasDetalle, [1]);
+
+          c.read(viajeActualProvider.notifier).descartar();
+          api.actual = ViajeActual(viaje: viaje(estado: 'en_camino', conChofer: true)); // consulta atrasada
+          async.elapse(const Duration(seconds: 10));
+          expect(leer(c).viaje, isNull);
+        });
+      });
+    }
+
+    test('también al reconectar el socket', () {
+      fakeAsync((async) {
+        final c = desaparecido(async);
+        api.detalles[1] = viaje(estado: 'cancelado', conChofer: true);
+
+        tr.cambiar(EstadoConexion.conectado);
+        async.flushMicrotasks();
+
+        expect(leer(c).viaje!.estado, EstadoViaje.cancelado);
+      });
+    });
+
+    test('un 403 es "ya no es tuyo": queda sin chofer propio hasta descartarlo', () {
+      fakeAsync((async) {
+        final c = desaparecido(async);
+        api.errorDetalle = const AccesoDenegado('Este viaje no es tuyo.');
+
+        async.elapse(const Duration(seconds: 10));
+        expect(leer(c).viaje!.id, 1);
+        expect(leer(c).viaje!.chofer?.id, isNot(chofer.id));
+        expect(c.read(viajeActualProvider).hasError, isFalse);
+
+        async.elapse(const Duration(seconds: 10)); // se conserva sin volver a preguntar
+        expect(leer(c).viaje!.id, 1);
+        expect(api.consultasDetalle, [1]);
+
+        c.read(viajeActualProvider.notifier).descartar();
+        expect(leer(c).viaje, isNull);
+      });
+    });
+
+    test('con otro chofer es "ya no es tuyo"', () {
+      fakeAsync((async) {
+        final c = desaparecido(async);
+        api.detalles[1] = Viaje.fromJson(
+          jsonViaje(viaje(estado: 'aceptado', conChofer: true))
+            ..['chofer'] = {'id': 9, 'nombre': 'Otro', 'telefono': null},
+        );
+
+        async.elapse(const Duration(seconds: 10));
+
+        expect(leer(c).viaje!.chofer!.id, 9);
+        async.elapse(const Duration(seconds: 10));
+        expect(leer(c).viaje!.chofer!.id, 9);
+        expect(api.consultasDetalle, [1]);
+      });
+    });
+
+    test('una sesión inválida en la consulta conserva el viaje, sin errores', () {
+      fakeAsync((async) {
+        final c = desaparecido(async);
+        api.errorDetalle = const SesionInvalida();
+
+        async.elapse(const Duration(seconds: 10));
+
+        expect(c.read(viajeActualProvider).hasError, isFalse);
+        expect(leer(c).viaje!.estado, EstadoViaje.enCamino);
+      });
+    });
+
+    test('si el notifier se descarta mientras se consulta, no hay errores sin capturar', () {
+      fakeAsync((async) {
+        final c = desaparecido(async);
+        api.detalles[1] = viaje(estado: 'cancelado', conChofer: true);
+        api.demoraActual = Completer<void>();
+
+        async.elapse(const Duration(seconds: 10)); // el sondeo queda esperando viajes/actual
+        c.dispose();
+        api.demoraActual!.complete();
+        async.flushMicrotasks();
+
+        expect(api.consultasDetalle, isEmpty);
+      });
+    });
+
+    for (final error in [const SinConexion(), const ErrorServidor(), const NoEncontrado()]) {
+      test('${error.runtimeType} en la consulta: queda sin viaje, sin errores', () {
+        fakeAsync((async) {
+          final c = desaparecido(async);
+          api.errorDetalle = error;
+
+          async.elapse(const Duration(seconds: 10));
+
+          expect(c.read(viajeActualProvider).hasError, isFalse);
+          expect(leer(c).viaje, isNull);
+        });
+      });
+    }
+  });
+
   group('un evento atrasado no revive un viaje cancelado o finalizado', () {
     for (final final_ in ['cancelado', 'finalizado']) {
       test('$final_: tras descartar, un "en_camino" tardío del mismo viaje se ignora', () {
