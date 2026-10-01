@@ -229,7 +229,8 @@ class _EnCursoState extends ConsumerState<_EnCurso> {
   }
 }
 
-/// Arriba del mapa: la flecha de la próxima maniobra, la indicación y lo que falta ("4,1 km · 9 min").
+/// Arriba del mapa: la flecha de la próxima maniobra, la indicación (o "Recalculando…") y lo que falta
+/// ("4,1 km · 9 min").
 class _CartelGuia extends StatelessWidget {
   const _CartelGuia({required this.guia});
 
@@ -246,14 +247,20 @@ class _CartelGuia extends StatelessWidget {
         padding: const EdgeInsets.all(12),
         child: Row(
           children: [
-            Icon(iconoManiobra(guia.tipo), size: 40, color: colores.onPrimaryContainer),
+            Icon(guia.fueraDeRuta ? Icons.sync : iconoManiobra(guia.tipo), size: 40, color: colores.onPrimaryContainer),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(guia.texto, style: tema.textTheme.titleMedium?.copyWith(color: colores.onPrimaryContainer)),
+                  Text(
+                    // Fuera del recorrido la indicación ya no sirve: se avisa hasta que llegue el nuevo.
+                    guia.fueraDeRuta ? 'Recalculando…' : guia.texto,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: tema.textTheme.titleMedium?.copyWith(color: colores.onPrimaryContainer),
+                  ),
                   Text(guia.resumen, style: tema.textTheme.bodyMedium?.copyWith(color: colores.onPrimaryContainer)),
                 ],
               ),

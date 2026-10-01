@@ -7,7 +7,7 @@ import 'package:intl/intl.dart';
 import '../mapa/ruta.dart';
 import '../modelos/modelos.dart';
 import '../sesion/sesion.dart';
-import '../ui/comunes/comunes.dart';
+import '../comunes/formato.dart';
 import '../viaje/recorrido_viaje.dart';
 import '../viaje/viaje_actual.dart';
 import 'pasos_viaje.dart';
@@ -37,7 +37,14 @@ class TramoChoferNotifier extends Notifier<TramoRuta?> {
     _recalculo = null;
     if (hacia == null) return null;
     final limitador = _recalculo = Limitador<Coordenada>(intervalo, (desde) {
-      if (ref.mounted) state = TramoRuta(desde, hacia);
+      if (!ref.mounted) return;
+      final nuevo = TramoRuta(desde, hacia);
+      // Desde el mismo lugar (redondeado) el tramo no cambia: se vuelve a pedir su ruta (la anterior falló).
+      if (nuevo == stateOrNull) {
+        ref.invalidate(rutaProvider(nuevo));
+      } else {
+        state = nuevo;
+      }
     });
     ref.onDispose(limitador.cancelar);
 
@@ -67,19 +74,27 @@ final rutaChoferProvider = NotifierProvider.autoDispose<RutaDeTramoNotifier, Rut
 final guiaRutaProvider = NotifierProvider.autoDispose<GuiaRutaNotifier, GuiaRuta?>(GuiaRutaNotifier.new);
 
 /// La próxima indicación del chofer, que avanza con su GPS sobre [rutaChoferProvider] (ver [SeguidorRuta]).
-/// Si se sale del recorrido pide otro a [TramoChoferNotifier.recalcular]. Nula sin ruta o sin posición.
+/// Si se sale del recorrido, o si no hay recorrido (falló), pide otro a [TramoChoferNotifier.recalcular]: el
+/// intervalo de ese notifier limita los reintentos. Nula sin ruta o sin posición.
 class GuiaRutaNotifier extends Notifier<GuiaRuta?> {
   @override
   GuiaRuta? build() {
     final ruta = ref.watch(rutaChoferProvider);
     final alDestino = ref.watch(viajeActualProvider.select((s) => s.value?.viaje?.estado == EstadoViaje.enCurso));
-    if (ruta == null) return null;
+    // Cada punto del GPS (aunque repita la posición), así un reintento no depende de moverse.
+    final gps = posicionPropiaProvider.select((s) => s.punto);
+    TramoChoferNotifier tramo() => ref.read(tramoChoferProvider.notifier);
+    if (ruta == null) {
+      ref.listen(gps, (_, p) {
+        if (p != null && ref.read(tramoChoferProvider) != null) tramo().recalcular(p.posicion);
+      });
+      return null;
+    }
     final seguidor = SeguidorRuta(ruta, alDestino: alDestino);
-    ref.listen(posicionPropiaProvider.select((s) => s.punto?.posicion), (_, p) {
+    ref.listen(gps, (_, p) {
       if (p == null) return;
-      state = seguidor.avanzar(p);
-      final tramo = ref.read(tramoChoferProvider.notifier);
-      seguidor.fueraDeRuta ? tramo.recalcular(p) : tramo.enRuta();
+      state = seguidor.avanzar(p.posicion);
+      seguidor.fueraDeRuta ? tramo().recalcular(p.posicion) : tramo().enRuta();
     });
     final aqui = ref.read(posicionPropiaProvider).punto?.posicion;
     return aqui == null ? null : seguidor.avanzar(aqui);
@@ -89,7 +104,13 @@ class GuiaRutaNotifier extends Notifier<GuiaRuta?> {
 /// La próxima indicación para el chofer y lo que falta del recorrido.
 @immutable
 class GuiaRuta {
-  const GuiaRuta({required this.tipo, required this.texto, required this.restanteM, required this.restanteS});
+  const GuiaRuta({
+    required this.tipo,
+    required this.texto,
+    required this.restanteM,
+    required this.restanteS,
+    this.fueraDeRuta = false,
+  });
 
   /// El `tipo` de la maniobra (`derecha`, `rotonda`, `llegada`, …), para la flecha.
   final String tipo;
@@ -98,6 +119,12 @@ class GuiaRuta {
   final String texto;
   final double restanteM;
   final double restanteS;
+
+  /// Se salió del recorrido y se está pidiendo otro: el cartel dice "Recalculando…".
+  final bool fueraDeRuta;
+
+  GuiaRuta recalculando() =>
+      GuiaRuta(tipo: tipo, texto: texto, restanteM: restanteM, restanteS: restanteS, fueraDeRuta: true);
 
   /// P. ej. "4,1 km · 9 min".
   String get resumen => '${formatearDistancia(restanteM)} · ${formatearDuracion(restanteS)}';
@@ -130,6 +157,9 @@ class SeguidorRuta {
   /// Cuánto puede retroceder el avance por el ruido del GPS al desempatar.
   static const retrocesoM = 20.0;
 
+  /// Lo mínimo que puede avanzar por la línea con una posición nueva (ver [avanzar]).
+  static const avanceMinimoM = 150.0;
+
   final Ruta ruta;
 
   /// Yendo al destino (en curso) o al origen: cambia el texto de la llegada.
@@ -142,6 +172,9 @@ class SeguidorRuta {
   double _recorridoM = 0;
   int _fuera = 0;
   GuiaRuta? _guia;
+
+  /// La última posición sobre el recorrido, para saber cuánto se movió.
+  Coordenada? _ultimaEnRuta;
 
   /// La última indicación; nula antes de la primera posición sobre el recorrido.
   GuiaRuta? get guia => _guia;
@@ -159,34 +192,54 @@ class SeguidorRuta {
     return acumulado;
   }
 
-  /// Avanza con una posición nueva y devuelve la indicación (la anterior si quedó fuera del recorrido).
+  /// Avanza con una posición nueva y devuelve la indicación (la anterior si quedó fuera del recorrido; desde
+  /// la segunda seguida, marcada [GuiaRuta.fueraDeRuta]).
   GuiaRuta? avanzar(Coordenada posicion) {
     final puntos = ruta.puntos;
     if (puntos.isEmpty) return _guia;
+    // Se buscan los tramos que empiezan hasta [ventanaM] por delante del avance. Desde la segunda posición,
+    // además, se avanza como mucho un poco más que lo que se movió desde la última sobre el recorrido: así no
+    // salta a una pasada paralela más adelante (p. ej. la otra mano de una avenida, a 20 m).
+    final anterior = _ultimaEnRuta;
+    final hasta = anterior == null
+        ? double.infinity
+        : _recorridoM + math.max(avanceMinimoM, 2 * distanciaMetros(anterior, posicion) + 50);
     final candidatos = <({int tramo, double recorridoM, double desvioM})>[];
     if (puntos.length == 1) {
       candidatos.add((tramo: 0, recorridoM: 0, desvioM: distanciaMetros(posicion, puntos.first)));
     }
+    bool seMira(int i) => i == _tramo || (_acumulado[i] - _recorridoM <= ventanaM && _acumulado[i] <= hasta);
     for (var i = _tramo; i < puntos.length - 1; i++) {
-      if (i > _tramo && _acumulado[i] - _recorridoM > ventanaM) break;
-      final (t, desvio) = _proyectar(posicion, puntos[i], puntos[i + 1]);
-      candidatos.add((tramo: i, recorridoM: _acumulado[i] + t * (_acumulado[i + 1] - _acumulado[i]), desvioM: desvio));
+      if (!seMira(i)) break;
+      final largo = _acumulado[i + 1] - _acumulado[i];
+      final tMax = largo > 0 ? ((hasta - _acumulado[i]) / largo).clamp(0.0, 1.0) : 1.0;
+      final (t, desvio) = _proyectar(posicion, puntos[i], puntos[i + 1], tMax);
+      // El final de un tramo es el principio del siguiente, que también se mira: no se cuenta dos veces
+      // (si no, empataría con el siguiente y frenaría el avance).
+      if (t >= 1 && i + 1 < puntos.length - 1 && seMira(i + 1)) continue;
+      candidatos.add((tramo: i, recorridoM: _acumulado[i] + t * largo, desvioM: desvio));
     }
 
     final mejor = candidatos.map((c) => c.desvioM).reduce(math.min);
     if (mejor > maxDesvioM) {
       _fuera++;
+      final guia = _guia;
+      if (fueraDeRuta && guia != null && !guia.fueraDeRuta) _guia = guia.recalculando();
       return _guia;
     }
     _fuera = 0;
+    _ultimaEnRuta = posicion;
     // Entre las pasadas empatadas, la primera que no vuelve atrás (o, si todas vuelven, la primera).
     final empatados = candidatos.where((c) => c.desvioM <= mejor + empateM).toList();
     final elegido = empatados.firstWhere(
       (c) => c.recorridoM >= _recorridoM - retrocesoM,
       orElse: () => empatados.first,
     );
-    _tramo = elegido.tramo;
-    _recorridoM = elegido.recorridoM;
+    // El ruido del GPS hacia atrás no hace retroceder el avance.
+    if (elegido.recorridoM >= _recorridoM || _guia == null) {
+      _tramo = elegido.tramo;
+      _recorridoM = elegido.recorridoM;
+    }
     return _guia = _armar();
   }
 
@@ -220,15 +273,15 @@ class SeguidorRuta {
   static String _minuscula(String s) => s.isEmpty ? s : s[0].toLowerCase() + s.substring(1);
 
   /// Proyección de [p] sobre el segmento [a]→[b] en un plano local (metros alrededor de [p]): la fracción
-  /// del segmento (0 a 1) y la distancia de [p] a la proyección.
-  static (double, double) _proyectar(Coordenada p, Coordenada a, Coordenada b) {
+  /// del segmento (0 a [tMax]) y la distancia de [p] a la proyección.
+  static (double, double) _proyectar(Coordenada p, Coordenada a, Coordenada b, double tMax) {
     const metrosPorGrado = 6371000 * math.pi / 180;
     final escalaLng = metrosPorGrado * math.cos(p.lat * math.pi / 180);
     final ax = (a.lng - p.lng) * escalaLng, ay = (a.lat - p.lat) * metrosPorGrado;
     final bx = (b.lng - p.lng) * escalaLng, by = (b.lat - p.lat) * metrosPorGrado;
     final dx = bx - ax, dy = by - ay;
     final largo2 = dx * dx + dy * dy;
-    final t = largo2 == 0 ? 0.0 : (-(ax * dx + ay * dy) / largo2).clamp(0.0, 1.0);
+    final t = largo2 == 0 ? 0.0 : (-(ax * dx + ay * dy) / largo2).clamp(0.0, tMax);
     final x = ax + t * dx, y = ay + t * dy;
     return (t, math.sqrt(x * x + y * y));
   }

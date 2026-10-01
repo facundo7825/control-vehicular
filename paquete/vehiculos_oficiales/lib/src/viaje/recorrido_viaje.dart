@@ -94,8 +94,9 @@ final rutaViajeProvider = NotifierProvider.autoDispose<RutaDeTramoNotifier, Ruta
   () => RutaDeTramoNotifier(tramoViajeProvider),
 );
 
-/// La ruta del tramo que da [tramo]. Mientras se pide la de un tramo nuevo hacia el mismo destino sigue la
-/// anterior (así la línea no parpadea cada vez que se recalcula); hacia otro destino, o sin ruta, nula.
+/// La ruta del tramo que da [tramo]. Mientras se pide la de un tramo nuevo hacia el mismo destino, o si esa no
+/// llega (falló), sigue la anterior: así la línea no parpadea ni se pierde al recalcular. Hacia otro destino,
+/// la nueva o nula.
 class RutaDeTramoNotifier extends Notifier<Ruta?> {
   RutaDeTramoNotifier(this.tramo);
 
@@ -110,6 +111,7 @@ class RutaDeTramoNotifier extends Notifier<Ruta?> {
     _anterior = actual;
     if (actual == null) return null;
     final ruta = ref.watch(rutaProvider(actual));
-    return ruta.isLoading ? (mismoDestino ? stateOrNull : null) : ruta.value;
+    final nueva = ruta.isLoading ? null : ruta.value;
+    return nueva ?? (mismoDestino ? stateOrNull : null);
   }
 }

@@ -361,5 +361,62 @@ void main() {
       expect(find.textContaining('llegás'), findsNothing);
       expect(find.text('Voy en camino'), findsOneWidget);
     });
+
+    testWidgets('si el recorrido falla se reintenta a los 30 s (aunque siga en el mismo lugar)', (tester) async {
+      await abrir(tester, viajeJson(), (e) {
+        e.http
+          ..responder('GET', 'ruta', 500, '{"message":"Server Error"}')
+          ..responder('GET', 'ruta', 200, rutaAlOrigen);
+      });
+      await ir(tester, -26.83, -65.23);
+      expect(lineas(tester), isEmpty);
+
+      await ir(tester, -26.83, -65.23);
+      expect(tramosPedidos(), hasLength(1), reason: 'no antes de 30 s');
+      await tester.pump(const Duration(seconds: 30));
+      await esperar(tester);
+
+      expect(tramosPedidos(), ['-26.83,-65.23 → -26.8241,-65.2226', '-26.83,-65.23 → -26.8241,-65.2226']);
+      expect(lineas(tester).single.puntos, hasLength(3));
+      expect(find.text('En 650 m, doblá a la derecha por San Martín'), findsOneWidget);
+    });
+
+    testWidgets('fuera del recorrido dice "Recalculando…"; si el recálculo falla sigue el recorrido anterior', (
+      tester,
+    ) async {
+      await abrir(tester, viajeJson(), (e) {
+        e.http
+          ..responder('GET', 'ruta', 200, rutaAlOrigen)
+          ..responder('GET', 'ruta', 500, '{"message":"Server Error"}');
+      });
+      await ir(tester, -26.83, -65.23);
+      await ir(tester, -26.829, -65.227);
+      expect(find.text('En 650 m, doblá a la derecha por San Martín'), findsOneWidget);
+      await ir(tester, -26.8285, -65.227);
+      expect(find.text('Recalculando…'), findsOneWidget);
+      expect(find.text('En 650 m, doblá a la derecha por San Martín'), findsNothing);
+
+      await tester.pump(const Duration(seconds: 30));
+      await esperar(tester);
+      expect(tramosPedidos(), hasLength(2));
+      expect(lineas(tester).single.puntos, hasLength(3), reason: 'el recálculo falló: sigue el anterior');
+      expect(find.text('Recalculando…'), findsOneWidget);
+
+      await ir(tester, -26.8299, -65.23);
+      expect(find.textContaining('doblá a la derecha por San Martín'), findsOneWidget);
+    });
+
+    for (final estado in ['aceptado', 'llego']) {
+      testWidgets('$estado: el recorrido va al origen', (tester) async {
+        await abrir(tester, viajeJson(estado: estado), (e) => e.http.responder('GET', 'ruta', 200, rutaAlOrigen));
+        await ir(tester, -26.83, -65.23);
+
+        expect(tramosPedidos(), ['-26.83,-65.23 → -26.8241,-65.2226']);
+        expect(lineas(tester).single.puntos, hasLength(3));
+        expect(find.text('En 650 m, doblá a la derecha por San Martín'), findsOneWidget);
+        final texto = tester.widget<Text>(find.text('En 650 m, doblá a la derecha por San Martín'));
+        expect([texto.maxLines, texto.overflow], [2, TextOverflow.ellipsis]);
+      });
+    }
   });
 }

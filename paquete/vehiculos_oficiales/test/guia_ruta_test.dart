@@ -177,6 +177,44 @@ void main() {
     });
   });
 
+  test('el ruido del GPS hacia atrás en el mismo tramo no hace retroceder el avance', () {
+    final s = SeguidorRuta(recta(), alDestino: true);
+    s.avanzar(m(200));
+    expect(s.avanzar(m(300))!.restanteM, closeTo(700, 1));
+    expect(s.avanzar(m(295, 3))!.restanteM, closeTo(700, 1));
+    expect(s.avanzar(m(288, -2))!.restanteM, closeTo(700, 1));
+    expect(s.avanzar(m(320))!.restanteM, closeTo(680, 1));
+  });
+
+  test('avenida de doble mano (ida y vuelta a 20 m): con ruido de 18 m hacia la vuelta no salta adelante', () {
+    // Ida al norte por x = 0, cruce de 20 m y vuelta al sur por x = 20.
+    final puntos = [for (var i = 0; i <= 5; i++) m(i * 100.0), for (var i = 5; i >= 0; i--) m(i * 100.0, 20)];
+    final s = SeguidorRuta(
+      Ruta(
+        distanciaM: 1020,
+        duracionS: 200,
+        puntos: puntos,
+        pasos: [paso(5, 'retorno', 'Pegá la vuelta', puntos[5]), paso(11, 'llegada', 'Llegaste a destino', puntos[11])],
+      ),
+      alDestino: true,
+    );
+    for (final norte in [0.0, 100.0, 200.0, 300.0]) {
+      s.avanzar(m(norte));
+    }
+    var g = s.avanzar(m(350, 18))!;
+    expect(g.tipo, 'retorno');
+    expect(g.restanteM, closeTo(670, 2));
+    g = s.avanzar(m(420, 18))!;
+    expect(g.restanteM, closeTo(600, 2));
+    expect(s.fueraDeRuta, isFalse);
+
+    // Después de pegar la vuelta sí avanza por la vuelta.
+    s.avanzar(m(500, 10));
+    g = s.avanzar(m(400, 20))!;
+    expect(g.tipo, 'llegada');
+    expect(g.restanteM, closeTo(400, 2));
+  });
+
   group('fuera del recorrido', () {
     test('a más de 60 m en 2 posiciones seguidas; mientras tanto la indicación no cambia', () {
       final s = SeguidorRuta(recta(), alDestino: true);
@@ -184,11 +222,15 @@ void main() {
 
       expect(s.avanzar(m(400, 100)), same(antes));
       expect(s.fueraDeRuta, isFalse);
-      expect(s.avanzar(m(500, 120)), same(antes));
+      expect(antes.fueraDeRuta, isFalse);
+      final fuera = s.avanzar(m(500, 120))!;
       expect(s.fueraDeRuta, isTrue);
+      expect(fuera.fueraDeRuta, isTrue, reason: 'el cartel dice "Recalculando…"');
+      expect([fuera.tipo, fuera.texto, fuera.restanteM], [antes.tipo, antes.texto, antes.restanteM]);
 
       s.avanzar(m(400, 10));
       expect(s.fueraDeRuta, isFalse);
+      expect(s.guia!.fueraDeRuta, isFalse);
       expect(s.guia!.restanteM, closeTo(600, 1));
 
       s.avanzar(m(500, 100));
@@ -207,7 +249,7 @@ void main() {
       final s = SeguidorRuta(idaYVuelta(largo: 2000), alDestino: true);
       final antes = s.avanzar(m(0));
       expect(s.avanzar(m(1500)), same(antes));
-      expect(s.avanzar(m(1600)), same(antes));
+      expect(s.avanzar(m(1600))!.restanteM, antes!.restanteM);
       expect(s.fueraDeRuta, isTrue);
     });
   });
