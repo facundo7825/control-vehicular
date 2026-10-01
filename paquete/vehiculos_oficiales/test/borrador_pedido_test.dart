@@ -144,8 +144,72 @@ void main() {
       expect(borrador().origenEsMiUbicacion, isTrue);
       expect(borrador().destino, const Coordenada(2, 2));
       expect(borrador().marcando, PuntoPedido.destino);
-      // Ya había elegido algo: el mapa no salta a la ubicación.
+      // Ya había elegido el destino: el mapa no salta solo a la ubicación, encuadra el pedido.
+      expect(borrador().enfoque!.puntos, [_aqui, const Coordenada(2, 2)]);
+    });
+
+    test('lo marcado mientras se busca que no sea el destino no hace saltar el mapa', () async {
+      ubicador.retener = Completer();
+      final ubicando = notifier().ubicar();
+      notifier().fijar(PuntoPedido.origen, const Coordenada(1, 1));
+      ubicador.retener!.complete();
+      await ubicando;
+
+      expect(borrador().origen, const Coordenada(1, 1));
       expect(borrador().enfoque, isNull);
+    });
+
+    test('con el destino ya elegido, al llegar la ubicación se encuadran ella y el destino', () async {
+      ubicador.retener = Completer();
+      final ubicando = notifier().ubicar();
+      notifier().elegirLugar(_tribunales); // el mapa mira solo el destino
+      ubicador.retener!.complete();
+      await ubicando;
+
+      expect(borrador().origen, _aqui);
+      expect(borrador().enfoque!.puntos, [_aqui, _tribunales.coordenada]);
+    });
+
+    test('"Elegir otro" con el origen en la ubicación actual: el mapa encuadra ubicación y destino', () async {
+      await notifier().ubicar();
+      final v = viaje(estado: 'sin_chofer');
+      final j = jsonViaje(v, conChofer: false)
+        ..['origen'] = {'lat': _aqui.lat + 0.0003, 'lng': _aqui.lng, 'direccion': null};
+      notifier().desdeViaje(Viaje.fromJson(j));
+      final destino = borrador().destino!;
+
+      await notifier().ubicar(); // como al volver a abrir el mapa
+
+      expect(borrador().origen, _aqui);
+      expect(borrador().enfoque!.puntos, [_aqui, destino]);
+    });
+
+    test('"Usar mi ubicación" con destino encuadra los dos', () async {
+      await notifier().ubicar();
+      notifier()
+        ..elegirLugar(_tribunales)
+        ..fijar(PuntoPedido.origen, const Coordenada(1, 1));
+
+      await notifier().ubicar(comoOrigen: true);
+
+      expect(borrador().enfoque!.puntos, [_aqui, _tribunales.coordenada]);
+    });
+
+    test('recuerda si el permiso se negó para siempre (para ofrecer los ajustes)', () async {
+      ubicador
+        ..posicion = null
+        ..permiso = PermisoUbicacion.denegadoParaSiempre;
+
+      await notifier().ubicar();
+      expect(borrador().permisoUbicacion, PermisoUbicacion.denegadoParaSiempre);
+      notifier().limpiar();
+      expect(borrador().permisoUbicacion, PermisoUbicacion.denegadoParaSiempre);
+
+      ubicador
+        ..posicion = _aqui
+        ..permiso = PermisoUbicacion.concedido;
+      await notifier().ubicar();
+      expect(borrador().permisoUbicacion, PermisoUbicacion.concedido);
     });
 
     test('si la ubicación no llega después de elegir el destino, lo que sigue es el origen', () async {

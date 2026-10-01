@@ -10,6 +10,7 @@ import '../../modelos/modelos.dart';
 import '../../solicitante/borrador_pedido.dart';
 import '../../solicitante/busqueda_lugares.dart';
 import '../../solicitante/choferes_mapa.dart';
+import '../../ubicacion/ubicador.dart';
 import '../../viaje/viaje_actual.dart';
 import '../comunes/comunes.dart';
 import '../modulo_app.dart';
@@ -286,6 +287,17 @@ class _PanelPedidoState extends ConsumerState<_PanelPedido> {
                             onPressed: _usarMiUbicacion,
                           ),
                   ),
+                  // Con el permiso negado para siempre el sistema ya no lo pregunta: solo desde los ajustes.
+                  if (b.ubicacion == EstadoUbicacion.noDisponible &&
+                      b.permisoUbicacion == PermisoUbicacion.denegadoParaSiempre)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        icon: const Icon(Icons.settings),
+                        label: const Text('Abrir ajustes'),
+                        onPressed: () => ref.read(ubicadorProvider).abrirAjustes(PermisoUbicacion.denegadoParaSiempre),
+                      ),
+                    ),
                   ListTile(
                     leading: const Icon(Icons.place),
                     title: const Text('Destino'),

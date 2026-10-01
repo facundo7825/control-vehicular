@@ -210,6 +210,9 @@ class UbicadorFalso implements Ubicador {
   }
 
   @override
+  Future<PermisoUbicacion> consultarPermiso() async => permiso;
+
+  @override
   Stream<PuntoGps> seguir(Duration intervalo) {
     intervalos.add(intervalo);
     final gps = _gps = StreamController<PuntoGps>(sync: true);

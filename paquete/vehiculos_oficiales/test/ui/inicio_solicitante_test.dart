@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
 import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real.dart';
+import 'package:vehiculos_oficiales/src/ubicacion/ubicador.dart';
 
 import '../fixtures/payloads.dart' as p;
 import '../soporte/adaptador_falso.dart';
@@ -262,12 +263,13 @@ void main() {
       await buscar(tester);
       await tester.tap(find.text('Tribunales'));
       await tester.pumpAndSettle();
-      final enfoque = enfoqueDelMapa(tester);
+      expect(enfoqueDelMapa(tester)!.puntos, [const Coordenada(-26.83, -65.2)]);
       ubicador.retener!.complete();
       await esperar(tester);
 
       expect(find.text('Tu ubicación actual'), findsOneWidget);
-      expect(enfoqueDelMapa(tester), enfoque); // no salta a la ubicación: ya había elegido algo
+      // No salta solo a la ubicación (ya había elegido el destino): encuadra el pedido entero.
+      expect(enfoqueDelMapa(tester)!.puntos, [const Coordenada(-26.8241, -65.2226), const Coordenada(-26.83, -65.2)]);
       await tester.tap(find.text('Pedir el más cercano'));
       await esperar(tester);
       expect(ultimoCuerpo(), {
@@ -357,6 +359,30 @@ void main() {
 
     expect(e.http.pedidos.where((x) => x.uri.path == '/api/lugares'), hasLength(1));
     expect(find.text('Tribunales'), findsOneWidget);
+  });
+
+  testWidgets('con el permiso negado para siempre ofrece abrir los ajustes', (tester) async {
+    ubicador
+      ..posicion = null
+      ..permiso = PermisoUbicacion.denegadoParaSiempre;
+
+    await abrir(tester);
+    expect(find.text('No pudimos obtener tu ubicación: tocá el mapa o buscá una dirección.'), findsOneWidget);
+    await tester.tap(find.text('Abrir ajustes'));
+    await tester.pump();
+
+    expect(ubicador.ajustesAbiertos, [PermisoUbicacion.denegadoParaSiempre]);
+  });
+
+  testWidgets('con el permiso negado (no para siempre) no ofrece abrir los ajustes', (tester) async {
+    ubicador
+      ..posicion = null
+      ..permiso = PermisoUbicacion.denegado;
+
+    await abrir(tester);
+
+    expect(find.text('No pudimos obtener tu ubicación: tocá el mapa o buscá una dirección.'), findsOneWidget);
+    expect(find.text('Abrir ajustes'), findsNothing);
   });
 
   testWidgets('si la búsqueda falla se ve "Sin resultados"', (tester) async {
@@ -472,5 +498,7 @@ void main() {
     expect(find.text('Plaza Independencia'), findsOneWidget);
     expect(find.text('Tribunales'), findsOneWidget);
     expect(tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Pedir el más cercano')).onPressed, isNotNull);
+    // El mapa sigue mostrando el pedido entero (origen y destino), no solo un punto.
+    expect(enfoqueDelMapa(tester)!.puntos, hasLength(2));
   });
 }

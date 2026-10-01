@@ -28,6 +28,7 @@ class BorradorPedido {
     this.miUbicacion,
     this.origenEsMiUbicacion = false,
     this.enfoque,
+    this.permisoUbicacion,
   });
 
   final Coordenada? origen;
@@ -54,6 +55,10 @@ class BorradorPedido {
 
   /// A dónde tiene que mirar el mapa.
   final Enfoque? enfoque;
+
+  /// Cómo estaba el permiso la última vez que se pidió la ubicación (nulo: todavía no se pidió). Si se
+  /// negó para siempre, la pantalla ofrece abrir los ajustes.
+  final PermisoUbicacion? permisoUbicacion;
 
   bool get completo => origen != null && destino != null;
 
@@ -92,6 +97,7 @@ class BorradorPedido {
     Coordenada? miUbicacion,
     bool? origenEsMiUbicacion,
     Enfoque? enfoque,
+    PermisoUbicacion? permisoUbicacion,
   }) => BorradorPedido(
     origen: origen ?? this.origen,
     destino: destino ?? this.destino,
@@ -104,6 +110,7 @@ class BorradorPedido {
     miUbicacion: miUbicacion ?? this.miUbicacion,
     origenEsMiUbicacion: origenEsMiUbicacion ?? this.origenEsMiUbicacion,
     enfoque: enfoque ?? this.enfoque,
+    permisoUbicacion: permisoUbicacion ?? this.permisoUbicacion,
   );
 }
 
@@ -116,23 +123,34 @@ class BorradorPedidoNotifier extends Notifier<BorradorPedido> {
   /// Pide la ubicación actual y (si [centrar]) centra el mapa ahí. Si el origen no se eligió a mano (o
   /// [comoOrigen]), pasa a ser el origen y lo que sigue es el destino. Devuelve si se obtuvo.
   ///
-  /// Lo que la persona marque o elija mientras tanto se respeta: el mapa no salta a la ubicación y, si
-  /// la ubicación no llega, lo que sigue es marcar el origen.
+  /// Lo que la persona marque o elija mientras tanto se respeta: el mapa no salta solo a la ubicación y,
+  /// si la ubicación no llega, lo que sigue es marcar el origen. Si la ubicación pasa a ser el origen y ya
+  /// hay destino, el mapa encuadra los dos.
   Future<bool> ubicar({bool comoOrigen = false, bool centrar = true}) async {
     final antes = state;
-    final aqui = await ref.read(ubicadorProvider).actual();
+    final ubicador = ref.read(ubicadorProvider);
+    final aqui = await ubicador.actual();
     if (!ref.mounted) return false;
     if (aqui == null) {
+      final permiso = await ubicador.consultarPermiso();
+      if (!ref.mounted) return false;
+      state = state.copiar(permisoUbicacion: permiso);
       if (state.miUbicacion == null) state = state.copiar(ubicacion: EstadoUbicacion.noDisponible);
       if (state.origen == null) state = state.copiar(marcando: PuntoPedido.origen);
       return false;
     }
     final eligioAlgo = state.origen != antes.origen || state.destino != antes.destino;
     final esOrigen = comoOrigen || state.origen == null || state.origenEsMiUbicacion;
+    final destino = state.destino;
     state = state.copiar(
       ubicacion: EstadoUbicacion.obtenida,
       miUbicacion: aqui,
-      enfoque: centrar && !eligioAlgo ? _enfoque([aqui]) : null,
+      permisoUbicacion: PermisoUbicacion.concedido,
+      enfoque: esOrigen && destino != null
+          ? _enfoque([aqui, destino])
+          : centrar && !eligioAlgo
+          ? _enfoque([aqui])
+          : null,
     );
     if (esOrigen) _origenEnMiUbicacion();
     return true;
@@ -185,6 +203,7 @@ class BorradorPedidoNotifier extends Notifier<BorradorPedido> {
       marcando: PuntoPedido.destino,
       ubicacion: state.ubicacion,
       miUbicacion: aqui,
+      permisoUbicacion: state.permisoUbicacion,
       origenEsMiUbicacion:
           v.origen.direccion == null && aqui != null && _metros(origen, aqui) <= cercaDeMiUbicacionMetros,
       enfoque: _enfoque([origen, v.destino.coordenada]),
@@ -200,6 +219,7 @@ class BorradorPedidoNotifier extends Notifier<BorradorPedido> {
       ubicacion: state.ubicacion,
       miUbicacion: state.miUbicacion,
       enfoque: state.enfoque,
+      permisoUbicacion: state.permisoUbicacion,
       marcando: state.ubicacion == EstadoUbicacion.noDisponible ? PuntoPedido.origen : PuntoPedido.destino,
     );
     if (state.miUbicacion != null) _origenEnMiUbicacion();
@@ -219,6 +239,7 @@ class BorradorPedidoNotifier extends Notifier<BorradorPedido> {
     miUbicacion: state.miUbicacion,
     origenEsMiUbicacion: true,
     enfoque: state.enfoque,
+    permisoUbicacion: state.permisoUbicacion,
   );
 
   /// Un enfoque nuevo (otra versión), aunque los puntos sean los mismos que el anterior.

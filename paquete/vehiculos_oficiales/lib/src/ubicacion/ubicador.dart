@@ -18,6 +18,10 @@ abstract interface class Ubicador {
   /// plataforma se informa como [PermisoUbicacion.denegado].
   Future<PermisoUbicacion> pedirPermiso();
 
+  /// Cómo está el permiso, sin pedirlo (p. ej. para saber por qué [actual] no dio una posición). Nunca
+  /// lanza: un error de la plataforma se informa como [PermisoUbicacion.denegado].
+  Future<PermisoUbicacion> consultarPermiso();
+
   /// GPS del turno cada [intervalo], con el servicio en primer plano en Android (spec 7). Los errores
   /// de la plataforma (permiso revocado, GPS apagado) llegan como errores del stream. El turno lo abre
   /// una sola vez (`RastreadorTurno`): reabrirlo con la app en segundo plano puede fallar. Para volver a
@@ -58,13 +62,42 @@ LocationSettings ajustesGpsTurno(Duration intervalo) {
   return const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 0);
 }
 
+/// Las llamadas a geolocator de [UbicadorGeolocator] para la posición y el permiso. Los tests la
+/// reemplazan para no hablar con la plataforma.
+class FuenteGeolocator {
+  const FuenteGeolocator();
+
+  Future<bool> gpsEncendido() => Geolocator.isLocationServiceEnabled();
+
+  Future<LocationPermission> permiso() => Geolocator.checkPermission();
+
+  Future<LocationPermission> pedirPermiso() => Geolocator.requestPermission();
+
+  Future<Position?> ultimaConocida() => Geolocator.getLastKnownPosition();
+
+  Future<Position> actual(LocationSettings ajustes) => Geolocator.getCurrentPosition(locationSettings: ajustes);
+}
+
 class UbicadorGeolocator implements Ubicador {
+  UbicadorGeolocator({this.fuente = const FuenteGeolocator(), DateTime Function()? ahora})
+    : _ahora = ahora ?? DateTime.now;
+
+  final FuenteGeolocator fuente;
+  final DateTime Function() _ahora;
+
+  /// Hasta qué antigüedad sirve la última posición conocida del teléfono como "posición actual".
+  static const ultimaReciente = Duration(minutes: 2);
+
+  /// En el teléfono, la última posición conocida si es reciente (al instante); si no, una posición nueva
+  /// de alta precisión (hasta 15 s). En la web no hay última conocida.
   @override
   Future<Coordenada?> actual() async {
     if (await pedirPermiso() != PermisoUbicacion.concedido) return null;
+    final ultima = await _ultimaReciente();
+    if (ultima != null) return ultima;
     try {
-      final p = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, timeLimit: Duration(seconds: 15)),
+      final p = await fuente.actual(
+        const LocationSettings(accuracy: LocationAccuracy.high, timeLimit: Duration(seconds: 15)),
       );
       return Coordenada(p.latitude, p.longitude);
     } catch (e) {
@@ -73,12 +106,31 @@ class UbicadorGeolocator implements Ubicador {
     }
   }
 
-  @override
-  Future<PermisoUbicacion> pedirPermiso() async {
+  Future<Coordenada?> _ultimaReciente() async {
+    final movil =
+        !kIsWeb && (defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS);
+    if (!movil) return null;
     try {
-      if (!await Geolocator.isLocationServiceEnabled()) return PermisoUbicacion.gpsApagado;
-      var permiso = await Geolocator.checkPermission();
-      if (permiso == LocationPermission.denied) permiso = await Geolocator.requestPermission();
+      final p = await fuente.ultimaConocida();
+      if (p == null || _ahora().difference(p.timestamp) >= ultimaReciente) return null;
+      return Coordenada(p.latitude, p.longitude);
+    } catch (e) {
+      debugPrint('vehiculos_oficiales: no se pudo leer la última ubicación (${e.runtimeType}).');
+      return null;
+    }
+  }
+
+  @override
+  Future<PermisoUbicacion> pedirPermiso() => _permiso(pedir: true);
+
+  @override
+  Future<PermisoUbicacion> consultarPermiso() => _permiso(pedir: false);
+
+  Future<PermisoUbicacion> _permiso({required bool pedir}) async {
+    try {
+      if (!await fuente.gpsEncendido()) return PermisoUbicacion.gpsApagado;
+      var permiso = await fuente.permiso();
+      if (pedir && permiso == LocationPermission.denied) permiso = await fuente.pedirPermiso();
       return switch (permiso) {
         LocationPermission.whileInUse || LocationPermission.always => PermisoUbicacion.concedido,
         LocationPermission.deniedForever => PermisoUbicacion.denegadoParaSiempre,
@@ -87,7 +139,7 @@ class UbicadorGeolocator implements Ubicador {
     } catch (e) {
       // P. ej. PermissionDefinitionsNotFoundException (falta el permiso en el manifiesto de la app) o un
       // pedido de permiso que ya estaba en curso.
-      debugPrint('vehiculos_oficiales: no se pudo pedir el permiso de ubicación (${e.runtimeType}).');
+      debugPrint('vehiculos_oficiales: no se pudo consultar el permiso de ubicación (${e.runtimeType}).');
       return PermisoUbicacion.denegado;
     }
   }
