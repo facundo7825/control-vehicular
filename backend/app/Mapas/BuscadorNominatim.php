@@ -16,7 +16,9 @@ use Illuminate\Support\Facades\Log;
  * Un lock en cache serializa los pedidos y, si el anterior fue hace menos de un segundo, se ESPERA lo que
  * falte (la consulta no se descarta). Las consultas repetidas salen del cache (24 h, por texto normalizado
  * y zona) sin esperar ni llamar. Si un pedido falla, durante 60 s todas las búsquedas devuelven [] al
- * instante, para no ocupar el servidor esperando a un servicio caído o que nos bloqueó.
+ * instante, para no ocupar el servidor esperando a un servicio caído o que nos bloqueó. Si el lock no se
+ * consigue en 1 s (mucha demanda, o un lock que quedó colgado tras cortar el proceso), esa búsqueda
+ * devuelve [] sin cortar: no se retiene el único worker de `artisan serve`.
  *
  * Privacidad: la ubicación se redondea a 1 decimal (~11 km) antes de enviarla o usarla en la clave del cache.
  */
@@ -93,7 +95,7 @@ class BuscadorNominatim implements BuscadorLugares
         }
 
         try {
-            return Cache::lock('lugares:nominatim:lock', 15)->block(10, function () use ($params) {
+            return Cache::lock('lugares:nominatim:lock', 15)->block(1, function () use ($params) {
                 if (Cache::has(self::CLAVE_CORTE)) {
                     return null;
                 }

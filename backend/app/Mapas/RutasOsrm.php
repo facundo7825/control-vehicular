@@ -14,7 +14,8 @@ use Illuminate\Support\Facades\Log;
  *
  * Política de uso del servidor público: User-Agent identificable y como mucho 1 pedido por segundo. Igual que
  * en la búsqueda con Nominatim, un lock serializa los pedidos y, si el anterior fue hace menos de un segundo,
- * se espera lo que falte. Las indicaciones en castellano las arma {@see InstruccionesOsrm}.
+ * se espera lo que falte; si el lock no se consigue en 1 s, esa vez no hay recorrido (sin cortar), para no
+ * retener el único worker de `artisan serve` tras un lock colgado. Las indicaciones en castellano las arma {@see InstruccionesOsrm}.
  */
 class RutasOsrm extends RutasRemotas
 {
@@ -42,7 +43,7 @@ class RutasOsrm extends RutasRemotas
         $url = "{$this->url}/route/v1/driving/$oLng,$oLat;$dLng,$dLat";
 
         try {
-            $r = Cache::lock('rutas:osrm:lock', 10)->block(5, function () use ($url) {
+            $r = Cache::lock('rutas:osrm:lock', 10)->block(1, function () use ($url) {
                 if ($this->enCorte()) {
                     return null;
                 }

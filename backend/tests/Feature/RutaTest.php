@@ -7,6 +7,7 @@ use App\Mapas\ServicioRutas;
 use App\Models\Usuario;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 
 const OSRM = 'router.project-osrm.org/*';
@@ -350,4 +351,21 @@ it('limita /api/ruta a 60 pedidos por minuto por usuario, con mensaje en castell
 
     $this->travel(61)->seconds();
     $this->actingAs($u)->getJson(RUTA_OK)->assertOk();
+});
+
+it('OSRM con el lock tomado espera como mucho 1 s y devuelve null sin cortar', function () {
+    Http::fake([OSRM => Http::response(respuestaOsrm())]);
+    $lock = Cache::lock('rutas:osrm:lock', 10);
+    expect($lock->get())->toBeTrue();
+    $esperas = [];
+    $o = osrmSinEspera($esperas);
+
+    $inicio = microtime(true);
+    expect($o->ruta(-34.6037, -58.3816, -34.602, -58.38))->toBeNull();
+    expect(microtime(true) - $inicio)->toBeLessThan(2.0);
+    Http::assertSentCount(0);
+
+    $lock->release();
+    expect($o->ruta(-34.6037, -58.3816, -34.602, -58.38))->toBeArray();
+    Http::assertSentCount(1);
 });

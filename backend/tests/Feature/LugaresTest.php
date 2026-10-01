@@ -7,6 +7,7 @@ use App\Mapas\BuscadorNominatim;
 use App\Models\Usuario;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 
 const NOMINATIM = 'nominatim.openstreetmap.org/*';
@@ -274,4 +275,21 @@ it('limita /api/lugares a 30 búsquedas por minuto por usuario, con mensaje en c
 
     $this->travel(61)->seconds();
     $this->actingAs($u)->getJson('/api/lugares?q=obelisco')->assertOk();
+});
+
+it('Nominatim con el lock tomado espera como mucho 1 s y devuelve [] sin cortar', function () {
+    Http::fake([NOMINATIM => Http::response(respuestaNominatim())]);
+    $lock = Cache::lock('lugares:nominatim:lock', 15);
+    expect($lock->get())->toBeTrue();
+    $esperas = [];
+    $b = nominatimSinEspera($esperas);
+
+    $inicio = microtime(true);
+    expect($b->buscar('obelisco', null, null))->toBe([]);
+    expect(microtime(true) - $inicio)->toBeLessThan(2.0);
+    Http::assertSentCount(0);
+
+    $lock->release();
+    expect($b->buscar('obelisco', null, null))->toHaveCount(2);
+    Http::assertSentCount(1);
 });
