@@ -9,6 +9,8 @@ use App\Filament\Resources\Viajes\Pages\ListViajes;
 use App\Filament\Resources\Viajes\Pages\ViewViaje;
 use App\Filament\Resources\Viajes\ViajeResource;
 use App\Mapas\BuscadorLugares;
+use App\Mapas\ServicioMapas;
+use App\Mapas\ServicioMapasFalso;
 use App\Models\Alerta;
 use App\Models\CargoPrioritario;
 use App\Models\OfertaViaje;
@@ -168,6 +170,37 @@ describe('nuevo viaje', function () {
             ->assertFormFieldExists('modo', fn (Select $campo) => array_keys($campo->getOptions()) === ['cualquiera_disponible', 'especifico'])
             // Para una reserva cuenta la agenda, no el turno.
             ->assertFormFieldExists('chofer_id', fn (Select $campo) => array_keys($campo->getOptions()) === [$libre->id, $ocupado->id, $sinTurno->id]);
+    });
+
+    it('no vuelve a pedir la duración de la ruta en cada render si la franja no cambió', function () {
+        $mapas = new class extends ServicioMapasFalso
+        {
+            public int $llamadas = 0;
+
+            public function duracionRuta(float $oLat, float $oLng, float $dLat, float $dLng): ?int
+            {
+                $this->llamadas++;
+
+                return parent::duracionRuta($oLat, $oLng, $dLat, $dLng);
+            }
+        };
+        $this->app->instance(ServicioMapas::class, $mapas);
+        $chofer = Usuario::factory()->chofer()->create();
+
+        $componente = Livewire::test(CreateViaje::class)
+            ->fillForm(datosNuevoViaje(Usuario::factory()->create(), [
+                'tipo' => 'reserva', 'programado_para' => '2026-10-02 10:00:00', 'modo' => 'especifico',
+            ]))
+            ->fillForm(['motivo' => 'Otro motivo'])
+            ->fillForm(['motivo' => 'Uno más'])
+            ->assertFormFieldExists('chofer_id', fn (Select $campo) => array_keys($campo->getOptions()) === [$chofer->id]);
+
+        expect($mapas->llamadas)->toBe(1);
+
+        $componente->fillForm(['programado_para' => '2026-10-02 11:00:00'])
+            ->assertFormFieldExists('chofer_id', fn (Select $campo) => array_keys($campo->getOptions()) === [$chofer->id]);
+
+        expect($mapas->llamadas)->toBe(2);
     });
 
     it('muestra un error de negocio como notificación y no crea nada', function () {

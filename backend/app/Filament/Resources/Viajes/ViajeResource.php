@@ -250,14 +250,18 @@ class ViajeResource extends Resource
             }
         }
 
-        try {
-            [$inicio, $duracion] = app(ServicioReservas::class)->franja($franja);
-        } catch (ReglaNegocio|InvalidFormatException) {
-            // La hora no cumple la anticipación (o no se entiende): todavía no hay franja.
-            return [];
-        }
+        // Las opciones se piden varias veces por request (render, validación, ayuda): la franja (que consulta la
+        // duración de la ruta) y los choferes se calculan una vez por request y por datos de la franja.
+        return once(function () use ($franja): array {
+            try {
+                [$inicio, $duracion] = app(ServicioReservas::class)->franja($franja);
+            } catch (ReglaNegocio|InvalidFormatException) {
+                // La hora no cumple la anticipación (o no se entiende): todavía no hay franja.
+                return [];
+            }
 
-        return self::choferesConFranjaLibre($inicio, $duracion);
+            return self::choferesConFranjaLibre($inicio, $duracion);
+        });
     }
 
     public static function infolist(Schema $schema): Schema
