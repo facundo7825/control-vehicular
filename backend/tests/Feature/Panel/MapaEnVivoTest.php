@@ -132,3 +132,30 @@ it('lista aparte a los choferes en turno que todavía no mandaron ubicación', f
         ->assertSee($sinUbicacion->nombre)
         ->assertSee($sinUbicacion->turnoAbierto->vehiculo->patente);
 });
+
+it('el script del mapa escucha los datos antes de cargar la librería y avisa si no se pudo cargar', function (?string $clave) {
+    config(['vehiculos.mapas.google_api_key' => $clave, 'vehiculos.mapas.google_js_api_key' => null]);
+    choferEnTurno();
+
+    // Livewire incrusta el @script escapado en HTML.
+    $html = html_entity_decode($this->get(MapaEnVivo::getUrl())->assertOk()->getContent(), ENT_QUOTES);
+
+    // El listener se registra antes de crear el <script> de la librería y guarda el último dato.
+    $listener = strpos($html, "\$wire.\$on('mapa-datos'");
+    expect($listener)->not->toBeFalse()
+        ->and(substr_count($html, "\$wire.\$on('mapa-datos'"))->toBe(1)
+        ->and($listener)->toBeLessThan(strpos($html, "document.createElement('script')"));
+    expect($html)->toContain("addEventListener('error'")
+        ->toContain('No se pudo cargar el mapa');
+})->with(['leaflet' => [null], 'google' => ['clave']]);
+
+it('el tooltip de la línea del viaje se crea una vez y en cada refresco solo cambia el texto', function () {
+    config(['vehiculos.mapas.google_api_key' => null, 'vehiculos.mapas.google_js_api_key' => null]);
+    choferEnTurno();
+
+    // Livewire incrusta el @script escapado en HTML.
+    $html = html_entity_decode($this->get(MapaEnVivo::getUrl())->assertOk()->getContent(), ENT_QUOTES);
+
+    expect($html)->toContain('capas.linea.setTooltipContent(')
+        ->not->toContain('capas.linea.bindTooltip(');
+});

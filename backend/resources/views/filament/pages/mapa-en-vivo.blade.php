@@ -46,6 +46,21 @@
         const centroPorDefecto = { lat: -34.6037, lng: -58.3816 };
         const ubicados = (choferes) => choferes.filter((c) => c.lat !== null && c.lng !== null);
 
+        // Se escucha desde ya (la librería puede tardar en cargar): se guarda el último dato y, cuando el mapa
+        // está listo, se aplica ese y los que vengan.
+        let ultimosDatos = datosIniciales;
+        let aplicar = null;
+        $wire.$on('mapa-datos', ({ datos }) => {
+            ultimosDatos = datos;
+            aplicar?.(datos);
+        });
+
+        const mostrarError = () => {
+            contenedor.innerHTML = '<div style="height:100%;display:flex;align-items:center;justify-content:center;'
+                + 'text-align:center;padding:1rem;font-size:0.875rem;opacity:0.75;">'
+                + 'No se pudo cargar el mapa. Revisá la conexión a internet y recargá la página.</div>';
+        };
+
         const escapar = (texto) => String(texto ?? '').replace(/[&<>"']/g, (c) => ({
             '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
         })[c]);
@@ -115,7 +130,9 @@
                     let capas = capasViaje.get(v.id);
                     if (! capas) {
                         capas = {
-                            linea: L.polyline([origen, destino], { color: '#2563eb', opacity: 0.6, weight: 3 }).addTo(mapa),
+                            linea: L.polyline([origen, destino], { color: '#2563eb', opacity: 0.6, weight: 3 })
+                                .bindTooltip('')
+                                .addTo(mapa),
                             origen: L.marker(origen, { icon: letra('O') }).bindPopup('').addTo(mapa),
                             destino: L.marker(destino, { icon: letra('D') }).bindPopup('').addTo(mapa),
                         };
@@ -124,7 +141,7 @@
                     capas.linea.setLatLngs([origen, destino]);
                     capas.origen.setLatLng(origen).setPopupContent(globoViaje(v, v.origen, 'O'));
                     capas.destino.setLatLng(destino).setPopupContent(globoViaje(v, v.destino, 'D'));
-                    capas.linea.bindTooltip(`Viaje #${escapar(v.id)} · ${escapar(v.estado_etiqueta)}`);
+                    capas.linea.setTooltipContent(`Viaje #${escapar(v.id)} · ${escapar(v.estado_etiqueta)}`);
                 });
                 capasViaje.forEach((capas, id) => {
                     if (! viajesVistos.has(id)) {
@@ -140,8 +157,8 @@
                 }
             };
 
-            actualizar(datosIniciales);
-            $wire.$on('mapa-datos', ({ datos }) => actualizar(datos));
+            aplicar = actualizar;
+            actualizar(ultimosDatos);
         };
 
         const iniciarGoogle = () => {
@@ -185,8 +202,8 @@
                 }
             };
 
-            dibujar(datosIniciales);
-            $wire.$on('mapa-datos', ({ datos }) => dibujar(datos));
+            aplicar = dibujar;
+            dibujar(ultimosDatos);
         };
 
         if (contenedor.dataset.proveedor === 'google') {
@@ -197,6 +214,7 @@
                 const script = document.createElement('script');
                 script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(clave)}&callback=iniciarMapaEnVivo`;
                 script.async = true;
+                script.addEventListener('error', mostrarError, { once: true });
                 document.head.appendChild(script);
             }
         } else if (window.L) {
@@ -212,6 +230,7 @@
                 document.head.appendChild(script);
             }
             script.addEventListener('load', iniciarLeaflet, { once: true });
+            script.addEventListener('error', mostrarError, { once: true });
         }
     </script>
     @endscript
