@@ -22,8 +22,24 @@ it('expone la configuración que necesita la app', function () {
     $this->actingAs(Usuario::factory()->create())
         ->getJson('/api/configuracion')
         ->assertOk()
-        ->assertExactJson(['gps_turno_seg' => 10, 'gps_viaje_seg' => 5, 'oferta_segundos' => 30]);
+        ->assertExactJson([
+            'gps_turno_seg' => 10, 'gps_viaje_seg' => 5, 'oferta_segundos' => 30, 'lugares_autocompletar' => true,
+        ]);
 });
+
+it('solo permite autocompletar lugares si el buscador lo admite (Nominatim no)', function (string $driver, bool $autocompletar) {
+    config(['vehiculos.lugares.driver' => $driver]);
+
+    $this->actingAs(Usuario::factory()->create())
+        ->getJson('/api/configuracion')
+        ->assertOk()
+        ->assertJsonPath('lugares_autocompletar', $autocompletar);
+})->with([
+    ['nominatim', false],
+    ['google', true],
+    ['falso', true],
+    ['desconocido', false],
+]);
 
 it('trae los parámetros de reservas con sus valores por defecto', function (string $clave, int $valor) {
     expect(app(Parametros::class)->entero($clave))->toBe($valor);

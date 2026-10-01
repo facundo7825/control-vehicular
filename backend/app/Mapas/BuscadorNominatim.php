@@ -11,10 +11,14 @@ use Illuminate\Support\Facades\Log;
 /**
  * Búsqueda con la API pública de OpenStreetMap. Solo para desarrollo/demos.
  *
- * Política de uso de Nominatim: User-Agent identificable, como mucho 1 pedido por segundo y cache.
+ * Política de uso de Nominatim: User-Agent identificable, como mucho 1 pedido por segundo, cache y nada de
+ * autocompletar (la app solo busca al confirmar el texto: ver `lugares_autocompletar` en /api/configuracion).
  * Un lock en cache serializa los pedidos y, si el anterior fue hace menos de un segundo, se ESPERA lo que
  * falte (la consulta no se descarta). Las consultas repetidas salen del cache (24 h, por texto normalizado
- * y zona) sin esperar ni llamar.
+ * y zona) sin esperar ni llamar. Si un pedido falla, durante 60 s todas las búsquedas devuelven [] al
+ * instante, para no ocupar el servidor esperando a un servicio caído o que nos bloqueó.
+ *
+ * Privacidad: la ubicación se redondea a 1 decimal (~11 km) antes de enviarla o usarla en la clave del cache.
  */
 class BuscadorNominatim implements BuscadorLugares
 {
@@ -22,7 +26,13 @@ class BuscadorNominatim implements BuscadorLugares
 
     private const CLAVE_ULTIMO = 'lugares:nominatim:ultimo';
 
+    private const CLAVE_CORTE = 'lugares:nominatim:corte';
+
     private const SEGUNDOS_CACHE = 86400;
+
+    private const SEGUNDOS_CORTE = 60;
+
+    private const TIMEOUT_SEG = 3;
 
     /** Medio lado, en grados (~22 km), de la caja con la que se sesga la búsqueda. */
     private const MARGEN_GRADOS = 0.2;
@@ -42,15 +52,19 @@ class BuscadorNominatim implements BuscadorLugares
     {
         $texto = trim($texto);
         $conZona = $lat !== null && $lng !== null;
-        $zona = $conZona ? round($lat, 1).','.round($lng, 1) : '';
-        $clave = 'lugares:nominatim:'.md5(mb_strtolower($texto).'|'.$zona);
+        $lat = $conZona ? round($lat, 1) : null;
+        $lng = $conZona ? round($lng, 1) : null;
+        $clave = 'lugares:nominatim:'.md5(mb_strtolower($texto).'|'.($conZona ? "$lat,$lng" : ''));
 
         $guardado = Cache::get($clave);
         if (is_array($guardado)) {
             return $guardado;
         }
+        if (Cache::has(self::CLAVE_CORTE)) {
+            return [];
+        }
 
-        $lugares = $this->consultar($texto, $conZona ? $lat : null, $conZona ? $lng : null);
+        $lugares = $this->consultar($texto, $lat, $lng);
         if ($lugares !== null) {
             Cache::put($clave, $lugares, self::SEGUNDOS_CACHE);
         }
@@ -72,11 +86,17 @@ class BuscadorNominatim implements BuscadorLugares
         if ($lat !== null && $lng !== null) {
             $m = self::MARGEN_GRADOS;
             // viewbox: izquierda,arriba,derecha,abajo (lon,lat,lon,lat). Sesga, no restringe.
-            $params['viewbox'] = implode(',', [$lng - $m, $lat + $m, $lng + $m, $lat - $m]);
+            $params['viewbox'] = implode(',', array_map(
+                fn (float $v) => round($v, 1),
+                [$lng - $m, $lat + $m, $lng + $m, $lat - $m],
+            ));
         }
 
         try {
             return Cache::lock('lugares:nominatim:lock', 15)->block(10, function () use ($params) {
+                if (Cache::has(self::CLAVE_CORTE)) {
+                    return null;
+                }
                 $ultimo = (float) Cache::get(self::CLAVE_ULTIMO, 0.0);
                 $falta = 1.0 - (microtime(true) - $ultimo);
                 if ($falta > 0) {
@@ -84,17 +104,20 @@ class BuscadorNominatim implements BuscadorLugares
                 }
 
                 try {
-                    $r = Http::timeout(5)->withUserAgent($this->userAgent)->get(self::URL, $params);
+                    $r = Http::timeout(self::TIMEOUT_SEG)->withUserAgent($this->userAgent)->get(self::URL, $params);
                 } catch (ConnectionException $e) {
-                    Log::warning('Nominatim sin conexión', ['error' => $e->getMessage()]);
+                    // Nunca el mensaje: lleva la URL, con el texto buscado y la zona.
+                    Log::warning('Nominatim sin conexión', ['error' => $e::class]);
+                    $this->cortar();
 
                     return null;
                 } finally {
                     Cache::put(self::CLAVE_ULTIMO, microtime(true), 60);
                 }
 
-                if ($r->failed() || ! is_array($r->json())) {
+                if (! $r->successful() || ! is_array($r->json())) {
                     Log::warning('Nominatim falló', ['http' => $r->status()]);
+                    $this->cortar();
 
                     return null;
                 }
@@ -102,10 +125,15 @@ class BuscadorNominatim implements BuscadorLugares
                 return $this->mapear($r->json());
             });
         } catch (\Throwable $e) {
-            Log::warning('Nominatim: no se pudo consultar', ['error' => $e->getMessage()]);
+            Log::warning('Nominatim: no se pudo consultar', ['error' => $e::class]);
 
             return null;
         }
+    }
+
+    private function cortar(): void
+    {
+        Cache::put(self::CLAVE_CORTE, true, self::SEGUNDOS_CORTE);
     }
 
     /** @return list<array{nombre: string, direccion: string, lat: float, lng: float}> */

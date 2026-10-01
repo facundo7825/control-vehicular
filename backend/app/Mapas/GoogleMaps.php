@@ -30,7 +30,8 @@ class GoogleMaps implements ServicioMapas
                 'key' => $this->apiKey,
             ]);
         } catch (ConnectionException $e) {
-            Log::warning('Distance Matrix sin conexión', ['error' => $e->getMessage()]);
+            // Nunca el mensaje: lleva la URL, con coordenadas y la clave.
+            Log::warning('Distance Matrix sin conexión', ['error' => $e::class]);
 
             return $nulos;
         }

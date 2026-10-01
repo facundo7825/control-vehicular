@@ -6,7 +6,7 @@ use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
-/** Places API (New), Text Search. */
+/** Places API (New), Text Search. Privacidad: la ubicación se redondea a 2 decimales (~1 km) antes de enviarla. */
 class BuscadorGoogle implements BuscadorLugares
 {
     private const URL = 'https://places.googleapis.com/v1/places:searchText';
@@ -25,7 +25,7 @@ class BuscadorGoogle implements BuscadorLugares
         ];
         if ($lat !== null && $lng !== null) {
             $cuerpo['locationBias'] = ['circle' => [
-                'center' => ['latitude' => $lat, 'longitude' => $lng],
+                'center' => ['latitude' => round($lat, 2), 'longitude' => round($lng, 2)],
                 'radius' => (float) self::RADIO_SESGO_M,
             ]];
         }
@@ -36,7 +36,8 @@ class BuscadorGoogle implements BuscadorLugares
                 'X-Goog-FieldMask' => 'places.displayName,places.formattedAddress,places.location',
             ])->post(self::URL, $cuerpo);
         } catch (ConnectionException $e) {
-            Log::warning('Places sin conexión', ['error' => $e->getMessage()]);
+            // Nunca el mensaje: lleva la URL o el cuerpo, con el texto buscado.
+            Log::warning('Places sin conexión', ['error' => $e::class]);
 
             return [];
         }

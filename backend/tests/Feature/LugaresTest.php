@@ -111,13 +111,80 @@ it('Nominatim cachea 24 h por consulta normalizada', function () {
     Http::assertSentCount(2);
 });
 
-it('Nominatim devuelve [] ante error y no cachea el fallo', function () {
+it('Nominatim devuelve [] ante error, no cachea el fallo y corta 60 s sin llamar', function () {
     Http::fake([NOMINATIM => Http::sequence()->push('error', 500)->push(respuestaNominatim())]);
     $esperas = [];
     $b = nominatimSinEspera($esperas);
 
     expect($b->buscar('obelisco', null, null))->toBe([]);
+
+    // Durante el corte, cualquier búsqueda (aun otra) vuelve vacía al instante: sin pedido ni espera.
+    $esperas = [];
+    expect($b->buscar('plaza de mayo', null, null))->toBe([]);
+    expect($esperas)->toBe([]);
+    Http::assertSentCount(1);
+
+    $this->travel(61)->seconds();
     expect($b->buscar('obelisco', null, null))->toHaveCount(2);
+    Http::assertSentCount(2);
+});
+
+it('Nominatim corta también ante 403 y sin conexión', function (string $falla) {
+    $llamadas = 0;
+    Http::fake([NOMINATIM => function () use ($falla, &$llamadas) {
+        $llamadas++;
+
+        return $falla === '403' ? Http::response('bloqueado', 403) : throw new ConnectionException('timeout');
+    }]);
+    $esperas = [];
+    $b = nominatimSinEspera($esperas);
+
+    $b->buscar('obelisco', null, null);
+    $b->buscar('plaza de mayo', null, null);
+
+    expect($llamadas)->toBe(1);
+})->with(['403', 'sin conexion']);
+
+it('Nominatim usa 3 s de timeout', function () {
+    $timeout = null;
+    Http::fake([NOMINATIM => function (Request $req, array $opciones) use (&$timeout) {
+        $timeout = $opciones['timeout'] ?? null;
+
+        return Http::response([]);
+    }]);
+    $esperas = [];
+
+    nominatimSinEspera($esperas)->buscar('obelisco', null, null);
+
+    expect($timeout)->toEqual(3);
+});
+
+it('Nominatim manda la ubicación redondeada a 1 decimal', function () {
+    Http::fake([NOMINATIM => Http::response([])]);
+    $esperas = [];
+
+    nominatimSinEspera($esperas)->buscar('obelisco', -34.61234, -58.38765);
+
+    Http::assertSent(function (Request $req) {
+        parse_str((string) parse_url($req->url(), PHP_URL_QUERY), $q);
+
+        return $q['viewbox'] === '-58.6,-34.4,-58.2,-34.8';
+    });
+});
+
+it('Nominatim no deja en el log el texto buscado ni la URL', function () {
+    Http::fake([NOMINATIM => fn (Request $req) => throw new ConnectionException('cURL error 28 for '.$req->url())]);
+    Log::spy();
+    $esperas = [];
+
+    nominatimSinEspera($esperas)->buscar('calle secreta 123', -34.61234, -58.38765);
+
+    Log::shouldHaveReceived('warning')->withArgs(function (string $msg, array $ctx = []) {
+        $todo = $msg.json_encode($ctx);
+
+        return ! str_contains($todo, 'secreta') && ! str_contains($todo, 'nominatim.openstreetmap')
+            && ! str_contains($todo, '34.6');
+    })->once();
 });
 
 it('Nominatim devuelve [] si no hay conexión', function () {
@@ -169,4 +236,25 @@ it('Google devuelve [] ante error o falta de resultados', function () {
 
     expect($b->buscar('obelisco', null, null))->toBe([]);
     expect($b->buscar('obelisco', null, null))->toBe([]);
+});
+
+it('Google manda la ubicación redondeada a 2 decimales', function () {
+    Http::fake(['places.googleapis.com/*' => Http::response(['places' => []])]);
+
+    (new BuscadorGoogle('clave'))->buscar('obelisco', -34.61234, -58.38765);
+
+    Http::assertSent(fn (Request $req) => $req['locationBias']['circle']['center'] === ['latitude' => -34.61, 'longitude' => -58.39]);
+});
+
+it('Google no deja en el log el texto buscado ni la URL', function () {
+    Http::fake(['places.googleapis.com/*' => fn (Request $req) => throw new ConnectionException('cURL error 28 for '.$req->url().' calle secreta 123')]);
+    Log::spy();
+
+    (new BuscadorGoogle('clave'))->buscar('calle secreta 123', -34.61234, -58.38765);
+
+    Log::shouldHaveReceived('warning')->withArgs(function (string $msg, array $ctx = []) {
+        $todo = $msg.json_encode($ctx);
+
+        return ! str_contains($todo, 'secreta') && ! str_contains($todo, 'googleapis');
+    })->once();
 });
