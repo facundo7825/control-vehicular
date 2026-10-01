@@ -70,3 +70,26 @@ it('lista choferes en turno con su estado', function () {
 
     expect($mapa->all())->toBe([$libre->id => EstadoChofer::Libre, $ocupado->id => EstadoChofer::EnViaje]);
 });
+
+it('el listado agrupado calcula cada estado igual que estado() chofer por chofer', function () {
+    $pronto = choferEnTurno();
+    reservaAceptada($pronto, now()->addMinutes(30)); // dentro de los 45 min de bloqueo
+    $lejos = choferEnTurno();
+    reservaAceptada($lejos, now()->addHours(3));
+    $sinUbicacion = Turno::factory()->create()->chofer; // nunca mandó ubicación
+    $reservaYaEnHora = choferEnTurno();
+    reservaAceptada($reservaYaEnHora, now()->subMinutes(5)); // aceptada y ya debida: ocupa al chofer
+    $calc = app(CalculadorEstadoChofer::class);
+
+    $agrupado = $calc->choferesEnTurno()->mapWithKeys(fn ($f) => [$f['chofer']->id => $f['estado']])->all();
+
+    expect($agrupado)->toBe([
+        $pronto->id => EstadoChofer::ReservadoPronto,
+        $lejos->id => EstadoChofer::Libre,
+        $sinUbicacion->id => EstadoChofer::SinSenal,
+        $reservaYaEnHora->id => EstadoChofer::EnViaje,
+    ]);
+    foreach ([$pronto, $lejos, $sinUbicacion, $reservaYaEnHora] as $chofer) {
+        expect($calc->estado($chofer))->toBe($agrupado[$chofer->id]);
+    }
+});

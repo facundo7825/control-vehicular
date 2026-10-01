@@ -19,6 +19,9 @@ use Illuminate\Support\Facades\DB;
 
 class ServicioViaje
 {
+    /** Error de la app al pedir con un viaje en marcha (le habla al solicitante; el panel lo traduce). */
+    public const YA_TIENE_VIAJE = 'Ya tenés un viaje en curso.';
+
     public function __construct(
         private Despachador $despachador,
         private CalculadorEstadoChofer $estados,
@@ -60,7 +63,7 @@ class ServicioViaje
                 ->whereIn('estado', EstadoViaje::enProgreso())
                 ->exists();
             if ($enProgreso) {
-                throw new ReglaNegocio('Ya tenés un viaje en curso.');
+                throw new ReglaNegocio(self::YA_TIENE_VIAJE);
             }
 
             return Viaje::create([
@@ -206,7 +209,22 @@ class ServicioViaje
      */
     public function reasignarPorAdmin(Viaje $viaje, Usuario $chofer): Viaje
     {
-        $esReserva = DB::transaction(function () use ($viaje, $chofer) {
+        return $this->asignarDirecto($viaje, $chofer, soloSinChofer: false);
+    }
+
+    /**
+     * El admin asigna a mano un viaje que todavía no tiene chofer (buscando, ofrecido o sin chofer), sin oferta.
+     * Mismas reglas y avisos que reasignar: vencen las ofertas pendientes y, si estaba sin chofer, la máquina
+     * de estados resuelve la alerta del panel.
+     */
+    public function asignarPorAdmin(Viaje $viaje, Usuario $chofer): Viaje
+    {
+        return $this->asignarDirecto($viaje, $chofer, soloSinChofer: true);
+    }
+
+    private function asignarDirecto(Viaje $viaje, Usuario $chofer, bool $soloSinChofer): Viaje
+    {
+        $esReserva = DB::transaction(function () use ($viaje, $chofer, $soloSinChofer) {
             // Mismo orden de bloqueo que Asignador (viaje, luego chofer): compite en igualdad con
             // cualquier otra asignación a ese chofer.
             $viaje->setRawAttributes(Viaje::whereKey($viaje->id)->lockForUpdate()->firstOrFail()->getAttributes(), true);
@@ -220,6 +238,9 @@ class ServicioViaje
             }
 
             $esReserva = $viaje->tipo === TipoViaje::Reserva;
+            if ($soloSinChofer && ! self::asignable($viaje)) {
+                throw new ReglaNegocio('El viaje ya tiene chofer o terminó; no se puede asignar.');
+            }
             if (! self::reasignable($viaje)) {
                 throw new ReglaNegocio($esReserva
                     ? 'La reserva ya comenzó o terminó; no se puede reasignar.'
@@ -253,7 +274,9 @@ class ServicioViaje
             }
 
             // Primero la máquina (así avisa al chofer que tenía la oferta) y después se vence la oferta.
-            $this->maquina->reasignar($viaje, $c->id, $vehiculoId);
+            $soloSinChofer
+                ? $this->maquina->asignar($viaje, $c->id, $vehiculoId)
+                : $this->maquina->reasignar($viaje, $c->id, $vehiculoId);
             $this->expirarOfertasPendientes($viaje->id);
 
             return $esReserva;
@@ -275,6 +298,12 @@ class ServicioViaje
         return in_array($viaje->estado, $viaje->tipo === TipoViaje::Reserva
             ? self::REASIGNABLES_RESERVA
             : self::REASIGNABLES_INMEDIATO, true);
+    }
+
+    /** ¿El panel ofrece "Asignar chofer"? El viaje todavía no tiene chofer (se vuelve a verificar con la fila bloqueada). */
+    public static function asignable(Viaje $viaje): bool
+    {
+        return in_array($viaje->estado, [EstadoViaje::Buscando, EstadoViaje::Ofrecido, EstadoViaje::SinChofer], true);
     }
 
     /** Vence las ofertas que seguían abiertas: si el chofer responde tarde, recibe "La oferta ya no está vigente". */

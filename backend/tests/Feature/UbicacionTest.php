@@ -1,11 +1,16 @@
 <?php
 
 use App\Enums\EstadoViaje;
+use App\Mapas\Distancia;
 use App\Models\PuntoRecorrido;
 use App\Models\Turno;
 use App\Models\UbicacionChofer;
 use App\Models\Usuario;
 use App\Models\Viaje;
+use App\Servicios\MaquinaEstadosViaje;
+use Illuminate\Database\UniqueConstraintViolationException;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 
 it('guarda la última ubicación de un lote', function () {
     $turno = Turno::factory()->create();
@@ -61,7 +66,7 @@ it('valida coordenadas', function () {
 });
 
 it('interpreta registrado_en sin offset como hora de Buenos Aires', function () {
-    $this->travelTo(Illuminate\Support\Carbon::parse('2026-10-01 15:00:00')); // 12:00 en Buenos Aires
+    $this->travelTo(Carbon::parse('2026-10-01 15:00:00')); // 12:00 en Buenos Aires
     $turno = Turno::factory()->create();
     UbicacionChofer::create([
         'chofer_id' => $turno->chofer_id, 'lat' => -34.61, 'lng' => -58.39, 'actualizado_en' => now()->subMinute(),
@@ -118,7 +123,7 @@ it('la migración del índice único deja un solo punto por viaje y momento', fu
 
     $viaje = Viaje::factory()->create();
     $momento = now()->subMinute()->startOfSecond();
-    Illuminate\Support\Facades\DB::table('recorrido_viaje')->insert([
+    DB::table('recorrido_viaje')->insert([
         ['viaje_id' => $viaje->id, 'lat' => 1, 'lng' => 1, 'registrado_en' => $momento],
         ['viaje_id' => $viaje->id, 'lat' => 1, 'lng' => 1, 'registrado_en' => $momento],
         ['viaje_id' => $viaje->id, 'lat' => 2, 'lng' => 2, 'registrado_en' => $momento->copy()->addSeconds(5)],
@@ -128,5 +133,34 @@ it('la migración del índice único deja un solo punto por viaje y momento', fu
 
     expect(PuntoRecorrido::where('viaje_id', $viaje->id)->count())->toBe(2);
     expect(fn () => PuntoRecorrido::create(['viaje_id' => $viaje->id, 'lat' => 3, 'lng' => 3, 'registrado_en' => $momento]))
-        ->toThrow(Illuminate\Database\UniqueConstraintViolationException::class);
+        ->toThrow(UniqueConstraintViolationException::class);
+});
+
+it('si el viaje se finaliza mientras llegan puntos, recalcula los metros guardados', function () {
+    $turno = Turno::factory()->create();
+    $viaje = Viaje::factory()->create([
+        'chofer_id' => $turno->chofer_id, 'estado' => EstadoViaje::EnCurso, 'iniciado_en' => now()->subMinutes(10),
+    ]);
+    PuntoRecorrido::create(['viaje_id' => $viaje->id, 'lat' => -34.600, 'lng' => -58.380, 'registrado_en' => now()->subMinutes(9)]);
+    PuntoRecorrido::create(['viaje_id' => $viaje->id, 'lat' => -34.610, 'lng' => -58.380, 'registrado_en' => now()->subMinutes(8)]);
+
+    // El chofer finaliza justo después de que el servidor encontró el viaje en curso y antes de guardar los puntos.
+    $finalizado = false;
+    DB::listen(function ($consulta) use (&$finalizado, $viaje) {
+        if (! $finalizado && str_contains($consulta->sql, 'from "viajes"') && $consulta->bindings === [$viaje->chofer_id, 'en_curso']
+            && ! str_contains($consulta->sql, 'for update')) {
+            $finalizado = true;
+            app(MaquinaEstadosViaje::class)->transicionar(Viaje::find($viaje->id), EstadoViaje::Finalizado);
+        }
+    });
+
+    $this->actingAs($turno->chofer)->postJson('/api/ubicacion', ['puntos' => [
+        ['lat' => -34.620, 'lng' => -58.380, 'registrado_en' => now()->subMinutes(7)->toIso8601String()],
+    ]])->assertNoContent();
+
+    $esperado = Distancia::metros(-34.600, -58.380, -34.610, -58.380)
+        + Distancia::metros(-34.610, -58.380, -34.620, -58.380);
+    expect($finalizado)->toBeTrue()
+        ->and($viaje->fresh()->estado)->toBe(EstadoViaje::Finalizado)
+        ->and($viaje->fresh()->metros_recorridos)->toBe((int) round($esperado));
 });

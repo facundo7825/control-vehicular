@@ -3,12 +3,14 @@
 namespace App\Servicios;
 
 use App\Enums\EstadoViaje;
+use App\Events\UbicacionChoferActualizada;
 use App\Excepciones\ReglaNegocio;
 use App\Models\PuntoRecorrido;
 use App\Models\UbicacionChofer;
 use App\Models\Usuario;
 use App\Models\Viaje;
 use App\Support\HoraLocal;
+use Illuminate\Support\Facades\DB;
 
 class ServicioUbicacion
 {
@@ -36,7 +38,7 @@ class ServicioUbicacion
                 'velocidad' => $ultimo['velocidad'] ?? null,
                 'actualizado_en' => $ultimo['momento'],
             ]);
-            \App\Events\UbicacionChoferActualizada::dispatch(
+            UbicacionChoferActualizada::dispatch(
                 $chofer->id,
                 (float) $ultimo['lat'],
                 (float) $ultimo['lng'],
@@ -58,9 +60,23 @@ class ServicioUbicacion
                 ])
                 ->values()
                 ->all();
-            if ($filas !== []) {
-                PuntoRecorrido::insertOrIgnore($filas);
+            if ($filas !== [] && PuntoRecorrido::insertOrIgnore($filas) > 0) {
+                $this->recalcularSiYaFinalizo($enCurso->id);
             }
         }
+    }
+
+    /**
+     * Si el viaje se finalizó entre la consulta de arriba y el insert, sus metros ya se guardaron sin estos
+     * puntos: se recalculan. El bloqueo espera a que termine una finalización en marcha para ver su estado.
+     */
+    private function recalcularSiYaFinalizo(int $viajeId): void
+    {
+        DB::transaction(function () use ($viajeId) {
+            $estado = Viaje::whereKey($viajeId)->lockForUpdate()->value('estado');
+            if ($estado === EstadoViaje::Finalizado) {
+                Viaje::whereKey($viajeId)->update(['metros_recorridos' => KilometrosRecorridos::metrosDe($viajeId)]);
+            }
+        });
     }
 }

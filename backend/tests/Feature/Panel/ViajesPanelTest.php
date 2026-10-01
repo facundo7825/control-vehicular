@@ -165,7 +165,7 @@ it('rechaza al chofer elegido si dejó de estar libre antes de confirmar', funct
     $elegido = choferEnTurno();
     $viaje = Viaje::factory()->create(['estado' => EstadoViaje::SinChofer]);
     $pagina = Livewire::test(ViewViaje::class, ['record' => $viaje->getRouteKey()])
-        ->mountAction('reasignar')
+        ->mountAction('asignar') // sin chofer: la acción es "Asignar chofer"
         ->setActionData(['chofer_id' => $elegido->id]);
 
     Viaje::factory()->create(['chofer_id' => $elegido->id, 'estado' => EstadoViaje::EnCurso]);

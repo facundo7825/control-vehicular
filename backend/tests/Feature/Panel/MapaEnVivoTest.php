@@ -1,13 +1,22 @@
 <?php
 
 use App\Enums\EstadoViaje;
+use App\Excepciones\ReglaNegocio;
 use App\Filament\Pages\MapaEnVivo;
+use App\Filament\Resources\Usuarios\UsuarioResource;
+use App\Filament\Resources\Viajes\ViajeResource;
+use App\Mapas\Distancia;
 use App\Mapas\ServicioRutas;
+use App\Models\PuntoRecorrido;
 use App\Models\Turno;
 use App\Models\Usuario;
 use App\Models\Viaje;
 use App\Servicios\DatosMapaPanel;
+use App\Servicios\EstimadorLlegada;
+use App\Servicios\KilometrosRecorridos;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Exceptions;
 use Livewire\Livewire;
 
 beforeEach(function () {
@@ -69,6 +78,7 @@ it('arma todos los choferes en turno con su color y los viajes activos con orige
         'origen' => ['lat' => -34.6037, 'lng' => -58.3816, 'direccion' => 'Tribunales'],
         'destino' => ['lat' => -34.609, 'lng' => -58.392, 'direccion' => 'Casa de Gobierno'],
         'recorrido' => app(ServicioRutas::class)->ruta(-34.6037, -58.3816, -34.609, -58.392)['puntos'],
+        'url' => ViajeResource::getUrl('view', ['record' => $viaje->id]),
     ]]);
     expect($datos['viajes'][0]['recorrido'])->not->toBeEmpty();
 });
@@ -248,4 +258,213 @@ it('los datos del mapa traen nombre y patente de todos los choferes en turno, ta
                 && $choferes[$sinUbicacion->id]['patente'] === $sinUbicacion->turnoAbierto->vehiculo->patente
                 && $choferes[$sinUbicacion->id]['lat'] === null;
         });
+});
+
+/** Un viaje finalizado de $chofer en $finalizadoEn (UTC) con su recorrido real ($puntos como [lat, lng]). */
+function viajeFinalizadoCon(Usuario $chofer, string $finalizadoEn, array $puntos = []): Viaje
+{
+    $viaje = Viaje::factory()->create([
+        'chofer_id' => $chofer->id, 'estado' => EstadoViaje::Finalizado, 'finalizado_en' => $finalizadoEn,
+    ]);
+    // Se cargan al revés: el cálculo tiene que ordenarlos por registrado_en.
+    foreach (array_reverse($puntos, true) as $i => [$lat, $lng]) {
+        PuntoRecorrido::create([
+            'viaje_id' => $viaje->id, 'lat' => $lat, 'lng' => $lng,
+            'registrado_en' => Carbon::parse($finalizadoEn)->subMinutes(30)->addMinutes($i),
+        ]);
+    }
+    // Como al finalizar de verdad (MaquinaEstadosViaje): los metros quedan guardados en el viaje.
+    $viaje->update(['metros_recorridos' => KilometrosRecorridos::metrosDe($viaje->id)]);
+
+    return $viaje;
+}
+
+/** Lo que devuelve EstimadorLlegada::estimar con $segundos. */
+function estimacion(?int $segundos): array
+{
+    return [
+        'hacia' => 'origen', 'segundos' => $segundos, 'metros' => $segundos === null ? null : 3000,
+        'calculado_en' => now()->toIso8601String(), 'ubicacion_actualizada_en' => now()->toIso8601String(),
+    ];
+}
+
+it('el chofer con viaje activo trae el número, el solicitante, hacia dónde va, la llegada estimada y el enlace', function () {
+    $this->mock(EstimadorLlegada::class)->shouldReceive('estimar')->andReturn(estimacion(400));
+    $chofer = choferEnTurno(-34.61, -58.39);
+    $solicitante = Usuario::factory()->create(['nombre' => 'Ana Solicitante']);
+    $viaje = Viaje::factory()->create([
+        'chofer_id' => $chofer->id, 'solicitante_id' => $solicitante->id, 'estado' => EstadoViaje::EnCamino,
+        'origen_direccion' => 'Tribunales', 'destino_direccion' => 'Casa de Gobierno',
+    ]);
+
+    $datos = app(DatosMapaPanel::class)->obtener()['choferes'][0];
+
+    expect($datos['viaje'])->toBe([
+        'id' => $viaje->id,
+        'estado' => 'en_camino',
+        'estado_etiqueta' => 'En camino',
+        'solicitante' => 'Ana Solicitante',
+        'hacia' => 'origen',
+        'hacia_direccion' => 'Tribunales',
+        'llega_en_min' => 7, // 400 s, redondeado hacia arriba
+        'url' => ViajeResource::getUrl('view', ['record' => $viaje->id]),
+    ]);
+    expect($datos['url'])->toBe(UsuarioResource::getUrl('edit', ['record' => $chofer->id]));
+});
+
+it('en curso va hacia el destino y sin señal queda sin estimación', function () {
+    $chofer = choferEnTurno(minutos: 75); // la última ubicación es vieja: el estimador no da segundos
+    Viaje::factory()->create([
+        'chofer_id' => $chofer->id, 'estado' => EstadoViaje::EnCurso, 'destino_direccion' => 'Casa de Gobierno',
+    ]);
+
+    $viaje = app(DatosMapaPanel::class)->obtener()['choferes'][0]['viaje'];
+
+    expect($viaje)->toMatchArray(['hacia' => 'destino', 'hacia_direccion' => 'Casa de Gobierno', 'llega_en_min' => null]);
+});
+
+it('el chofer sin viaje activo trae viaje null', function () {
+    $chofer = choferEnTurno();
+    Viaje::factory()->create(['chofer_id' => $chofer->id, 'estado' => EstadoViaje::Finalizado, 'finalizado_en' => now()]);
+
+    expect(app(DatosMapaPanel::class)->obtener()['choferes'][0]['viaje'])->toBeNull();
+});
+
+it('si el estimador falla el viaje queda sin estimación y el mapa sigue andando', function (Throwable $error, bool $seReporta) {
+    Exceptions::fake();
+    $this->mock(EstimadorLlegada::class)->shouldReceive('estimar')->andThrow($error);
+    $chofer = choferEnTurno();
+    $viaje = Viaje::factory()->create(['chofer_id' => $chofer->id, 'estado' => EstadoViaje::Aceptado]);
+
+    $datos = app(DatosMapaPanel::class)->obtener()['choferes'][0]['viaje'];
+
+    expect($datos)->toMatchArray(['id' => $viaje->id, 'hacia' => 'origen', 'llega_en_min' => null]);
+    // La regla de negocio es esperable (el viaje cambió de estado); una falla del servicio se reporta.
+    $seReporta ? Exceptions::assertReported(RuntimeException::class) : Exceptions::assertNothingReported();
+})->with([
+    'regla de negocio' => fn () => [new ReglaNegocio('El viaje no tiene un chofer en camino.'), false],
+    'servicio de mapas caído' => fn () => [new RuntimeException('timeout'), true],
+]);
+
+it('hoy trae los viajes finalizados en el día local, los km recorridos y desde qué hora está en turno', function () {
+    // Ahora: 01/10 12:00 UTC = 09:00 en Buenos Aires; el día local empezó a las 03:00 UTC.
+    $chofer = choferEnTurno();
+    $chofer->turnoAbierto->update(['inicio' => '2026-10-01 10:30:00']);
+    $tramo1 = [[-34.600, -58.380], [-34.605, -58.380], [-34.610, -58.385]];
+    $tramo2 = [[-34.620, -58.400], [-34.630, -58.400]];
+    viajeFinalizadoCon($chofer, '2026-10-01 04:00:00', $tramo1);
+    viajeFinalizadoCon($chofer, '2026-10-01 11:00:00', $tramo2);
+    viajeFinalizadoCon($chofer, '2026-10-01 02:00:00', [[-34.0, -58.0], [-35.0, -58.0]]); // 30/09 23:00 local: ayer
+    viajeFinalizadoCon(choferEnTurno(), '2026-10-01 05:00:00', [[-34.0, -58.0], [-35.0, -58.0]]); // de otro chofer
+    Viaje::factory()->create(['chofer_id' => $chofer->id, 'estado' => EstadoViaje::Cancelado, 'cancelado_en' => now()]);
+
+    $metros = Distancia::metros(...$tramo1[0], ...$tramo1[1]) + Distancia::metros(...$tramo1[1], ...$tramo1[2])
+        + Distancia::metros(...$tramo2[0], ...$tramo2[1]);
+
+    $choferes = collect(app(DatosMapaPanel::class)->obtener()['choferes'])->keyBy('id');
+
+    expect(round($metros / 1000, 1))->toBe(2.4)
+        ->and($choferes[$chofer->id]['hoy'])->toBe(['viajes' => 2, 'km' => 2.4, 'turno_desde' => '07:30']);
+});
+
+it('si el turno empezó un día anterior muestra también la fecha', function () {
+    $chofer = choferEnTurno();
+    $chofer->turnoAbierto->update(['inicio' => '2026-10-01 01:00:00']); // 30/09 22:00 en Buenos Aires
+
+    expect(app(DatosMapaPanel::class)->obtener()['choferes'][0]['hoy']['turno_desde'])->toBe('30/09 22:00');
+});
+
+it('sin viajes hoy trae ceros', function () {
+    choferEnTurno(); // turno abierto hace 2 h: 10:00 UTC = 07:00 local
+
+    expect(app(DatosMapaPanel::class)->obtener()['choferes'][0]['hoy'])->toBe(['viajes' => 0, 'km' => 0.0, 'turno_desde' => '07:00']);
+});
+
+it('arma los datos con la misma cantidad de consultas para 1 chofer que para 5', function () {
+    // El estimador consulta por viaje (cacheado 30 s): se aísla para contar solo las consultas del armado.
+    $this->mock(EstimadorLlegada::class)->shouldReceive('estimar')->andReturn(estimacion(60));
+    $sembrar = function (): void {
+        $chofer = choferEnTurno();
+        Viaje::factory()->create(['chofer_id' => $chofer->id, 'estado' => EstadoViaje::EnCamino]);
+        viajeFinalizadoCon($chofer, '2026-10-01 11:00:00', [[-34.60, -58.38], [-34.61, -58.38]]);
+        reservaAceptada(choferEnTurno(), now()->addMinutes(20)); // otro con una reserva próxima, sin viaje activo
+    };
+    $contar = function (): int {
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        app(DatosMapaPanel::class)->obtener();
+        DB::disableQueryLog();
+
+        return count(DB::getQueryLog());
+    };
+
+    $sembrar();
+    $conUno = $contar();
+    foreach (range(1, 4) as $i) {
+        $sembrar();
+    }
+    $conCinco = $contar();
+
+    expect(app(DatosMapaPanel::class)->obtener()['choferes'])->toHaveCount(10)
+        ->and($conCinco)->toBe($conUno);
+});
+
+it('el script resalta el viaje tocado y el globo del chofer enlaza al viaje y al chofer', function (?string $clave) {
+    config(['vehiculos.mapas.google_api_key' => $clave, 'vehiculos.mapas.google_js_api_key' => null]);
+    choferEnTurno();
+
+    // Livewire incrusta el @script escapado en HTML.
+    $html = html_entity_decode($this->get(MapaEnVivo::getUrl())->assertOk()->getContent(), ENT_QUOTES);
+
+    expect($html)
+        ->toContain('const nivelResaltado')
+        ->toContain('const ajustarEstilo')
+        ->toContain('const resaltadoVigente')
+        ->toContain('const textoLlegada')
+        ->toContain('data-resaltar-viaje')
+        ->toContain('Ver recorrido')
+        ->toContain('Ver viaje')
+        ->toContain('escapar(c.viaje.url)')
+        ->toContain('escapar(c.url)')
+        ->toContain('Hoy:')
+        // Tocar el mapa vacío o Escape quitan el resaltado; el listener de teclado no se acumula.
+        ->toContain('quitarResaltado')
+        ->toContain("removeEventListener('keydown', quitarConEscape)");
+})->with(['leaflet' => [null], 'google' => ['clave']]);
+
+it('con Google el resaltado encuadra con margen y zoom acotado, y el globo del viaje sigue a los datos', function () {
+    config(['vehiculos.mapas.google_api_key' => 'clave', 'vehiculos.mapas.google_js_api_key' => null]);
+    choferEnTurno();
+
+    $html = html_entity_decode($this->get(MapaEnVivo::getUrl())->assertOk()->getContent(), ENT_QUOTES);
+
+    expect($html)
+        ->toContain('mapa.fitBounds(d.limites, MARGEN_ENCUADRE)')
+        ->toContain("google.maps.event.addListenerOnce(mapa, 'idle'")
+        // La acotación del zoom espera solo al encuadre recién pedido: se descarta la anterior y vence sola.
+        ->toContain('cancelarAcotarZoom?.()')
+        ->toContain('PLAZO_ACOTAR_ZOOM_MS')
+        ->toContain('ZOOM_MAXIMO_ENCUADRE')
+        // El globo de un viaje se refresca en cada actualización y se cierra si el viaje ya no está activo.
+        ->toContain('viajeConGlobo');
+});
+
+it('los km de hoy salen de los metros guardados en cada viaje, sin leer el recorrido en cada consulta', function () {
+    $chofer = choferEnTurno();
+    Viaje::factory()->create([
+        'chofer_id' => $chofer->id, 'estado' => EstadoViaje::Finalizado, 'finalizado_en' => '2026-10-01 11:00:00',
+        'metros_recorridos' => 5250,
+    ]);
+    Viaje::factory()->create([ // de antes de guardar los metros y sin recorrido: suma 0
+        'chofer_id' => $chofer->id, 'estado' => EstadoViaje::Finalizado, 'finalizado_en' => '2026-10-01 11:30:00',
+    ]);
+
+    DB::enableQueryLog();
+    $choferes = collect(app(DatosMapaPanel::class)->obtener()['choferes'])->keyBy('id');
+    $consultas = collect(DB::getQueryLog())->pluck('query');
+    DB::disableQueryLog();
+
+    expect($choferes[$chofer->id]['hoy']['viajes'])->toBe(2)
+        ->and($choferes[$chofer->id]['hoy']['km'])->toBe(5.3)
+        ->and($consultas->filter(fn (string $sql) => str_contains($sql, 'recorrido_viaje')))->toBeEmpty();
 });
