@@ -258,3 +258,20 @@ it('Google no deja en el log el texto buscado ni la URL', function () {
         return ! str_contains($todo, 'secreta') && ! str_contains($todo, 'googleapis');
     })->once();
 });
+
+it('limita /api/lugares a 30 búsquedas por minuto por usuario, con mensaje en castellano', function () {
+    $u = Usuario::factory()->create();
+    $otro = Usuario::factory()->create();
+
+    for ($i = 0; $i < 30; $i++) {
+        $this->actingAs($u)->getJson('/api/lugares?q=obelisco')->assertOk();
+    }
+    $this->actingAs($u)->getJson('/api/lugares?q=obelisco')
+        ->assertStatus(429)
+        ->assertJsonPath('message', 'Demasiadas búsquedas. Probá de nuevo en un minuto.');
+
+    $this->actingAs($otro)->getJson('/api/lugares?q=obelisco')->assertOk();
+
+    $this->travel(61)->seconds();
+    $this->actingAs($u)->getJson('/api/lugares?q=obelisco')->assertOk();
+});

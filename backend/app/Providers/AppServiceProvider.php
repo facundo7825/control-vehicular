@@ -47,5 +47,12 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         \Illuminate\Http\Resources\Json\JsonResource::withoutWrapping();
+
+        // Búsqueda de lugares: 30 por minuto y por usuario, para no agotar el servicio externo.
+        \Illuminate\Support\Facades\RateLimiter::for('lugares', fn (\Illuminate\Http\Request $request) => \Illuminate\Cache\RateLimiting\Limit::perMinute(30)
+            ->by((string) $request->user()?->id ?: $request->ip())
+            ->response(fn (\Illuminate\Http\Request $request, array $headers) => response()->json(
+                ['message' => 'Demasiadas búsquedas. Probá de nuevo en un minuto.'], 429, $headers,
+            )));
     }
 }
