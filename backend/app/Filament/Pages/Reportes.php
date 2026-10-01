@@ -128,7 +128,7 @@ class Reportes extends Page
         return $this->datos = [
             'choferes' => $reportes->porChofer($desde, $hasta),
             'vehiculos' => $reportes->porVehiculo($desde, $hasta),
-            'aviso' => $reportes->avisoRetencion($desde),
+            'aviso' => $reportes->avisoKmSinDatos($desde, $hasta),
         ];
     }
 

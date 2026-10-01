@@ -9,8 +9,10 @@ use App\Models\Usuario;
 use App\Models\Vehiculo;
 use App\Models\Viaje;
 use App\Servicios\ExportadorExcel;
+use App\Servicios\KilometrosRecorridos;
 use App\Servicios\ReportesPanel;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Livewire\Features\SupportTesting\Testable;
 use Livewire\Livewire;
@@ -37,6 +39,10 @@ function viajeConRecorrido(Usuario $chofer, Vehiculo $vehiculo, array $puntos, a
             'viaje_id' => $viaje->id, 'lat' => $lat, 'lng' => $lng,
             'registrado_en' => now()->subDay()->addMinutes($i),
         ]);
+    }
+    if ($viaje->estado === EstadoViaje::Finalizado && ! array_key_exists('metros_recorridos', $attrs)) {
+        // Como al finalizar de verdad (MaquinaEstadosViaje): los metros quedan guardados en el viaje.
+        $viaje->update(['metros_recorridos' => KilometrosRecorridos::metrosDe($viaje->id)]);
     }
 
     return $viaje;
@@ -127,16 +133,44 @@ it('usa por defecto el mes actual en días locales', function () {
     $this->get(Reportes::getUrl())->assertOk()->assertSee('Exportar a Excel');
 });
 
-it('avisa que los km cubren solo la retención del recorrido', function () {
+it('los km salen de los metros guardados en cada viaje, sin leer el recorrido', function () {
+    $chofer = Usuario::factory()->chofer()->create();
+    $vehiculo = Vehiculo::factory()->create();
+    viajeConRecorrido($chofer, $vehiculo, [], ['metros_recorridos' => 12345]);
+
+    DB::enableQueryLog();
+    $reportes = app(ReportesPanel::class);
+    $choferes = $reportes->porChofer('2026-10-01', '2026-10-31');
+    $vehiculos = $reportes->porVehiculo('2026-10-01', '2026-10-31');
+    $consultas = collect(DB::getQueryLog())->pluck('query');
+    DB::disableQueryLog();
+
+    expect($choferes[0]['km'])->toBe(12.35)
+        ->and($vehiculos[0]['km'])->toBe(12.35)
+        ->and($consultas->filter(fn (string $sql) => str_contains($sql, 'recorrido_viaje')))->toBeEmpty();
+});
+
+it('avisa cuando el rango tiene viajes finalizados sin km guardados', function () {
+    $chofer = Usuario::factory()->chofer()->create();
+    $vehiculo = Vehiculo::factory()->create();
+    viajeConRecorrido($chofer, $vehiculo, [], ['metros_recorridos' => 1000]);
+    // Finalizados antes de que se guardaran los metros y con el recorrido ya borrado: sin dato.
+    foreach (['2026-06-10 12:00:00', '2026-06-11 12:00:00'] as $momento) {
+        viajeConRecorrido($chofer, $vehiculo, [], ['finalizado_en' => Carbon::parse($momento)])
+            ->update(['metros_recorridos' => null]);
+    }
+
     $reportes = app(ReportesPanel::class);
 
-    expect($reportes->avisoRetencion('2026-10-01'))->toBeNull()
-        ->and($reportes->avisoRetencion('2026-06-01'))->toContain('90 días');
+    expect($reportes->avisoKmSinDatos('2026-10-01', '2026-10-31'))->toBeNull()
+        ->and($reportes->avisoKmSinDatos('2026-06-01', '2026-06-30'))
+        ->toBe('2 viajes finalizados del rango no tienen km: su recorrido se borró antes de que se guardara la distancia.');
 
     Livewire::test(Reportes::class)
-        ->assertDontSee('cubren solo los últimos')
+        ->assertDontSee('no tienen km')
         ->set('filtros.desde', '2026-06-01')
-        ->assertSee('cubren solo los últimos 90 días');
+        ->set('filtros.hasta', '2026-06-30')
+        ->assertSee('2 viajes finalizados del rango no tienen km');
 });
 
 it('muestra los datos del rango elegido en la página', function () {

@@ -13,6 +13,7 @@ use App\Models\Usuario;
 use App\Models\Viaje;
 use App\Servicios\DatosMapaPanel;
 use App\Servicios\EstimadorLlegada;
+use App\Servicios\KilometrosRecorridos;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Exceptions;
@@ -272,6 +273,8 @@ function viajeFinalizadoCon(Usuario $chofer, string $finalizadoEn, array $puntos
             'registrado_en' => Carbon::parse($finalizadoEn)->subMinutes(30)->addMinutes($i),
         ]);
     }
+    // Como al finalizar de verdad (MaquinaEstadosViaje): los metros quedan guardados en el viaje.
+    $viaje->update(['metros_recorridos' => KilometrosRecorridos::metrosDe($viaje->id)]);
 
     return $viaje;
 }
@@ -441,4 +444,24 @@ it('con Google el resaltado encuadra con margen y zoom acotado, y el globo del v
         ->toContain('ZOOM_MAXIMO_ENCUADRE')
         // El globo de un viaje se refresca en cada actualización y se cierra si el viaje ya no está activo.
         ->toContain('viajeConGlobo');
+});
+
+it('los km de hoy salen de los metros guardados en cada viaje, sin leer el recorrido en cada consulta', function () {
+    $chofer = choferEnTurno();
+    Viaje::factory()->create([
+        'chofer_id' => $chofer->id, 'estado' => EstadoViaje::Finalizado, 'finalizado_en' => '2026-10-01 11:00:00',
+        'metros_recorridos' => 5250,
+    ]);
+    Viaje::factory()->create([ // de antes de guardar los metros y sin recorrido: suma 0
+        'chofer_id' => $chofer->id, 'estado' => EstadoViaje::Finalizado, 'finalizado_en' => '2026-10-01 11:30:00',
+    ]);
+
+    DB::enableQueryLog();
+    $choferes = collect(app(DatosMapaPanel::class)->obtener()['choferes'])->keyBy('id');
+    $consultas = collect(DB::getQueryLog())->pluck('query');
+    DB::disableQueryLog();
+
+    expect($choferes[$chofer->id]['hoy']['viajes'])->toBe(2)
+        ->and($choferes[$chofer->id]['hoy']['km'])->toBe(5.3)
+        ->and($consultas->filter(fn (string $sql) => str_contains($sql, 'recorrido_viaje')))->toBeEmpty();
 });

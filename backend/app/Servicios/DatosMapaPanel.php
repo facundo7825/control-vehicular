@@ -12,7 +12,7 @@ use App\Models\Turno;
 use App\Models\Viaje;
 use App\Support\HoraLocal;
 use DateTimeInterface;
-use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Throwable;
 
 /**
@@ -140,8 +140,8 @@ class DatosMapaPanel
     }
 
     /**
-     * Viajes finalizados en el día local y metros recorridos en ellos (haversine sobre el recorrido real),
-     * por chofer. Dos consultas para todos los choferes.
+     * Viajes finalizados en el día local y metros recorridos en ellos (los guardados al finalizar cada viaje),
+     * por chofer. Una consulta agrupada para todos los choferes.
      *
      * @param  list<int>  $choferIds
      * @return array<int, array{viajes: int, metros: float}>
@@ -149,23 +149,15 @@ class DatosMapaPanel
     private function hoy(array $choferIds): array
     {
         $desde = now()->setTimezone(config('vehiculos.zona_horaria'))->startOfDay()->setTimezone(config('app.timezone'));
-        /** @var Collection<int, int> $choferDeViaje viaje_id => chofer_id */
-        $choferDeViaje = Viaje::whereIn('chofer_id', $choferIds)
+
+        return Viaje::whereIn('chofer_id', $choferIds)
             ->where('estado', EstadoViaje::Finalizado)
             ->where('finalizado_en', '>=', $desde)
-            ->pluck('chofer_id', 'id');
-
-        $resultado = [];
-        foreach ($choferDeViaje as $choferId) {
-            $resultado[$choferId] ??= ['viajes' => 0, 'metros' => 0.0];
-            $resultado[$choferId]['viajes']++;
-        }
-
-        foreach (KilometrosRecorridos::metrosPorViaje($choferDeViaje->keys()->all()) as $viajeId => $metros) {
-            $resultado[$choferDeViaje[$viajeId]]['metros'] += $metros;
-        }
-
-        return $resultado;
+            ->groupBy('chofer_id')
+            ->toBase()
+            ->get(['chofer_id', DB::raw('COUNT(*) as viajes'), DB::raw('COALESCE(SUM(metros_recorridos), 0) as metros')])
+            ->mapWithKeys(fn (object $f) => [(int) $f->chofer_id => ['viajes' => (int) $f->viajes, 'metros' => (float) $f->metros]])
+            ->all();
     }
 
     /** "07:30" si el turno empezó hoy (hora local); "30/09 22:00" si viene de un día anterior. */

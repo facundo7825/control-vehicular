@@ -19,8 +19,6 @@ use Illuminate\Support\Collection;
  */
 class ReportesPanel
 {
-    public function __construct(private Parametros $parametros) {}
-
     /** @return array{desde: string, hasta: string} el mes actual en días locales */
     public function rangoPorDefecto(): array
     {
@@ -32,17 +30,20 @@ class ReportesPanel
         ];
     }
 
-    /** Aviso si el rango empieza antes de lo que se conserva el recorrido (los km de antes no se pueden calcular). */
-    public function avisoRetencion(string $desde): ?string
+    /**
+     * Aviso si en el rango hay viajes finalizados sin metros guardados: los finalizados antes de que se guardara
+     * la distancia cuyo recorrido ya se había borrado por la retención (la migración rellenó el resto).
+     */
+    public function avisoKmSinDatos(string $desde, string $hasta): ?string
     {
-        $dias = $this->parametros->entero('retencion_recorrido_dias');
-        [$inicio] = $this->limites($desde, $desde);
+        [$inicio, $fin] = $this->limites($desde, $hasta);
+        $sinDatos = $this->finalizados($inicio, $fin)->whereNull('metros_recorridos')->count();
 
-        if ($inicio->greaterThanOrEqualTo(now()->subDays($dias))) {
-            return null;
-        }
-
-        return "El recorrido de los viajes se guarda $dias días: los km cubren solo los últimos $dias días.";
+        return match ($sinDatos) {
+            0 => null,
+            1 => '1 viaje finalizado del rango no tiene km: su recorrido se borró antes de que se guardara la distancia.',
+            default => "$sinDatos viajes finalizados del rango no tienen km: su recorrido se borró antes de que se guardara la distancia.",
+        };
     }
 
     /**
@@ -53,14 +54,13 @@ class ReportesPanel
     {
         [$inicio, $fin] = $this->limites($desde, $hasta);
 
-        $finalizados = $this->finalizados($inicio, $fin)->get(['id', 'chofer_id']);
+        $finalizados = $this->finalizados($inicio, $fin)->get(['id', 'chofer_id', 'metros_recorridos']);
         $cancelados = Viaje::where('estado', EstadoViaje::Cancelado)
             ->whereNotNull('chofer_id')
             ->where('cancelado_en', '>=', $inicio)
             ->where('cancelado_en', '<', $fin)
             ->pluck('chofer_id')
             ->countBy();
-        $kmPorViaje = $this->kmPorViaje($inicio, $fin);
         $horas = $this->horasDeTurno($inicio, $fin, 'chofer_id');
         $llegadas = Viaje::where('tipo', TipoViaje::Inmediato)
             ->whereNotNull('chofer_id')
@@ -83,7 +83,7 @@ class ReportesPanel
                 'chofer' => $chofer->nombre,
                 'finalizados' => $porChofer->get($chofer->id, collect())->count(),
                 'cancelados' => (int) $cancelados->get($chofer->id, 0),
-                'km' => $this->sumarKm($porChofer->get($chofer->id, collect()), $kmPorViaje),
+                'km' => $this->sumarKm($porChofer->get($chofer->id, collect())),
                 'horas_turno' => round($horas->get($chofer->id, 0) / 3600, 1),
                 'llegada_promedio_min' => $llegadas->get($chofer->id),
             ])
@@ -98,8 +98,7 @@ class ReportesPanel
     {
         [$inicio, $fin] = $this->limites($desde, $hasta);
 
-        $finalizados = $this->finalizados($inicio, $fin)->whereNotNull('vehiculo_id')->get(['id', 'vehiculo_id']);
-        $kmPorViaje = $this->kmPorViaje($inicio, $fin);
+        $finalizados = $this->finalizados($inicio, $fin)->whereNotNull('vehiculo_id')->get(['id', 'vehiculo_id', 'metros_recorridos']);
         $horas = $this->horasDeTurno($inicio, $fin, 'vehiculo_id');
 
         $ids = $finalizados->pluck('vehiculo_id')->merge($horas->keys())->filter()->unique();
@@ -111,7 +110,7 @@ class ReportesPanel
                 'patente' => $vehiculo->patente,
                 'vehiculo' => trim("$vehiculo->marca $vehiculo->modelo"),
                 'finalizados' => $porVehiculo->get($vehiculo->id, collect())->count(),
-                'km' => $this->sumarKm($porVehiculo->get($vehiculo->id, collect()), $kmPorViaje),
+                'km' => $this->sumarKm($porVehiculo->get($vehiculo->id, collect())),
                 'horas_turno' => round($horas->get($vehiculo->id, 0) / 3600, 1),
             ])
             ->values()
@@ -128,19 +127,14 @@ class ReportesPanel
     }
 
     /**
-     * Metros recorridos por viaje finalizado en el rango (ver KilometrosRecorridos).
+     * Km de los viajes con los metros guardados al finalizar (ver KilometrosRecorridos); los que no tienen
+     * dato suman 0 y avisoKmSinDatos lo advierte.
      *
-     * @return array<int, float>
+     * @param  Collection<int, Viaje>  $viajes
      */
-    private function kmPorViaje(Carbon $inicio, Carbon $fin): array
+    private function sumarKm(Collection $viajes): float
     {
-        return KilometrosRecorridos::metrosPorViaje($this->finalizados($inicio, $fin)->select('id'));
-    }
-
-    /** @param  Collection<int, Viaje>  $viajes */
-    private function sumarKm(Collection $viajes, array $metrosPorViaje): float
-    {
-        return round($viajes->sum(fn (Viaje $v) => $metrosPorViaje[$v->id] ?? 0) / 1000, 2);
+        return round($viajes->sum(fn (Viaje $v) => $v->metros_recorridos ?? 0) / 1000, 2);
     }
 
     /**

@@ -6,7 +6,10 @@ use App\Mapas\Distancia;
 use App\Models\PuntoRecorrido;
 use Illuminate\Contracts\Database\Query\Builder as BuilderContrato;
 
-/** Distancia recorrida de verdad en cada viaje: haversine entre los puntos consecutivos de recorrido_viaje. */
+/**
+ * Distancia recorrida de verdad en cada viaje: haversine entre los puntos consecutivos de recorrido_viaje.
+ * Se calcula una vez, al finalizar el viaje (o si llegan puntos tarde), y queda en viajes.metros_recorridos.
+ */
 final class KilometrosRecorridos
 {
     /**
@@ -38,5 +41,11 @@ final class KilometrosRecorridos
             });
 
         return $metros;
+    }
+
+    /** Metros del recorrido de un viaje, redondeados; 0 si tiene menos de dos puntos. */
+    public static function metrosDe(int $viajeId): int
+    {
+        return (int) round(self::metrosPorViaje([$viajeId])[$viajeId] ?? 0);
     }
 }

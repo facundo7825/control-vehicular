@@ -1,9 +1,11 @@
 <?php
 
+use App\Enums\EstadoViaje;
 use App\Mapas\Distancia;
 use App\Models\PuntoRecorrido;
 use App\Models\Viaje;
 use App\Servicios\KilometrosRecorridos;
+use App\Servicios\MaquinaEstadosViaje;
 use Illuminate\Support\Carbon;
 
 /** Carga los puntos en el orden dado ([lat, lng, registrado_en]). */
@@ -56,4 +58,37 @@ it('acepta una subconsulta de ids', function () {
 
 it('sin viajes devuelve vacío', function () {
     expect(KilometrosRecorridos::metrosPorViaje([]))->toBe([]);
+});
+
+it('al finalizar un viaje guarda los metros de su recorrido', function () {
+    $viaje = Viaje::factory()->create(['estado' => EstadoViaje::EnCurso, 'iniciado_en' => now()->subHour()]);
+    $sinPuntos = Viaje::factory()->create(['estado' => EstadoViaje::EnCurso, 'iniciado_en' => now()->subHour()]);
+    cargarPuntos($viaje, [[-34.600, -58.380, '10:00'], [-34.610, -58.380, '10:01']]);
+
+    $maquina = app(MaquinaEstadosViaje::class);
+    $maquina->transicionar($viaje, EstadoViaje::Finalizado);
+    $maquina->transicionar($sinPuntos, EstadoViaje::Finalizado);
+
+    expect($viaje->fresh()->metros_recorridos)->toBe((int) round(Distancia::metros(-34.600, -58.380, -34.610, -58.380)))
+        ->and($sinPuntos->fresh()->metros_recorridos)->toBe(0);
+});
+
+it('la migración rellena los viajes finalizados y deja sin dato los que ya no tienen recorrido', function () {
+    $migracion = require database_path('migrations/2026_10_01_000001_agregar_metros_recorridos_a_viajes.php');
+    $migracion->down();
+
+    $finalizado = Viaje::factory()->create(['estado' => EstadoViaje::Finalizado, 'finalizado_en' => now()]);
+    $unPunto = Viaje::factory()->create(['estado' => EstadoViaje::Finalizado, 'finalizado_en' => now()]);
+    $purgado = Viaje::factory()->create(['estado' => EstadoViaje::Finalizado, 'finalizado_en' => now()->subYear()]);
+    $enCurso = Viaje::factory()->create(['estado' => EstadoViaje::EnCurso, 'iniciado_en' => now()]);
+    cargarPuntos($finalizado, [[-34.600, -58.380, '10:00'], [-34.610, -58.380, '10:01']]);
+    cargarPuntos($unPunto, [[-34.600, -58.380, '10:00']]);
+    cargarPuntos($enCurso, [[-34.600, -58.380, '10:00'], [-34.610, -58.380, '10:01']]);
+
+    $migracion->up();
+
+    expect($finalizado->fresh()->metros_recorridos)->toBe((int) round(Distancia::metros(-34.600, -58.380, -34.610, -58.380)))
+        ->and($unPunto->fresh()->metros_recorridos)->toBe(0)
+        ->and($purgado->fresh()->metros_recorridos)->toBeNull()
+        ->and($enCurso->fresh()->metros_recorridos)->toBeNull();
 });

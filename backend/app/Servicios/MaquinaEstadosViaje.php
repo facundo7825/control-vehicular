@@ -160,6 +160,10 @@ class MaquinaEstadosViaje
         if ($marca = self::MARCAS[$hacia->value] ?? null) {
             $viaje->{$marca} = now();
         }
+        if ($hacia === E::Finalizado) {
+            // Se calcula una sola vez (los puntos de un viaje): el mapa y los reportes solo suman la columna.
+            $viaje->metros_recorridos = KilometrosRecorridos::metrosDe($viaje->id);
+        }
         $viaje->save();
 
         $this->actualizarAlertaSinChofer($viaje, $desde);
