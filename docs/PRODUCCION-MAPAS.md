@@ -118,6 +118,18 @@ misma configuración.
 - Si OSRM o Nominatim se caen, el backend deja de consultarlos un minuto y sigue funcionando (búsqueda vacía, sin
   recorrido, tiempos "sin dato"): nunca rompe un pedido.
 
+**Comprobación de punta a punta:** lo que recibe la app tiene que mostrar el servidor propio. Con un token de prueba
+(se crea con tinker y se borra al terminar):
+
+```bash
+cd backend
+TOKEN="$(php artisan tinker --execute='echo App\Models\Usuario::first()->createToken("verificacion")->plainTextToken;')"
+curl -s -H "Authorization: Bearer $TOKEN" -H "Accept: application/json" https://api.ejemplo.gob.ar/api/configuracion
+# Debe decir "lugares_autocompletar":true y "teselas":{"url":"https://mapas.ejemplo.gob.ar/styles/basico/{z}/{x}/{y}.png",...}
+# (si dice tile.openstreetmap.org, el .env no se leyó: revisar las variables y repetir php artisan config:cache)
+php artisan tinker --execute='Laravel\Sanctum\PersonalAccessToken::where("name", "verificacion")->delete();'
+```
+
 ## 5. Seguridad y HTTPS
 
 - Los puertos escuchan solo en `127.0.0.1`. **OSRM y Nominatim no se exponen a internet**: los consulta solo el backend.
@@ -136,6 +148,8 @@ misma configuración.
   con `iptables-persistent` o el mecanismo de la distribución.)
 - **Las teselas sí salen a internet**, porque las piden los celulares y los navegadores. La app en producción exige
   HTTPS, así que van detrás de un proxy inverso con certificado (por ejemplo Let's Encrypt) y con cache.
+  `MAPAS_TESELAS_URL` tiene que ser `https://`: con `http://` el panel (servido por HTTPS) las bloquea como contenido
+  mixto y Android no permite tráfico sin cifrar; en producción el backend lo avisa en el log.
 
 Ejemplo de nginx (`/etc/nginx/sites-available/mapas`):
 

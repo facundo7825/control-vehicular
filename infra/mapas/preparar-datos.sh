@@ -70,6 +70,9 @@ rm -rf "${DATOS:?}/tmp/"*
 
 # 1. Extracto de Argentina, verificado con el MD5 que publica Geofabrik.
 ARGENTINA="$DATOS/fuentes/argentina-latest.osm.pbf"
+# Un .part que quedó de una descarga cortada solo sirve si todavía no hay extracto (se sigue desde ahí); si ya hay
+# uno, ocupa cientos de MB sin uso (y --actualizar empieza de cero), así que se borra.
+if [ -s "$ARGENTINA" ]; then rm -f "$ARGENTINA.part"; fi
 # Si la descarga se corta o se traba (menos de 10 kB/s durante 1 minuto), reintenta. Sin -R: el archivo queda con la
 # fecha de descarga, que es la que comparan -z (¿hay uno más nuevo en Geofabrik?) y los pasos siguientes.
 BAJAR=(curl -fL --retry 10 --retry-delay 5 --retry-all-errors --speed-limit 10000 --speed-time 60)
@@ -105,7 +108,6 @@ if [ ! -s "$ARGENTINA" ]; then
     bajar_argentina
 elif [ "$ACTUALIZAR" = 1 ]; then
     paso "Buscando un extracto más nuevo en $PBF_URL"
-    rm -f "$ARGENTINA.part"
     antes="$(date -r "$ARGENTINA" +%s)"
     bajar_argentina -z "$ARGENTINA"
     if [ "$antes" = "$(date -r "$ARGENTINA" +%s)" ]; then echo "Sin cambios en Geofabrik."; fi
