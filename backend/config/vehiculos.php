@@ -26,13 +26,14 @@ return [
         // Mapa de fondo de la app (MapaOsm, sin clave de Google) y del panel (Leaflet), expuesto en
         // /api/configuracion: se cambia sin recompilar la app. Por defecto el OSM público, solo para desarrollo
         // y demos (su política no admite tráfico de producción). tms: servidores con la Y invertida (p. ej. el IGN).
-        // atribucion_url: a dónde lleva el texto de créditos; vacía, el texto no lleva enlace.
+        // atribucion_url: a dónde lleva el texto de créditos; vacía, el texto no lleva enlace. Los tipos y los
+        // valores vacíos se normalizan en App\Mapas\Teselas (tms acepta true/false, on/off, yes/no, 1/0).
         'teselas' => [
             'url' => env('MAPAS_TESELAS_URL', 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'),
             'atribucion' => env('MAPAS_TESELAS_ATRIBUCION', '© OpenStreetMap contributors'),
             'atribucion_url' => env('MAPAS_TESELAS_ATRIBUCION_URL', 'https://www.openstreetmap.org/copyright'),
-            'tms' => (bool) env('MAPAS_TESELAS_TMS', false),
-            'max_zoom' => (int) env('MAPAS_TESELAS_MAX_ZOOM', 19),
+            'tms' => env('MAPAS_TESELAS_TMS', false),
+            'max_zoom' => env('MAPAS_TESELAS_MAX_ZOOM', 19),
         ],
     ],
 

@@ -1,8 +1,10 @@
 <?php
 
+use App\Mapas\Teselas;
 use App\Models\Parametro;
 use App\Models\Usuario;
 use App\Servicios\Parametros;
+use Illuminate\Support\Facades\Log;
 
 it('usa el valor por defecto de config', function () {
     expect(app(Parametros::class)->entero('oferta_segundos'))->toBe(30);
@@ -76,13 +78,66 @@ it('lee el mapa de fondo de las variables de entorno', function () {
         }
     }
 
-    expect($teselas)->toBe([
+    config(['vehiculos.mapas.teselas' => $teselas]);
+
+    expect(Teselas::configuradas())->toBe([
         'url' => 'http://mapas.local:8080/styles/basico/{z}/{x}/{y}.png',
         'atribucion' => '© OpenStreetMap contributors · Mapa propio',
         'atribucion_url' => 'https://mapas.local/creditos',
         'tms' => true,
         'max_zoom' => 17,
     ]);
+});
+
+it('interpreta MAPAS_TESELAS_TMS como booleano (off, no, 0, false y vacío son falso)', function (string $valor, bool $tms) {
+    $_SERVER['MAPAS_TESELAS_TMS'] = $_ENV['MAPAS_TESELAS_TMS'] = $valor;
+    try {
+        config(['vehiculos.mapas.teselas' => (require config_path('vehiculos.php'))['mapas']['teselas']]);
+    } finally {
+        unset($_SERVER['MAPAS_TESELAS_TMS'], $_ENV['MAPAS_TESELAS_TMS']);
+    }
+
+    expect(Teselas::configuradas()['tms'])->toBe($tms);
+})->with([
+    ['off', false], ['no', false], ['0', false], ['false', false], ['', false],
+    ['on', true], ['yes', true], ['1', true], ['true', true],
+]);
+
+it('usa los valores por defecto si la URL, la atribución o el zoom máximo quedan vacíos o inválidos', function (mixed $zoom) {
+    config(['vehiculos.mapas.teselas' => [
+        'url' => '  ', 'atribucion' => '', 'atribucion_url' => '', 'tms' => null, 'max_zoom' => $zoom,
+    ]]);
+
+    expect(Teselas::configuradas())->toBe([
+        'url' => 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+        'atribucion' => '© OpenStreetMap contributors',
+        'atribucion_url' => null,
+        'tms' => false,
+        'max_zoom' => 19,
+    ]);
+})->with(['', null, '0', -3, 'abc']);
+
+it('avisa una vez en el log si en producción las teselas no usan HTTPS', function () {
+    Log::spy();
+    app()->detectEnvironment(fn () => 'production');
+    config(['vehiculos.mapas.teselas.url' => 'http://mapas.local/{z}/{x}/{y}.png']);
+
+    Teselas::configuradas();
+    Teselas::configuradas();
+
+    Log::shouldHaveReceived('warning')->withArgs(fn (string $msg) => str_contains($msg, 'HTTPS'))->once();
+});
+
+it('no avisa por HTTP fuera de producción ni con HTTPS en producción', function () {
+    Log::spy();
+    config(['vehiculos.mapas.teselas.url' => 'http://mapas.local/{z}/{x}/{y}.png']);
+    Teselas::configuradas();
+
+    app()->detectEnvironment(fn () => 'production');
+    config(['vehiculos.mapas.teselas.url' => 'https://mapas.local/{z}/{x}/{y}.png']);
+    Teselas::configuradas();
+
+    Log::shouldNotHaveReceived('warning');
 });
 
 it('solo permite autocompletar lugares si el buscador lo admite (Nominatim público no)', function (string $driver, bool $autocompletar, array $extra = []) {
