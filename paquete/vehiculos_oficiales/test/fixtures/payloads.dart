@@ -17,8 +17,14 @@ const intercambioInvalido = r'''{"message":"Sesión inválida."}''';
 // GET /api/yo sin token -> 401
 const noAutenticado = r'''{"message":"Unauthenticated."}''';
 
-// GET /api/configuracion -> 200
-const configuracion = r'''{"gps_turno_seg":10,"gps_viaje_seg":5,"oferta_segundos":30,"lugares_autocompletar":true}''';
+// GET /api/configuracion -> 200 (mapa de fondo por defecto: el OSM público)
+const configuracion =
+    r'''{"gps_turno_seg":10,"gps_viaje_seg":5,"oferta_segundos":30,"lugares_autocompletar":true,"teselas":{"url":"https:\/\/tile.openstreetmap.org\/{z}\/{x}\/{y}.png","atribucion":"© OpenStreetMap contributors","atribucion_url":"https:\/\/www.openstreetmap.org\/copyright","tms":false,"max_zoom":19}}''';
+
+// GET /api/configuracion -> 200 con MAPAS_TESELAS_URL=https://mapas.ejemplo.gob.ar/tms/{z}/{x}/{y}.png,
+// MAPAS_TESELAS_ATRIBUCION="IGN", MAPAS_TESELAS_ATRIBUCION_URL= (vacía), MAPAS_TESELAS_TMS=true y MAPAS_TESELAS_MAX_ZOOM=15.
+const configuracionTeselasPropias =
+    r'''{"gps_turno_seg":10,"gps_viaje_seg":5,"oferta_segundos":30,"lugares_autocompletar":true,"teselas":{"url":"https:\/\/mapas.ejemplo.gob.ar\/tms\/{z}\/{x}\/{y}.png","atribucion":"IGN","atribucion_url":null,"tms":true,"max_zoom":15}}''';
 
 // GET /api/configuracion -> 200 con LUGARES_DRIVER=nominatim: la búsqueda de lugares es al confirmar.
 const configuracionSinAutocompletar =

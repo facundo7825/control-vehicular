@@ -137,6 +137,45 @@ void main() {
     expect(d.choferes.single.reservasDelDia, 0);
   });
 
+  test('lee el mapa de fondo de la configuración', () {
+    final osm = Configuracion.fromJson(p.json(p.configuracion)).teselas!;
+    expect(osm.url, 'https://tile.openstreetmap.org/{z}/{x}/{y}.png');
+    expect(osm.atribucion, '© OpenStreetMap contributors');
+    expect(osm.atribucionUrl, Uri.parse('https://www.openstreetmap.org/copyright'));
+    expect(osm.tms, isFalse);
+    expect(osm.maxZoom, 19);
+
+    final propias = Configuracion.fromJson(p.json(p.configuracionTeselasPropias)).teselas!;
+    expect(propias.url, 'https://mapas.ejemplo.gob.ar/tms/{z}/{x}/{y}.png');
+    expect(propias.atribucion, 'IGN');
+    expect(propias.atribucionUrl, isNull);
+    expect(propias.tms, isTrue);
+    expect(propias.maxZoom, 15);
+
+    // Un backend anterior no manda el mapa de fondo: el OSM público de siempre.
+    final anterior = p.json(p.configuracion)..remove('teselas');
+    final porDefecto = Configuracion.fromJson(anterior).teselas!;
+    expect(porDefecto.url, 'https://tile.openstreetmap.org/{z}/{x}/{y}.png');
+    expect(porDefecto.atribucion, '© OpenStreetMap contributors');
+    expect(porDefecto.atribucionUrl, Uri.parse('https://www.openstreetmap.org/copyright'));
+    expect(porDefecto.tms, isFalse);
+    expect(porDefecto.maxZoom, 19);
+  });
+
+  test('el enlace de créditos del mapa de fondo solo puede ser http(s)', () {
+    MapaFondo leer(Object? url) => MapaFondo.fromJson({
+      'url': 'https://t/{z}/{x}/{y}.png',
+      'atribucion': 'X',
+      'atribucion_url': url,
+      'tms': false,
+      'max_zoom': 19,
+    });
+    expect(leer('http://mapas.local/creditos').atribucionUrl, Uri.parse('http://mapas.local/creditos'));
+    expect(leer('javascript:alert(1)').atribucionUrl, isNull);
+    expect(leer('').atribucionUrl, isNull);
+    expect(leer(null).atribucionUrl, isNull);
+  });
+
   test('lee la ETA con y sin datos', () {
     final e = Eta.fromJson({
       'hacia': 'origen',

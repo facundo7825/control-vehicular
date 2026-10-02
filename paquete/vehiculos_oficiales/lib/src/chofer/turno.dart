@@ -15,8 +15,9 @@ import 'cola_ubicaciones.dart';
 import 'emisor_ubicacion.dart';
 import 'rastreador_turno.dart';
 
-/// Los valores por defecto del backend (spec 5.7), si `GET /configuracion` no responde.
-const configuracionPorDefecto = Configuracion(gpsTurnoSeg: 10, gpsViajeSeg: 5, ofertaSegundos: 30);
+/// Los valores por defecto del backend (spec 5.7), si `GET /configuracion` no responde. Sin mapa de fondo
+/// (`teselas` nulo: no se sabe cuál es) y sin autocompletar; `mapaFondoProvider` reintenta el pedido.
+const configuracionPorDefecto = Configuracion(gpsTurnoSeg: 10, gpsViajeSeg: 5, ofertaSegundos: 30, teselas: null);
 
 /// `GET /configuracion`. Si falla se usan los valores por defecto: el GPS del turno no puede depender de
 /// que ese pedido salga bien.

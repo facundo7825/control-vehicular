@@ -1,8 +1,10 @@
 <?php
 
+use App\Mapas\Teselas;
 use App\Models\Parametro;
 use App\Models\Usuario;
 use App\Servicios\Parametros;
+use Illuminate\Support\Facades\Log;
 
 it('usa el valor por defecto de config', function () {
     expect(app(Parametros::class)->entero('oferta_segundos'))->toBe(30);
@@ -24,11 +26,122 @@ it('expone la configuración que necesita la app', function () {
         ->assertOk()
         ->assertExactJson([
             'gps_turno_seg' => 10, 'gps_viaje_seg' => 5, 'oferta_segundos' => 30, 'lugares_autocompletar' => true,
+            // Por defecto, el OSM público (solo desarrollo y demos).
+            'teselas' => [
+                'url' => 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                'atribucion' => '© OpenStreetMap contributors',
+                'atribucion_url' => 'https://www.openstreetmap.org/copyright',
+                'tms' => false,
+                'max_zoom' => 19,
+            ],
         ]);
 });
 
-it('solo permite autocompletar lugares si el buscador lo admite (Nominatim no)', function (string $driver, bool $autocompletar) {
-    config(['vehiculos.lugares.driver' => $driver]);
+it('expone el mapa de fondo configurado', function () {
+    config(['vehiculos.mapas.teselas' => [
+        'url' => 'https://mapas.ejemplo.gob.ar/tms/{z}/{x}/{y}.png',
+        'atribucion' => 'IGN · OpenStreetMap',
+        'atribucion_url' => '',
+        'tms' => true,
+        'max_zoom' => '15',
+    ]]);
+
+    $this->actingAs(Usuario::factory()->create())
+        ->getJson('/api/configuracion')
+        ->assertOk()
+        ->assertJsonPath('teselas', [
+            'url' => 'https://mapas.ejemplo.gob.ar/tms/{z}/{x}/{y}.png',
+            'atribucion' => 'IGN · OpenStreetMap',
+            'atribucion_url' => null, // vacía: los créditos no llevan enlace
+            'tms' => true,
+            'max_zoom' => 15,
+        ]);
+});
+
+it('lee el mapa de fondo de las variables de entorno', function () {
+    $variables = [
+        'MAPAS_TESELAS_URL' => 'http://mapas.local:8080/styles/basico/{z}/{x}/{y}.png',
+        'MAPAS_TESELAS_ATRIBUCION' => '© OpenStreetMap contributors · Mapa propio',
+        'MAPAS_TESELAS_ATRIBUCION_URL' => 'https://mapas.local/creditos',
+        'MAPAS_TESELAS_TMS' => 'true',
+        'MAPAS_TESELAS_MAX_ZOOM' => '17',
+    ];
+    foreach ($variables as $nombre => $valor) {
+        $_SERVER[$nombre] = $_ENV[$nombre] = $valor;
+    }
+
+    try {
+        $teselas = (require config_path('vehiculos.php'))['mapas']['teselas'];
+    } finally {
+        foreach (array_keys($variables) as $nombre) {
+            unset($_SERVER[$nombre], $_ENV[$nombre]);
+        }
+    }
+
+    config(['vehiculos.mapas.teselas' => $teselas]);
+
+    expect(Teselas::configuradas())->toBe([
+        'url' => 'http://mapas.local:8080/styles/basico/{z}/{x}/{y}.png',
+        'atribucion' => '© OpenStreetMap contributors · Mapa propio',
+        'atribucion_url' => 'https://mapas.local/creditos',
+        'tms' => true,
+        'max_zoom' => 17,
+    ]);
+});
+
+it('interpreta MAPAS_TESELAS_TMS como booleano (off, no, 0, false y vacío son falso)', function (string $valor, bool $tms) {
+    $_SERVER['MAPAS_TESELAS_TMS'] = $_ENV['MAPAS_TESELAS_TMS'] = $valor;
+    try {
+        config(['vehiculos.mapas.teselas' => (require config_path('vehiculos.php'))['mapas']['teselas']]);
+    } finally {
+        unset($_SERVER['MAPAS_TESELAS_TMS'], $_ENV['MAPAS_TESELAS_TMS']);
+    }
+
+    expect(Teselas::configuradas()['tms'])->toBe($tms);
+})->with([
+    ['off', false], ['no', false], ['0', false], ['false', false], ['', false],
+    ['on', true], ['yes', true], ['1', true], ['true', true],
+]);
+
+it('usa los valores por defecto si la URL, la atribución o el zoom máximo quedan vacíos o inválidos', function (mixed $zoom) {
+    config(['vehiculos.mapas.teselas' => [
+        'url' => '  ', 'atribucion' => '', 'atribucion_url' => '', 'tms' => null, 'max_zoom' => $zoom,
+    ]]);
+
+    expect(Teselas::configuradas())->toBe([
+        'url' => 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+        'atribucion' => '© OpenStreetMap contributors',
+        'atribucion_url' => null,
+        'tms' => false,
+        'max_zoom' => 19,
+    ]);
+})->with(['', null, '0', -3, 'abc']);
+
+it('avisa una vez en el log si en producción las teselas no usan HTTPS', function () {
+    Log::spy();
+    app()->detectEnvironment(fn () => 'production');
+    config(['vehiculos.mapas.teselas.url' => 'http://mapas.local/{z}/{x}/{y}.png']);
+
+    Teselas::configuradas();
+    Teselas::configuradas();
+
+    Log::shouldHaveReceived('warning')->withArgs(fn (string $msg) => str_contains($msg, 'HTTPS'))->once();
+});
+
+it('no avisa por HTTP fuera de producción ni con HTTPS en producción', function () {
+    Log::spy();
+    config(['vehiculos.mapas.teselas.url' => 'http://mapas.local/{z}/{x}/{y}.png']);
+    Teselas::configuradas();
+
+    app()->detectEnvironment(fn () => 'production');
+    config(['vehiculos.mapas.teselas.url' => 'https://mapas.local/{z}/{x}/{y}.png']);
+    Teselas::configuradas();
+
+    Log::shouldNotHaveReceived('warning');
+});
+
+it('solo permite autocompletar lugares si el buscador lo admite (Nominatim público no)', function (string $driver, bool $autocompletar, array $extra = []) {
+    config(['vehiculos.lugares.driver' => $driver, ...$extra]);
 
     $this->actingAs(Usuario::factory()->create())
         ->getJson('/api/configuracion')
@@ -38,7 +151,14 @@ it('solo permite autocompletar lugares si el buscador lo admite (Nominatim no)',
     ['nominatim', false],
     ['google', true],
     ['falso', true],
+    ['georef', true],
     ['desconocido', false],
+    'Nominatim propio' => ['nominatim', true, ['vehiculos.lugares.nominatim_url' => 'http://nominatim.local:8080']],
+    'combinado con Nominatim público' => ['nominatim,georef', false],
+    'combinado con Nominatim propio' => ['nominatim, georef', true, ['vehiculos.lugares.nominatim_url' => 'http://nominatim.local:8080']],
+    'combinado con uno desconocido' => ['georef,desconocido', false],
+    'forzado a sí' => ['nominatim', true, ['vehiculos.lugares.autocompletar' => 'true']],
+    'forzado a no' => ['google', false, ['vehiculos.lugares.autocompletar' => false]],
 ]);
 
 it('trae los parámetros de reservas con sus valores por defecto', function (string $clave, int $valor) {

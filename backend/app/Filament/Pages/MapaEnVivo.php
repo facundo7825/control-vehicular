@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Mapas\Teselas;
 use App\Servicios\DatosMapaPanel;
 use BackedEnum;
 use Filament\Pages\Page;
@@ -10,7 +11,8 @@ use Filament\Support\Icons\Heroicon;
 /**
  * Mapa en vivo (spec 8.1). Sin Echo/Reverb en el panel (v1): Livewire consulta cada 10 s y le pasa
  * los datos nuevos al mapa con un evento del navegador; el mapa no se vuelve a dibujar (wire:ignore).
- * Con clave de Google usa Google Maps; sin clave, Leaflet con los tiles de OpenStreetMap (desarrollo/demos).
+ * Con clave de Google usa Google Maps; sin clave, Leaflet con el mapa de fondo configurado (por defecto los tiles
+ * de OpenStreetMap, solo para desarrollo/demos).
  */
 class MapaEnVivo extends Page
 {
@@ -53,6 +55,28 @@ class MapaEnVivo extends Page
     public function claveGoogle(): ?string
     {
         return config('vehiculos.mapas.google_js_api_key') ?: config('vehiculos.mapas.google_api_key') ?: null;
+    }
+
+    /** El mapa de fondo de Leaflet: el mismo que usa la app (`vehiculos.mapas.teselas`). */
+    public function teselas(): array
+    {
+        return Teselas::configuradas();
+    }
+
+    /**
+     * Los créditos del mapa de fondo para Leaflet (que los muestra como HTML). Vienen de la configuración, así que
+     * se escapan igual; el enlace solo se agrega si es http(s).
+     */
+    public function atribucionTeselas(): string
+    {
+        $t = $this->teselas();
+        $texto = e($t['atribucion']);
+        $enlace = $t['atribucion_url'];
+        if ($enlace === null || ! in_array(strtolower((string) parse_url($enlace, PHP_URL_SCHEME)), ['http', 'https'], true)) {
+            return $texto;
+        }
+
+        return '<a href="'.e($enlace).'" target="_blank" rel="noopener">'.$texto.'</a>';
     }
 
     /** Lo llama wire:poll; el script del mapa escucha el evento y actualiza los marcadores. */
