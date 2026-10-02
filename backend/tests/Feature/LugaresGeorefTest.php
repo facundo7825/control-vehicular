@@ -214,13 +214,45 @@ it('el combinado consulta en orden, une, quita duplicados de menos de 30 m y dev
     expect([$a, $b])->toBe([1, 1]);
 });
 
-it('el combinado no consulta los siguientes si ya tiene 5', function () {
+it('el combinado reserva lugar para los siguientes: toma como mucho 3 del primero y completa hasta 5', function () {
     $a = $b = 0;
     $primero = buscadorFijo(array_map(fn (int $i) => lugar("L$i", -28.0 - $i, -65.0), range(1, 5)), $a);
-    $segundo = buscadorFijo([lugar('Otro', -29.9, -66.0)], $b);
+    $segundo = buscadorFijo([lugar('Georef', -29.9, -66.0)], $b);
 
-    expect((new BuscadorCombinado([$primero, $segundo]))->buscar('algo', null, null))->toHaveCount(5);
-    expect($b)->toBe(0);
+    $r = (new BuscadorCombinado([$primero, $segundo]))->buscar('algo', null, null);
+
+    expect(array_column($r, 'nombre'))->toBe(['L1', 'L2', 'L3', 'Georef', 'L4']);
+    expect([$a, $b])->toBe([1, 1]);
+});
+
+it('el combinado deja que el último complete hasta 5 si los anteriores traen pocos', function () {
+    $a = $b = 0;
+    $primero = buscadorFijo([lugar('L1', -28.1, -65.0)], $a);
+    $segundo = buscadorFijo(array_map(fn (int $i) => lugar("G$i", -29.0 - $i, -66.0), range(1, 6)), $b);
+
+    $r = (new BuscadorCombinado([$primero, $segundo]))->buscar('algo', null, null);
+
+    expect(array_column($r, 'nombre'))->toBe(['L1', 'G1', 'G2', 'G3', 'G4']);
+});
+
+it('el combinado sigue con los demás si uno lanza, y solo deja en el log la clase', function () {
+    Log::spy();
+    $b = 0;
+    $roto = new class implements BuscadorLugares
+    {
+        public function buscar(string $texto, ?float $lat, ?float $lng): array
+        {
+            throw new RuntimeException('falló con calle secreta');
+        }
+    };
+    $segundo = buscadorFijo([lugar('Georef', -29.9, -66.0)], $b);
+
+    $r = (new BuscadorCombinado([$roto, $segundo]))->buscar('calle secreta', null, null);
+
+    expect(array_column($r, 'nombre'))->toBe(['Georef']);
+    Log::shouldHaveReceived('warning')->withArgs(function (string $msg, array $ctx = []) {
+        return ! str_contains($msg.json_encode($ctx), 'secreta') && isset($ctx['buscador']);
+    })->once();
 });
 
 it('el combinado sigue con los demás si uno no trae nada', function () {
