@@ -1,0 +1,50 @@
+# Servidor de mapas propio para Catamarca: recorridos y tiempos (OSRM), búsqueda (Nominatim) y mapa de fondo (teselas PNG).
+# Antes de levantarlo: ./preparar-datos.sh   (ver README.md y docs/PRODUCCION-MAPAS.md)
+#
+# Los puertos escuchan solo en 127.0.0.1: el backend los usa desde el mismo servidor y las teselas salen a internet por
+# el proxy inverso con HTTPS. Para exponerlos en una red interna: MAPAS_ESCUCHA=10.0.0.5 docker compose up -d
+name: mapas
+
+services:
+  osrm:
+    image: ghcr.io/project-osrm/osrm-backend:v6.0.0
+    command: osrm-routed --algorithm mld --max-table-size 200 /data/catamarca.osrm
+    volumes:
+      - ./datos/osrm:/data:ro
+    ports:
+      - "${MAPAS_ESCUCHA:-127.0.0.1}:${OSRM_PUERTO:-5001}:5000"
+    restart: unless-stopped
+
+  nominatim:
+    image: mediagis/nominatim:5.3
+    environment:
+      PBF_PATH: /datos/catamarca.osm.pbf
+      IMPORT_STYLE: full
+      # Clave interna de PostgreSQL (el puerto 5432 no se publica). Cambiarla en producción.
+      NOMINATIM_PASSWORD: ${NOMINATIM_CLAVE_DB:-cambiar-esta-clave}
+      # Ajuste para un servidor chico (la imagen viene pensada para el planeta entero).
+      POSTGRES_SHARED_BUFFERS: 512MB
+      POSTGRES_MAINTENANCE_WORK_MEM: 1GB
+      POSTGRES_AUTOVACUUM_WORK_MEM: 256MB
+      POSTGRES_EFFECTIVE_CACHE_SIZE: 2GB
+      GUNICORN_WORKERS: ${NOMINATIM_WORKERS:-2}
+    volumes:
+      - ./datos/catamarca.osm.pbf:/datos/catamarca.osm.pbf:ro
+      - nominatim-db:/var/lib/postgresql/16/main
+    shm_size: 1gb
+    ports:
+      - "${MAPAS_ESCUCHA:-127.0.0.1}:${NOMINATIM_PUERTO:-8088}:8080"
+    restart: unless-stopped
+
+  teselas:
+    image: maptiler/tileserver-gl:v5.6.0
+    command: --config /config/config.json --port 8080
+    volumes:
+      - ./tileserver/config.json:/config/config.json:ro
+      - ./datos/teselas:/data:ro
+    ports:
+      - "${MAPAS_ESCUCHA:-127.0.0.1}:${TESELAS_PUERTO:-8089}:8080"
+    restart: unless-stopped
+
+volumes:
+  nominatim-db:
