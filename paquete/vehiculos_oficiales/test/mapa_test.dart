@@ -7,6 +7,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart' as gm;
 import 'package:latlong2/latlong.dart';
+import 'package:vehiculos_oficiales/src/api/api_vehiculos.dart';
+import 'package:vehiculos_oficiales/src/api/errores_api.dart';
 import 'package:vehiculos_oficiales/src/chofer/turno.dart' show configuracionProvider;
 import 'package:vehiculos_oficiales/src/entorno.dart';
 import 'package:vehiculos_oficiales/src/mapa/mapa.dart';
@@ -17,6 +19,8 @@ import 'package:vehiculos_oficiales/src/modelos/configuracion.dart';
 import 'package:vehiculos_oficiales/src/ui/comunes/comunes.dart';
 import 'package:vehiculos_oficiales/vehiculos_oficiales.dart';
 
+import 'fixtures/payloads.dart' as p;
+import 'soporte/dobles.dart';
 import 'soporte/entorno_prueba.dart';
 import 'soporte/montar.dart';
 
@@ -37,6 +41,29 @@ class _TeselasVacias extends TileProvider {
 
 /// Lo que manda el backend por defecto: el mapa de fondo de OpenStreetMap.
 const _configuracionOsm = Configuracion(gpsTurnoSeg: 10, gpsViajeSeg: 5, ofertaSegundos: 30);
+
+const _configuracionPropia = Configuracion(
+  gpsTurnoSeg: 10,
+  gpsViajeSeg: 5,
+  ofertaSegundos: 30,
+  teselas: MapaFondo(url: 'https://mapas.ejemplo.gob.ar/{z}/{x}/{y}.png', atribucion: 'Mapa propio'),
+);
+
+/// `GET /configuracion` que responde, en orden, lo programado: un [ErrorApi] falla y una [Configuracion] responde.
+class _ApiConfiguracion extends ApiFalsa {
+  _ApiConfiguracion(this.respuestas);
+
+  final List<Object> respuestas;
+  int consultas = 0;
+
+  @override
+  Future<Configuracion> configuracion() async {
+    final r = respuestas[consultas.clamp(0, respuestas.length - 1)];
+    consultas++;
+    if (r is ErrorApi) throw r;
+    return r as Configuracion;
+  }
+}
 
 EntornoModulo _entornoConClave(String clave) => EntornoModulo(
   config: VehiculosOficialesConfig(
@@ -89,6 +116,7 @@ void main() {
       DatosMapa datos, {
       Object? errorAlAbrir,
       AsyncValue<Configuracion> configuracion = const AsyncData(_configuracionOsm),
+      ApiVehiculos? api,
     }) async {
       tester.view.physicalSize = const Size(800, 800);
       tester.view.devicePixelRatio = 1;
@@ -96,7 +124,11 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
-            configuracionProvider.overrideWithValue(configuracion),
+            // Con [api], `GET /configuracion` de verdad (con sus fallas y reintentos); si no, el valor fijo.
+            if (api != null)
+              apiProvider.overrideWithValue(api)
+            else
+              configuracionProvider.overrideWithValue(configuracion),
             lanzadorUrlProvider.overrideWithValue((uri) async {
               abiertas.add(uri);
               if (errorAlAbrir != null) throw errorAlAbrir;
@@ -334,8 +366,65 @@ void main() {
         expect(find.byType(FlutterMap), findsOneWidget, reason: 'los marcadores y las líneas se ven igual');
       });
 
-      testWidgets('si la configuración falla usa OpenStreetMap', (tester) async {
+      testWidgets('si la configuración falla no dibuja el fondo (nunca el OSM público)', (tester) async {
         await montar(tester, centro, configuracion: AsyncError(Exception('sin red'), StackTrace.empty));
+
+        expect(find.byType(TileLayer), findsNothing);
+        expect(teselas.pedidas, 0);
+        expect(find.textContaining('OpenStreetMap'), findsNothing);
+        expect(find.byType(FlutterMap), findsOneWidget, reason: 'los marcadores y las líneas se ven igual');
+      });
+
+      testWidgets('si GET /configuracion falla reintenta cada 30 s y, al responder, usa el servidor configurado', (
+        tester,
+      ) async {
+        final api = _ApiConfiguracion([const SinConexion(), const ErrorServidor(), _configuracionPropia]);
+        await montar(tester, centro, api: api);
+        await tester.pump();
+
+        // Falló: sin fondo (ni el OSM público), y los valores por defecto para lo demás.
+        expect(api.consultas, 1);
+        expect(find.byType(TileLayer), findsNothing);
+
+        await tester.pump(const Duration(seconds: 29));
+        expect(api.consultas, 1, reason: 'todavía no pasaron 30 s');
+
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pump();
+        expect(api.consultas, 2);
+        expect(find.byType(TileLayer), findsNothing, reason: 'volvió a fallar: sigue sin fondo');
+
+        await tester.pump(const Duration(seconds: 30));
+        await tester.pump();
+        expect(api.consultas, 3);
+        expect(capa(tester).urlTemplate, 'https://mapas.ejemplo.gob.ar/{z}/{x}/{y}.png');
+        expect(find.text('Mapa propio'), findsOneWidget);
+        expect(teselas.pedidas, greaterThan(0));
+        expect(find.textContaining('OpenStreetMap'), findsNothing);
+
+        // Con la configuración cargada no reintenta más.
+        await tester.pump(const Duration(seconds: 90));
+        expect(api.consultas, 3);
+      });
+
+      testWidgets('si GET /configuracion falla, también reintenta al volver a la app', (tester) async {
+        final api = _ApiConfiguracion([const SinConexion(), _configuracionPropia]);
+        await montar(tester, centro, api: api);
+        await tester.pump();
+        expect(find.byType(TileLayer), findsNothing);
+
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+        await tester.pump();
+        await tester.pump();
+
+        expect(api.consultas, 2);
+        expect(capa(tester).urlTemplate, 'https://mapas.ejemplo.gob.ar/{z}/{x}/{y}.png');
+      });
+
+      testWidgets('un backend anterior, que no manda el mapa de fondo, sigue con el OSM público', (tester) async {
+        final anterior = Configuracion.fromJson(p.json(p.configuracion)..remove('teselas'));
+        await montar(tester, centro, configuracion: AsyncData(anterior));
 
         expect(capa(tester).urlTemplate, 'https://tile.openstreetmap.org/{z}/{x}/{y}.png');
       });

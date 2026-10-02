@@ -3,16 +3,15 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
 
-import '../chofer/turno.dart' show configuracionProvider;
 import '../modelos/comunes.dart';
-import '../modelos/configuracion.dart';
 import '../ui/comunes/comunes.dart';
 import 'mapa.dart';
+import 'mapa_fondo.dart';
 
 /// Mapa con flutter_map, sin clave. Se usa cuando la app no configuró una clave de Google Maps. El mapa de
 /// fondo (servidor de teselas, TMS, zoom máximo y créditos) llega del backend en `GET /configuracion`
-/// (`MAPAS_TESELAS_*`); sin ese dato, o si el pedido falla, el OSM público, que sirve para desarrollo y demos
-/// pero no para producción (sus servidores no admiten ese tráfico).
+/// (`MAPAS_TESELAS_*`, ver [mapaFondoProvider]); un backend anterior que no lo manda deja el OSM público, que
+/// sirve para desarrollo y demos pero no para producción. Si el pedido falla, el mapa va sin fondo y se reintenta.
 class MapaOsm extends ConsumerStatefulWidget {
   const MapaOsm({super.key, required this.datos, this.teselas});
 
@@ -87,12 +86,9 @@ class _MapaOsmState extends ConsumerState<MapaOsm> {
     final alTocar = datos.alTocarMapa;
     final inicial = _inicial;
     final puntoInicial = inicial?.unico;
-    // Mientras llega la configuración no se dibuja el fondo: así no se le piden teselas al OSM público para
-    // después cambiar al servidor propio. Si falla, el OSM de siempre.
-    final configuracion = ref.watch(configuracionProvider);
-    final fondo = configuracion.isLoading && !configuracion.hasValue
-        ? null
-        : (configuracion.value?.teselas ?? MapaFondo.osm);
+    // Mientras llega la configuración (o si falló, hasta que un reintento responda) no se dibuja el fondo: así
+    // nunca se le piden teselas al OSM público en lugar del servidor configurado.
+    final fondo = ref.watch(mapaFondoProvider);
     final creditos = fondo?.atribucionUrl;
     return FlutterMap(
       mapController: _controlador,

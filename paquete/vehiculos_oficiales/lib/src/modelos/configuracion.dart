@@ -29,7 +29,9 @@ class Configuracion {
   final bool lugaresAutocompletar;
 
   /// El mapa de fondo de `MapaOsm` (`MAPAS_TESELAS_*` en el backend): se cambia sin recompilar la app.
-  final MapaFondo teselas;
+  /// Nulo = no se sabe (la configuración no llegó): el mapa va sin fondo hasta que llegue, nunca con el OSM
+  /// público, que en producción expondría a quién usa la app y no admite ese tráfico.
+  final MapaFondo? teselas;
 }
 
 /// De dónde salen las teselas del mapa de fondo y qué créditos lleva.

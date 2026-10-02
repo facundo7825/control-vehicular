@@ -138,14 +138,14 @@ void main() {
   });
 
   test('lee el mapa de fondo de la configuración', () {
-    final osm = Configuracion.fromJson(p.json(p.configuracion)).teselas;
+    final osm = Configuracion.fromJson(p.json(p.configuracion)).teselas!;
     expect(osm.url, 'https://tile.openstreetmap.org/{z}/{x}/{y}.png');
     expect(osm.atribucion, '© OpenStreetMap contributors');
     expect(osm.atribucionUrl, Uri.parse('https://www.openstreetmap.org/copyright'));
     expect(osm.tms, isFalse);
     expect(osm.maxZoom, 19);
 
-    final propias = Configuracion.fromJson(p.json(p.configuracionTeselasPropias)).teselas;
+    final propias = Configuracion.fromJson(p.json(p.configuracionTeselasPropias)).teselas!;
     expect(propias.url, 'https://mapas.ejemplo.gob.ar/tms/{z}/{x}/{y}.png');
     expect(propias.atribucion, 'IGN');
     expect(propias.atribucionUrl, isNull);
@@ -154,7 +154,7 @@ void main() {
 
     // Un backend anterior no manda el mapa de fondo: el OSM público de siempre.
     final anterior = p.json(p.configuracion)..remove('teselas');
-    final porDefecto = Configuracion.fromJson(anterior).teselas;
+    final porDefecto = Configuracion.fromJson(anterior).teselas!;
     expect(porDefecto.url, 'https://tile.openstreetmap.org/{z}/{x}/{y}.png');
     expect(porDefecto.atribucion, '© OpenStreetMap contributors');
     expect(porDefecto.atribucionUrl, Uri.parse('https://www.openstreetmap.org/copyright'));
