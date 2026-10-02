@@ -16,7 +16,8 @@ return [
     ],
 
     'mapas' => [
-        // falso | google
+        // Tiempos de viaje (chofer más cercano, llegada estimada, duración de reservas):
+        // falso (línea recta a 30 km/h) | osrm (usa rutas.osrm_url y rutas.user_agent) | google (Distance Matrix)
         'driver' => env('MAPAS_DRIVER', 'falso'),
         'google_api_key' => env('GOOGLE_MAPS_API_KEY'),
         // Clave para el mapa del panel (Maps JavaScript API): queda visible en el navegador, conviene una

@@ -15,6 +15,7 @@ use App\Mapas\RutasGoogle;
 use App\Mapas\RutasOsrm;
 use App\Mapas\ServicioMapas;
 use App\Mapas\ServicioMapasFalso;
+use App\Mapas\ServicioMapasOsrm;
 use App\Mapas\ServicioRutas;
 use App\Notificaciones\Notificador;
 use App\Notificaciones\NotificadorFcm;
@@ -48,6 +49,7 @@ class AppServiceProvider extends ServiceProvider
 
         $this->app->bind(ServicioMapas::class, fn () => match (config('vehiculos.mapas.driver')) {
             'google' => new GoogleMaps((string) config('vehiculos.mapas.google_api_key')),
+            'osrm' => new ServicioMapasOsrm((string) config('vehiculos.rutas.user_agent'), (string) config('vehiculos.rutas.osrm_url')),
             default => new ServicioMapasFalso,
         });
 
