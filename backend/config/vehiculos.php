@@ -51,6 +51,9 @@ return [
         'provincia' => env('LUGARES_PROVINCIA'),
         // Fuerza si la app autocompleta (true/false). Sin valor, lo decide el driver (ver ConfiguracionController).
         'autocompletar' => env('LUGARES_AUTOCOMPLETAR'),
+        // Búsquedas por minuto y por usuario en /api/lugares. Con autocompletar contra servidores propios
+        // conviene subirlo (~120): cada pausa al escribir es una búsqueda.
+        'limite_por_minuto' => env('LUGARES_LIMITE_POR_MINUTO', 30),
     ],
 
     // Recorrido con indicaciones (GET /api/ruta).

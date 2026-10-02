@@ -88,8 +88,10 @@ class AppServiceProvider extends ServiceProvider
     {
         JsonResource::withoutWrapping();
 
-        // Búsqueda de lugares: 30 por minuto y por usuario, para no agotar el servicio externo.
-        RateLimiter::for('lugares', fn (Request $request) => Limit::perMinute(30)
+        // Búsqueda de lugares: LUGARES_LIMITE_POR_MINUTO (30 por defecto) por usuario, para no agotar el servicio.
+        RateLimiter::for('lugares', fn (Request $request) => Limit::perMinute(
+            ($limite = (int) config('vehiculos.lugares.limite_por_minuto')) > 0 ? $limite : 30,
+        )
             ->by((string) $request->user()?->id ?: $request->ip())
             ->response(fn (Request $request, array $headers) => response()->json(
                 ['message' => 'Demasiadas búsquedas. Probá de nuevo en un minuto.'], 429, $headers,

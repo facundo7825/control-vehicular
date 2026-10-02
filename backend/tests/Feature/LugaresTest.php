@@ -376,3 +376,23 @@ it('Nominatim no comparte el cache entre servidores distintos', function () {
     expect((new BuscadorNominatim('Demo/1.0 (prueba)', fn () => null, 'http://dos.local'))->buscar('obelisco', null, null))->toBe([]);
     Http::assertSentCount(2);
 });
+
+it('el límite de búsquedas por minuto se configura (LUGARES_LIMITE_POR_MINUTO)', function () {
+    config(['vehiculos.lugares.limite_por_minuto' => 5]);
+    $u = Usuario::factory()->create();
+
+    for ($i = 0; $i < 5; $i++) {
+        $this->actingAs($u)->getJson('/api/lugares?q=obelisco')->assertOk();
+    }
+    $this->actingAs($u)->getJson('/api/lugares?q=obelisco')->assertStatus(429);
+});
+
+it('con el límite vacío o inválido se usan 30 por minuto', function (mixed $limite) {
+    config(['vehiculos.lugares.limite_por_minuto' => $limite]);
+    $u = Usuario::factory()->create();
+
+    for ($i = 0; $i < 30; $i++) {
+        $this->actingAs($u)->getJson('/api/lugares?q=obelisco')->assertOk();
+    }
+    $this->actingAs($u)->getJson('/api/lugares?q=obelisco')->assertStatus(429);
+})->with(['', null, '0']);

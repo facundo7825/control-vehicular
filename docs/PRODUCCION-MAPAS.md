@@ -89,6 +89,7 @@ LUGARES_NOMINATIM_URL=http://127.0.0.1:8088
 LUGARES_GEOREF_URL=https://apis.datos.gob.ar/georef/api
 LUGARES_PROVINCIA=Catamarca
 # LUGARES_AUTOCOMPLETAR=     # sin valor: con Nominatim propio y Georef la app autocompleta
+LUGARES_LIMITE_POR_MINUTO=120 # búsquedas por minuto y por usuario (30 por defecto)
 RUTAS_DRIVER=osrm
 RUTAS_OSRM_URL=http://127.0.0.1:5001
 MAPAS_DRIVER=osrm             # tiempos de viaje con el mismo OSRM de RUTAS_OSRM_URL
@@ -110,6 +111,8 @@ misma configuración.
 
 - Con un OSRM o Nominatim propio el backend **no** aplica la espera de 1 pedido por segundo (solo la aplica contra los
   servidores públicos).
+- `LUGARES_LIMITE_POR_MINUTO` (30 por defecto) limita `/api/lugares` por usuario. Con autocompletar contra servidores
+  propios cada pausa al escribir es una búsqueda, así que conviene ~120; con el Nominatim público, dejar 30.
 - `MAPAS_TESELAS_MAX_ZOOM=18`: las teselas vectoriales llegan a z14 y TileServer-GL dibuja los niveles mayores a partir
   de ellas (calles y nombres se ven bien hasta z18).
 - Si OSRM o Nominatim se caen, el backend deja de consultarlos un minuto y sigue funcionando (búsqueda vacía, sin
