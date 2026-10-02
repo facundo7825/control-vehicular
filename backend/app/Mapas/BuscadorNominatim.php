@@ -16,8 +16,8 @@ use Illuminate\Support\Facades\Log;
  * Política de uso del Nominatim público: User-Agent identificable, como mucho 1 pedido por segundo, cache y nada de
  * autocompletar (la app solo busca al confirmar el texto: ver `lugares_autocompletar` en /api/configuracion).
  * Un lock en cache serializa los pedidos y, si el anterior fue hace menos de un segundo, se ESPERA lo que
- * falte (la consulta no se descarta). Las consultas repetidas salen del cache (24 h, por texto normalizado
- * y zona) sin esperar ni llamar. Si un pedido falla, durante 60 s todas las búsquedas devuelven [] al
+ * falte (la consulta no se descarta). Las consultas repetidas salen del cache (24 h, por texto normalizado,
+ * zona y servidor) sin esperar ni llamar. Si un pedido falla, durante 60 s todas las búsquedas devuelven [] al
  * instante, para no ocupar el servidor esperando a un servicio caído o que nos bloqueó. Si el lock no se
  * consigue en 1 s (mucha demanda, o un lock que quedó colgado tras cortar el proceso), esa búsqueda
  * devuelve [] sin cortar: no se retiene el único worker de `artisan serve`.
@@ -33,6 +33,8 @@ class BuscadorNominatim implements BuscadorLugares
     private const CLAVE_ULTIMO = 'lugares:nominatim:ultimo';
 
     private const CLAVE_CORTE = 'lugares:nominatim:corte';
+
+    private const CLAVE_AVISO_URL = 'lugares:nominatim:aviso-url';
 
     private const SEGUNDOS_CACHE = 86400;
 
@@ -59,14 +61,28 @@ class BuscadorNominatim implements BuscadorLugares
         $this->dormir = $dormir ?? function (int $micro): void {
             usleep($micro);
         };
+        $url = trim($url) ?: self::URL_PUBLICA;
         $this->url = rtrim($url, '/');
         $this->publica = self::esPublica($url);
+
+        $partes = parse_url($url);
+        $valida = is_array($partes) && in_array(strtolower($partes['scheme'] ?? ''), ['http', 'https'], true)
+            && ($partes['host'] ?? '') !== '';
+        if (! $valida && Cache::add(self::CLAVE_AVISO_URL, true, 86400)) {
+            // Es configuración, no una consulta: alcanza con decir qué revisar.
+            Log::warning('LUGARES_NOMINATIM_URL no tiene esquema y host (p. ej. http://127.0.0.1:8088): se usa tal cual como servidor propio');
+        }
     }
 
-    /** Si la URL es la del servidor público de OpenStreetMap, el único con límite de pedidos y sin autocompletar. */
+    /**
+     * Si la URL es la del servidor público de OpenStreetMap, el único con límite de pedidos y sin autocompletar.
+     * Vacía también cuenta como pública: es la que se usa por defecto.
+     */
     public static function esPublica(string $url): bool
     {
-        return strtolower((string) parse_url($url, PHP_URL_HOST)) === self::HOST_PUBLICO;
+        $url = trim($url);
+
+        return $url === '' || strtolower((string) parse_url($url, PHP_URL_HOST)) === self::HOST_PUBLICO;
     }
 
     public function buscar(string $texto, ?float $lat, ?float $lng): array
@@ -75,7 +91,7 @@ class BuscadorNominatim implements BuscadorLugares
         $conZona = $lat !== null && $lng !== null;
         $lat = $conZona ? round($lat, 1) : null;
         $lng = $conZona ? round($lng, 1) : null;
-        $clave = 'lugares:nominatim:'.md5(mb_strtolower($texto).'|'.($conZona ? "$lat,$lng" : ''));
+        $clave = 'lugares:nominatim:'.md5(mb_strtolower($texto).'|'.($conZona ? "$lat,$lng" : '').'|'.$this->url);
 
         $guardado = Cache::get($clave);
         if (is_array($guardado)) {
