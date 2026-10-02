@@ -90,6 +90,18 @@ it('sin ruta posible devuelve nulos sin cortar', function () {
     Http::assertSentCount(2);
 });
 
+it('table con un punto fuera de la red (NoSegment) devuelve nulos sin cortar', function () {
+    Http::fake([OSRM_PUBLICO_TIEMPOS => Http::sequence()
+        ->push(['code' => 'NoSegment', 'message' => 'Could not find a matching segment for any coordinate.'], 400)
+        ->push(tablaOsrm([90]))]);
+    $esperas = [];
+    $o = tiemposOsrm($esperas);
+
+    expect($o->duracionesHacia([1 => [-34.61, -58.39], 2 => [-10.0, -30.0]], -34.62, -58.40))->toBe([1 => null, 2 => null]);
+    expect($o->duracionesHacia([1 => [-34.61, -58.39]], -34.62, -58.40))->toBe([1 => 90]);
+    Http::assertSentCount(2);
+});
+
 it('ante una falla devuelve nulos y corta 60 s sin llamar', function (string $falla) {
     $llamadas = 0;
     Http::fake([OSRM_PUBLICO_TIEMPOS => function () use ($falla, &$llamadas) {
