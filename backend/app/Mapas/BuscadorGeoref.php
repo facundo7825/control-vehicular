@@ -145,14 +145,21 @@ class BuscadorGeoref implements BuscadorLugares
         return $lugares;
     }
 
-    /** "AV. PTE. JUAN DOMINGO PERON" → "Av. Pte. Juan Domingo Peron"; respeta conectores y números romanos. */
+    /**
+     * "AV. PTE. JUAN DOMINGO PERON" → "Av. Pte. Juan Domingo Peron"; respeta conectores y números romanos. Los
+     * conectores van en minúscula solo en el medio: al final de un tramo (antes de una coma o del final) o justo
+     * antes de "y" son el nombre de la calle ("Calle A y Pasaje E").
+     */
     private static function legible(string $texto): string
     {
         $palabras = explode(' ', mb_convert_case(mb_strtolower($texto), MB_CASE_TITLE));
+        $ultima = count($palabras) - 1;
         foreach ($palabras as $i => $p) {
             $minuscula = mb_strtolower($p);
             $inicio = $i === 0 || str_ends_with($palabras[$i - 1], ',');
-            if (! $inicio && in_array($minuscula, self::MINUSCULAS, true)) {
+            $fin = $i === $ultima || str_ends_with($p, ',')
+                || in_array(mb_strtolower(rtrim($palabras[$i + 1], ',')), ['y', 'e'], true);
+            if (! $inicio && ! $fin && in_array($minuscula, self::MINUSCULAS, true)) {
                 $palabras[$i] = $minuscula;
             } elseif (preg_match('/^[ivxl]{2,}[.,]?$/', $minuscula) === 1) {
                 $palabras[$i] = mb_strtoupper($p);

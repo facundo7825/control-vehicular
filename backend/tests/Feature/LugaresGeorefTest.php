@@ -84,6 +84,19 @@ it('Georef respeta los números romanos y los conectores en minúscula', functio
     expect(georef()->buscar('juan xxiii', null, null)[0]['nombre'])->toBe('Juan XXIII y Avenida de los Inmigrantes, Andalgalá');
 });
 
+it('Georef no pasa a minúscula la última palabra (calles de una letra)', function () {
+    Http::fake([GEOREF => Http::response(respuestaGeoref([
+        direccionGeoref('CALLE A', 'PASAJE E', 'Valle Viejo', -28.48, -65.73),
+        direccionGeoref('CALLE Y DEL SOL', null, 'La Puerta', -28.17, -65.78),
+    ]))]);
+
+    $r = georef()->buscar('calle a', null, null);
+
+    expect($r[0]['nombre'])->toBe('Calle A y Pasaje E, Valle Viejo');
+    expect($r[0]['direccion'])->toBe('Calle A y Pasaje E, Valle Viejo, Catamarca');
+    expect($r[1]['nombre'])->toBe('Calle y del Sol, La Puerta');
+});
+
 it('Georef descarta las direcciones sin ubicación y devuelve como mucho 5', function () {
     $filas = [direccionGeoref('SARMIENTO', 'RIVADAVIA', 'Belén', null, null)];
     for ($i = 0; $i < 8; $i++) {
