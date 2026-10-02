@@ -9,9 +9,11 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Búsqueda con la API pública de OpenStreetMap. Solo para desarrollo/demos.
+ * Búsqueda con Nominatim: por defecto la API pública de OpenStreetMap (solo desarrollo/demos) o, con
+ * `LUGARES_NOMINATIM_URL`, un servidor propio. Con un servidor propio no hay espera ni lock entre pedidos
+ * (sí el cache y el corte ante falla) y la app puede autocompletar.
  *
- * Política de uso de Nominatim: User-Agent identificable, como mucho 1 pedido por segundo, cache y nada de
+ * Política de uso del Nominatim público: User-Agent identificable, como mucho 1 pedido por segundo, cache y nada de
  * autocompletar (la app solo busca al confirmar el texto: ver `lugares_autocompletar` en /api/configuracion).
  * Un lock en cache serializa los pedidos y, si el anterior fue hace menos de un segundo, se ESPERA lo que
  * falte (la consulta no se descarta). Las consultas repetidas salen del cache (24 h, por texto normalizado
@@ -24,7 +26,9 @@ use Illuminate\Support\Facades\Log;
  */
 class BuscadorNominatim implements BuscadorLugares
 {
-    private const URL = 'https://nominatim.openstreetmap.org/search';
+    public const URL_PUBLICA = 'https://nominatim.openstreetmap.org';
+
+    private const HOST_PUBLICO = 'nominatim.openstreetmap.org';
 
     private const CLAVE_ULTIMO = 'lugares:nominatim:ultimo';
 
@@ -42,12 +46,27 @@ class BuscadorNominatim implements BuscadorLugares
     /** @var Closure(int): void */
     private Closure $dormir;
 
-    /** @param  (Closure(int): void)|null  $dormir  espera en microsegundos; se inyecta en los tests. */
-    public function __construct(private string $userAgent, ?Closure $dormir = null)
+    private string $url;
+
+    private bool $publica;
+
+    /**
+     * @param  (Closure(int): void)|null  $dormir  espera en microsegundos; se inyecta en los tests.
+     * @param  string  $url  base del servidor (sin `/search`): el público o uno propio.
+     */
+    public function __construct(private string $userAgent, ?Closure $dormir = null, string $url = self::URL_PUBLICA)
     {
         $this->dormir = $dormir ?? function (int $micro): void {
             usleep($micro);
         };
+        $this->url = rtrim($url, '/');
+        $this->publica = self::esPublica($url);
+    }
+
+    /** Si la URL es la del servidor público de OpenStreetMap, el único con límite de pedidos y sin autocompletar. */
+    public static function esPublica(string $url): bool
+    {
+        return strtolower((string) parse_url($url, PHP_URL_HOST)) === self::HOST_PUBLICO;
     }
 
     public function buscar(string $texto, ?float $lat, ?float $lng): array
@@ -95,6 +114,10 @@ class BuscadorNominatim implements BuscadorLugares
         }
 
         try {
+            if (! $this->publica) {
+                return $this->pedir($params);
+            }
+
             return Cache::lock('lugares:nominatim:lock', 15)->block(1, function () use ($params) {
                 if (Cache::has(self::CLAVE_CORTE)) {
                     return null;
@@ -106,31 +129,39 @@ class BuscadorNominatim implements BuscadorLugares
                 }
 
                 try {
-                    $r = Http::timeout(self::TIMEOUT_SEG)->withUserAgent($this->userAgent)->get(self::URL, $params);
-                } catch (ConnectionException $e) {
-                    // Nunca el mensaje: lleva la URL, con el texto buscado y la zona.
-                    Log::warning('Nominatim sin conexión', ['error' => $e::class]);
-                    $this->cortar();
-
-                    return null;
+                    return $this->pedir($params);
                 } finally {
                     Cache::put(self::CLAVE_ULTIMO, microtime(true), 60);
                 }
-
-                if (! $r->successful() || ! is_array($r->json())) {
-                    Log::warning('Nominatim falló', ['http' => $r->status()]);
-                    $this->cortar();
-
-                    return null;
-                }
-
-                return $this->mapear($r->json());
             });
         } catch (\Throwable $e) {
             Log::warning('Nominatim: no se pudo consultar', ['error' => $e::class]);
 
             return null;
         }
+    }
+
+    /** @return ?list<array{nombre: string, direccion: string, lat: float, lng: float}> null si falló (y corta). */
+    private function pedir(array $params): ?array
+    {
+        try {
+            $r = Http::timeout(self::TIMEOUT_SEG)->withUserAgent($this->userAgent)->get($this->url.'/search', $params);
+        } catch (ConnectionException $e) {
+            // Nunca el mensaje: lleva la URL, con el texto buscado y la zona.
+            Log::warning('Nominatim sin conexión', ['error' => $e::class]);
+            $this->cortar();
+
+            return null;
+        }
+
+        if (! $r->successful() || ! is_array($r->json())) {
+            Log::warning('Nominatim falló', ['http' => $r->status()]);
+            $this->cortar();
+
+            return null;
+        }
+
+        return $this->mapear($r->json());
     }
 
     private function cortar(): void

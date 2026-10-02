@@ -27,10 +27,18 @@ return [
 
     // Búsqueda de lugares para el destino del pedido.
     'lugares' => [
-        // nominatim (OpenStreetMap, solo desarrollo/demos) | google (Places, usa mapas.google_api_key) | falso
+        // nominatim (OpenStreetMap: el público solo para desarrollo/demos, o uno propio) | georef (API Georef del
+        // Estado) | google (Places, usa mapas.google_api_key) | falso. Admite una lista en orden: "nominatim,georef".
         'driver' => env('LUGARES_DRIVER', 'nominatim'),
         // La política de Nominatim exige un User-Agent identificable de la aplicación.
         'user_agent' => env('LUGARES_USER_AGENT', 'VehiculosOficiales/1.0 (+https://github.com/facundo7825/control-vehicular)'),
+        // Base del Nominatim (sin /search). Con el público se espera 1 s entre pedidos y no se autocompleta.
+        'nominatim_url' => env('LUGARES_NOMINATIM_URL', 'https://nominatim.openstreetmap.org'),
+        'georef_url' => env('LUGARES_GEOREF_URL', 'https://apis.datos.gob.ar/georef/api'),
+        // Provincia a la que Georef acota las búsquedas (en producción, Catamarca). Vacía: todo el país.
+        'provincia' => env('LUGARES_PROVINCIA'),
+        // Fuerza si la app autocompleta (true/false). Sin valor, lo decide el driver (ver ConfiguracionController).
+        'autocompletar' => env('LUGARES_AUTOCOMPLETAR'),
     ],
 
     // Recorrido con indicaciones (GET /api/ruta).

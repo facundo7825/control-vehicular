@@ -27,8 +27,8 @@ it('expone la configuración que necesita la app', function () {
         ]);
 });
 
-it('solo permite autocompletar lugares si el buscador lo admite (Nominatim no)', function (string $driver, bool $autocompletar) {
-    config(['vehiculos.lugares.driver' => $driver]);
+it('solo permite autocompletar lugares si el buscador lo admite (Nominatim público no)', function (string $driver, bool $autocompletar, array $extra = []) {
+    config(['vehiculos.lugares.driver' => $driver, ...$extra]);
 
     $this->actingAs(Usuario::factory()->create())
         ->getJson('/api/configuracion')
@@ -38,7 +38,14 @@ it('solo permite autocompletar lugares si el buscador lo admite (Nominatim no)',
     ['nominatim', false],
     ['google', true],
     ['falso', true],
+    ['georef', true],
     ['desconocido', false],
+    'Nominatim propio' => ['nominatim', true, ['vehiculos.lugares.nominatim_url' => 'http://nominatim.local:8080']],
+    'combinado con Nominatim público' => ['nominatim,georef', false],
+    'combinado con Nominatim propio' => ['nominatim, georef', true, ['vehiculos.lugares.nominatim_url' => 'http://nominatim.local:8080']],
+    'combinado con uno desconocido' => ['georef,desconocido', false],
+    'forzado a sí' => ['nominatim', true, ['vehiculos.lugares.autocompletar' => 'true']],
+    'forzado a no' => ['google', false, ['vehiculos.lugares.autocompletar' => false]],
 ]);
 
 it('trae los parámetros de reservas con sus valores por defecto', function (string $clave, int $valor) {

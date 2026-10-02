@@ -1,6 +1,8 @@
 <?php
 
+use App\Mapas\BuscadorCombinado;
 use App\Mapas\BuscadorFalso;
+use App\Mapas\BuscadorGeoref;
 use App\Mapas\BuscadorGoogle;
 use App\Mapas\BuscadorLugares;
 use App\Mapas\BuscadorNominatim;
@@ -293,3 +295,48 @@ it('Nominatim con el lock tomado espera como mucho 1 s y devuelve [] sin cortar'
     expect($b->buscar('obelisco', null, null))->toHaveCount(2);
     Http::assertSentCount(1);
 });
+
+it('elige Georef y el combinado por configuración', function () {
+    config(['vehiculos.lugares.driver' => 'georef']);
+    expect(app(BuscadorLugares::class))->toBeInstanceOf(BuscadorGeoref::class);
+
+    config(['vehiculos.lugares.driver' => ' nominatim , georef ']);
+    expect(app(BuscadorLugares::class))->toBeInstanceOf(BuscadorCombinado::class);
+});
+
+it('Nominatim propio pide a la URL configurada sin esperar ni tomar el lock', function () {
+    Http::fake(['nominatim.local:8080/*' => Http::response(respuestaNominatim())]);
+    $esperas = [];
+    $b = new BuscadorNominatim('Demo/1.0 (prueba)', function (int $micro) use (&$esperas) {
+        $esperas[] = $micro;
+    }, 'http://nominatim.local:8080/');
+    $lock = Cache::lock('lugares:nominatim:lock', 15);
+    expect($lock->get())->toBeTrue();
+
+    expect($b->buscar('obelisco', null, null))->toHaveCount(2);
+    expect($b->buscar('plaza de mayo', null, null))->toHaveCount(2);
+
+    expect($esperas)->toBe([]);
+    Http::assertSentCount(2);
+    Http::assertSent(fn (Request $req) => str_starts_with($req->url(), 'http://nominatim.local:8080/search?'));
+    $lock->release();
+});
+
+it('Nominatim propio también corta 60 s ante una falla', function () {
+    Http::fake(['nominatim.local/*' => Http::sequence()->push('error', 500)->push(respuestaNominatim())]);
+    $b = new BuscadorNominatim('Demo/1.0 (prueba)', fn () => null, 'http://nominatim.local');
+
+    expect($b->buscar('obelisco', null, null))->toBe([]);
+    expect($b->buscar('plaza de mayo', null, null))->toBe([]);
+    Http::assertSentCount(1);
+});
+
+it('reconoce la URL pública de Nominatim', function (string $url, bool $publica) {
+    expect(BuscadorNominatim::esPublica($url))->toBe($publica);
+})->with([
+    ['https://nominatim.openstreetmap.org', true],
+    ['https://nominatim.openstreetmap.org/', true],
+    ['http://NOMINATIM.openstreetmap.org/search', true],
+    ['http://nominatim.local:8080', false],
+    ['https://mapas.catamarca.gob.ar/nominatim', false],
+]);
