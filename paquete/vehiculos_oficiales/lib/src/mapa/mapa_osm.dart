@@ -3,13 +3,16 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../chofer/turno.dart' show configuracionProvider;
 import '../modelos/comunes.dart';
+import '../modelos/configuracion.dart';
 import '../ui/comunes/comunes.dart';
 import 'mapa.dart';
 
-/// Mapa de OpenStreetMap (flutter_map), sin clave. Se usa cuando la app no configuró una clave de
-/// Google Maps: sirve para desarrollo y demos, no para producción (los servidores públicos de teselas
-/// de OpenStreetMap no admiten tráfico de producción).
+/// Mapa con flutter_map, sin clave. Se usa cuando la app no configuró una clave de Google Maps. El mapa de
+/// fondo (servidor de teselas, TMS, zoom máximo y créditos) llega del backend en `GET /configuracion`
+/// (`MAPAS_TESELAS_*`); sin ese dato, o si el pedido falla, el OSM público, que sirve para desarrollo y demos
+/// pero no para producción (sus servidores no admiten ese tráfico).
 class MapaOsm extends ConsumerStatefulWidget {
   const MapaOsm({super.key, required this.datos, this.teselas});
 
@@ -18,12 +21,8 @@ class MapaOsm extends ConsumerStatefulWidget {
   /// De dónde salen las teselas. Nulo = de la red; los tests pasan uno que no la usa.
   final TileProvider? teselas;
 
-  static const urlTeselas = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
-
-  /// Identifica a la app ante los servidores de teselas, como pide su política de uso.
+  /// Identifica a la app ante los servidores de teselas, como pide la política de uso de OpenStreetMap.
   static const agenteUsuario = 'ar.gob.pj.vehiculos_oficiales';
-
-  static final _derechos = Uri.parse('https://www.openstreetmap.org/copyright');
 
   /// Los mismos tonos que los marcadores de [MapaGoogle].
   static Color colorDe(TipoMarcador t) => t.color;
@@ -41,11 +40,11 @@ class MapaOsm extends ConsumerStatefulWidget {
   ConsumerState<MapaOsm> createState() => _MapaOsmState();
 
   /// Sin navegador (o si el sistema rechaza abrirla) no pasa nada: es solo la página de créditos.
-  static Future<void> _abrirDerechos(LanzadorUrl lanzar) async {
+  static Future<void> _abrirCreditos(LanzadorUrl lanzar, Uri pagina) async {
     try {
-      await lanzar(_derechos);
+      await lanzar(pagina);
     } catch (e) {
-      debugPrint('No se pudo abrir los créditos de OpenStreetMap (${e.runtimeType}).');
+      debugPrint('No se pudo abrir los créditos del mapa (${e.runtimeType}).');
     }
   }
 }
@@ -88,6 +87,13 @@ class _MapaOsmState extends ConsumerState<MapaOsm> {
     final alTocar = datos.alTocarMapa;
     final inicial = _inicial;
     final puntoInicial = inicial?.unico;
+    // Mientras llega la configuración no se dibuja el fondo: así no se le piden teselas al OSM público para
+    // después cambiar al servidor propio. Si falla, el OSM de siempre.
+    final configuracion = ref.watch(configuracionProvider);
+    final fondo = configuracion.isLoading && !configuracion.hasValue
+        ? null
+        : (configuracion.value?.teselas ?? MapaFondo.osm);
+    final creditos = fondo?.atribucionUrl;
     return FlutterMap(
       mapController: _controlador,
       options: MapOptions(
@@ -97,11 +103,15 @@ class _MapaOsmState extends ConsumerState<MapaOsm> {
         onTap: alTocar == null ? null : (_, p) => alTocar(Coordenada(p.latitude, p.longitude)),
       ),
       children: [
-        TileLayer(
-          urlTemplate: MapaOsm.urlTeselas,
-          userAgentPackageName: MapaOsm.agenteUsuario,
-          tileProvider: widget.teselas,
-        ),
+        if (fondo != null)
+          TileLayer(
+            urlTemplate: fondo.url,
+            tms: fondo.tms,
+            // Más cerca que eso se agrandan las teselas del último nivel (el mapa no queda en blanco).
+            maxNativeZoom: fondo.maxZoom,
+            userAgentPackageName: MapaOsm.agenteUsuario,
+            tileProvider: widget.teselas,
+          ),
         // Antes que los marcadores: quedan debajo.
         PolylineLayer(
           polylines: [
@@ -123,10 +133,12 @@ class _MapaOsmState extends ConsumerState<MapaOsm> {
               ),
           ],
         ),
-        SimpleAttributionWidget(
-          source: const Text('OpenStreetMap contributors'),
-          onTap: () => MapaOsm._abrirDerechos(ref.read(lanzadorUrlProvider)),
-        ),
+        // Los créditos del mapa de fondo (la licencia de OpenStreetMap los exige); sin enlace no se pueden tocar.
+        if (fondo != null)
+          SimpleAttributionWidget(
+            source: Text(fondo.atribucion),
+            onTap: creditos == null ? null : () => MapaOsm._abrirCreditos(ref.read(lanzadorUrlProvider), creditos),
+          ),
       ],
     );
   }

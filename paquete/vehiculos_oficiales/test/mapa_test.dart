@@ -7,11 +7,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart' as gm;
 import 'package:latlong2/latlong.dart';
+import 'package:vehiculos_oficiales/src/chofer/turno.dart' show configuracionProvider;
 import 'package:vehiculos_oficiales/src/entorno.dart';
 import 'package:vehiculos_oficiales/src/mapa/mapa.dart';
 import 'package:vehiculos_oficiales/src/mapa/mapa_google.dart';
 import 'package:vehiculos_oficiales/src/mapa/mapa_osm.dart';
 import 'package:vehiculos_oficiales/src/modelos/comunes.dart';
+import 'package:vehiculos_oficiales/src/modelos/configuracion.dart';
 import 'package:vehiculos_oficiales/src/ui/comunes/comunes.dart';
 import 'package:vehiculos_oficiales/vehiculos_oficiales.dart';
 
@@ -32,6 +34,9 @@ class _TeselasVacias extends TileProvider {
     return MemoryImage(_pngVacio);
   }
 }
+
+/// Lo que manda el backend por defecto: el mapa de fondo de OpenStreetMap.
+const _configuracionOsm = Configuracion(gpsTurnoSeg: 10, gpsViajeSeg: 5, ofertaSegundos: 30);
 
 EntornoModulo _entornoConClave(String clave) => EntornoModulo(
   config: VehiculosOficialesConfig(
@@ -79,13 +84,19 @@ void main() {
       abiertas = [];
     });
 
-    Future<void> montar(WidgetTester tester, DatosMapa datos, {Object? errorAlAbrir}) async {
+    Future<void> montar(
+      WidgetTester tester,
+      DatosMapa datos, {
+      Object? errorAlAbrir,
+      AsyncValue<Configuracion> configuracion = const AsyncData(_configuracionOsm),
+    }) async {
       tester.view.physicalSize = const Size(800, 800);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
+            configuracionProvider.overrideWithValue(configuracion),
             lanzadorUrlProvider.overrideWithValue((uri) async {
               abiertas.add(uri);
               if (errorAlAbrir != null) throw errorAlAbrir;
@@ -258,6 +269,78 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    group('mapa de fondo', () {
+      const centro = DatosMapa(centro: Coordenada(-26.8241, -65.2226));
+
+      TileLayer capa(WidgetTester tester) => tester.widget<TileLayer>(find.byType(TileLayer));
+
+      testWidgets('por defecto usa OpenStreetMap, identificándose con el agente de usuario', (tester) async {
+        await montar(tester, centro);
+
+        expect(capa(tester).urlTemplate, 'https://tile.openstreetmap.org/{z}/{x}/{y}.png');
+        expect(capa(tester).tms, isFalse);
+        expect(capa(tester).maxNativeZoom, 19);
+        expect(capa(tester).tileProvider.headers['User-Agent'], 'flutter_map (${MapaOsm.agenteUsuario})');
+        expect(find.text('© OpenStreetMap contributors'), findsOneWidget);
+      });
+
+      testWidgets('usa el servidor, tms, zoom y créditos configurados en el backend', (tester) async {
+        const propio = Configuracion(
+          gpsTurnoSeg: 10,
+          gpsViajeSeg: 5,
+          ofertaSegundos: 30,
+          teselas: MapaFondo(
+            url: 'https://mapas.ejemplo.gob.ar/tms/{z}/{x}/{y}.png',
+            atribucion: 'IGN · OpenStreetMap',
+            atribucionUrl: 'https://mapas.ejemplo.gob.ar/creditos',
+            tms: true,
+            maxZoom: 15,
+          ),
+        );
+        await montar(tester, centro, configuracion: const AsyncData(propio));
+
+        expect(capa(tester).urlTemplate, 'https://mapas.ejemplo.gob.ar/tms/{z}/{x}/{y}.png');
+        expect(capa(tester).tms, isTrue);
+        expect(capa(tester).maxNativeZoom, 15);
+        expect(teselas.pedidas, greaterThan(0), reason: 'las pide al proveedor de teselas de siempre');
+        expect(find.text('IGN · OpenStreetMap'), findsOneWidget);
+        expect(find.text('© OpenStreetMap contributors'), findsNothing);
+
+        await tester.tap(find.text('IGN · OpenStreetMap'));
+        await tester.pump(const Duration(milliseconds: 500));
+        expect(abiertas, [Uri.parse('https://mapas.ejemplo.gob.ar/creditos')]);
+      });
+
+      testWidgets('sin enlace de créditos, tocarlos no abre nada', (tester) async {
+        const sinEnlace = Configuracion(
+          gpsTurnoSeg: 10,
+          gpsViajeSeg: 5,
+          ofertaSegundos: 30,
+          teselas: MapaFondo(url: 'https://mapas.ejemplo.gob.ar/{z}/{x}/{y}.png', atribucion: 'Mapa propio'),
+        );
+        await montar(tester, centro, configuracion: const AsyncData(sinEnlace));
+
+        await tester.tap(find.text('Mapa propio'));
+        await tester.pump(const Duration(milliseconds: 500));
+        expect(abiertas, isEmpty);
+        expect(tester.takeException(), isNull);
+      });
+
+      testWidgets('mientras carga la configuración no pide teselas a ningún servidor', (tester) async {
+        await montar(tester, centro, configuracion: const AsyncLoading());
+
+        expect(find.byType(TileLayer), findsNothing);
+        expect(teselas.pedidas, 0);
+        expect(find.byType(FlutterMap), findsOneWidget, reason: 'los marcadores y las líneas se ven igual');
+      });
+
+      testWidgets('si la configuración falla usa OpenStreetMap', (tester) async {
+        await montar(tester, centro, configuracion: AsyncError(Exception('sin red'), StackTrace.empty));
+
+        expect(capa(tester).urlTemplate, 'https://tile.openstreetmap.org/{z}/{x}/{y}.png');
+      });
+    });
+
     testWidgets('si no se puede abrir la página de créditos, no queda un error sin capturar', (tester) async {
       await montar(
         tester,
@@ -280,6 +363,7 @@ void main() {
       Future<void> enfocar(WidgetTester tester, Enfoque? enfoque) async {
         await tester.pumpWidget(
           ProviderScope(
+            overrides: [configuracionProvider.overrideWithValue(const AsyncData(_configuracionOsm))],
             child: MaterialApp(
               home: Scaffold(
                 body: MapaOsm(

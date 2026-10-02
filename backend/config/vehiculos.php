@@ -23,6 +23,17 @@ return [
         // Clave para el mapa del panel (Maps JavaScript API): queda visible en el navegador, conviene una
         // distinta, restringida por HTTP referrer. Si falta se usa google_api_key.
         'google_js_api_key' => env('GOOGLE_MAPS_JS_API_KEY'),
+        // Mapa de fondo de la app (MapaOsm, sin clave de Google) y del panel (Leaflet), expuesto en
+        // /api/configuracion: se cambia sin recompilar la app. Por defecto el OSM público, solo para desarrollo
+        // y demos (su política no admite tráfico de producción). tms: servidores con la Y invertida (p. ej. el IGN).
+        // atribucion_url: a dónde lleva el texto de créditos; vacía, el texto no lleva enlace.
+        'teselas' => [
+            'url' => env('MAPAS_TESELAS_URL', 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'),
+            'atribucion' => env('MAPAS_TESELAS_ATRIBUCION', '© OpenStreetMap contributors'),
+            'atribucion_url' => env('MAPAS_TESELAS_ATRIBUCION_URL', 'https://www.openstreetmap.org/copyright'),
+            'tms' => (bool) env('MAPAS_TESELAS_TMS', false),
+            'max_zoom' => (int) env('MAPAS_TESELAS_MAX_ZOOM', 19),
+        ],
     ],
 
     // Búsqueda de lugares para el destino del pedido.

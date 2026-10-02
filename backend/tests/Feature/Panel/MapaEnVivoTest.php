@@ -152,6 +152,41 @@ it('sin API key muestra el mapa de OpenStreetMap con Leaflet y refresca por poll
         ->assertDontSee('data-proveedor="google"', false);
 });
 
+it('Leaflet usa el mapa de fondo configurado, con tms y zoom máximo', function () {
+    config([
+        'vehiculos.mapas.google_api_key' => null, 'vehiculos.mapas.google_js_api_key' => null,
+        'vehiculos.mapas.teselas' => [
+            'url' => 'https://mapas.ejemplo.gob.ar/tms/{z}/{x}/{y}.png',
+            'atribucion' => 'IGN <b>sin escapar</b>',
+            'atribucion_url' => '',
+            'tms' => true,
+            'max_zoom' => 15,
+        ],
+    ]);
+
+    $pagina = Livewire::test(MapaEnVivo::class)->assertOk();
+
+    expect($pagina->instance()->teselas())->toMatchArray(['tms' => true, 'max_zoom' => 15]);
+    $html = $pagina->html();
+    expect($html)->toContain('mapas.ejemplo.gob.ar')
+        ->toContain('teselas.tms')
+        ->toContain('teselas.max_zoom')
+        ->not->toContain('tile.openstreetmap.org')
+        ->not->toContain('<b>sin escapar</b>');
+});
+
+it('la atribución del mapa de fondo va escapada y con enlace solo si es http(s)', function (?string $url, string $esperada) {
+    config(['vehiculos.mapas.teselas.atribucion' => '© OSM & "amigos" <script>', 'vehiculos.mapas.teselas.atribucion_url' => $url]);
+
+    expect(Livewire::test(MapaEnVivo::class)->instance()->atribucionTeselas())->toBe($esperada);
+})->with([
+    'con enlace' => ['https://www.openstreetmap.org/copyright?a=1&b=2',
+        '<a href="https://www.openstreetmap.org/copyright?a=1&amp;b=2" target="_blank" rel="noopener">© OSM &amp; &quot;amigos&quot; &lt;script&gt;</a>'],
+    'sin enlace' => [null, '© OSM &amp; &quot;amigos&quot; &lt;script&gt;'],
+    'vacío' => ['', '© OSM &amp; &quot;amigos&quot; &lt;script&gt;'],
+    'otro esquema' => ['javascript:alert(1)', '© OSM &amp; &quot;amigos&quot; &lt;script&gt;'],
+]);
+
 it('lista aparte a los choferes en turno que todavía no mandaron ubicación', function () {
     $sinUbicacion = Turno::factory()->create()->chofer;
     choferEnTurno(); // con ubicación: va al mapa, no a la lista

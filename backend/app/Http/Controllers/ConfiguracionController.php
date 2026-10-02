@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Mapas\BuscadorCombinado;
 use App\Mapas\BuscadorNominatim;
+use App\Mapas\Teselas;
 use App\Servicios\Parametros;
 use Illuminate\Http\JsonResponse;
 
@@ -16,6 +17,7 @@ class ConfiguracionController extends Controller
             'gps_viaje_seg' => $p->entero('gps_viaje_seg'),
             'oferta_segundos' => $p->entero('oferta_segundos'),
             'lugares_autocompletar' => $this->lugaresAutocompletar(),
+            'teselas' => Teselas::configuradas(),
         ]);
     }
 
