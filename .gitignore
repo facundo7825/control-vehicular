@@ -2,3 +2,4 @@
 .superpowers/
 tools/
 infra/mapas/datos/
+infra/mapas/.env

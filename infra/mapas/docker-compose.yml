@@ -1,8 +1,13 @@
 # Servidor de mapas propio para Catamarca: recorridos y tiempos (OSRM), búsqueda (Nominatim) y mapa de fondo (teselas PNG).
-# Antes de levantarlo: ./preparar-datos.sh   (ver README.md y docs/PRODUCCION-MAPAS.md)
+# Antes de levantarlo: ./preparar-datos.sh  y  cp .env.example .env  (poner NOMINATIM_CLAVE_DB).
+# Ver README.md y docs/PRODUCCION-MAPAS.md.
 #
 # Los puertos escuchan solo en 127.0.0.1: el backend los usa desde el mismo servidor y las teselas salen a internet por
-# el proxy inverso con HTTPS. Para exponerlos en una red interna: MAPAS_ESCUCHA=10.0.0.5 docker compose up -d
+# el proxy inverso con HTTPS. Para exponerlos en una red interna: MAPAS_ESCUCHA=<IP interna> (Docker se saltea UFW:
+# ver la guía).
+#
+# Límites de memoria (medidos con Catamarca: OSRM ~110 MB, Nominatim ~0,5 GB y 1,1 GB al importar, teselas ~0,3 GB),
+# con margen. Se cambian con OSRM_MEMORIA, NOMINATIM_MEMORIA y TESELAS_MEMORIA en .env.
 name: mapas
 
 services:
@@ -13,6 +18,13 @@ services:
       - ./datos/osrm:/data:ro
     ports:
       - "${MAPAS_ESCUCHA:-127.0.0.1}:${OSRM_PUERTO:-5001}:5000"
+    mem_limit: ${OSRM_MEMORIA:-1g}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:5000/nearest/v1/driving/-65.779,-28.469"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
 
   nominatim:
@@ -20,8 +32,8 @@ services:
     environment:
       PBF_PATH: /datos/catamarca.osm.pbf
       IMPORT_STYLE: full
-      # Clave interna de PostgreSQL (el puerto 5432 no se publica). Cambiarla en producción.
-      NOMINATIM_PASSWORD: ${NOMINATIM_CLAVE_DB:-cambiar-esta-clave}
+      # Clave interna de PostgreSQL (el puerto 5432 no se publica). Obligatoria: va en infra/mapas/.env.
+      NOMINATIM_PASSWORD: "${NOMINATIM_CLAVE_DB:?Falta NOMINATIM_CLAVE_DB. Copiar .env.example a .env y poner una clave}"
       # Ajuste para un servidor chico (la imagen viene pensada para el planeta entero).
       POSTGRES_SHARED_BUFFERS: 512MB
       POSTGRES_MAINTENANCE_WORK_MEM: 1GB
@@ -34,6 +46,14 @@ services:
     shm_size: 1gb
     ports:
       - "${MAPAS_ESCUCHA:-127.0.0.1}:${NOMINATIM_PUERTO:-8088}:8080"
+    mem_limit: ${NOMINATIM_MEMORIA:-3g}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8080/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # La primera vez importa el recorte antes de responder (2–3 minutos con Catamarca).
+      start_period: 30m
     restart: unless-stopped
 
   teselas:
@@ -44,6 +64,14 @@ services:
       - ./datos/teselas:/data:ro
     ports:
       - "${MAPAS_ESCUCHA:-127.0.0.1}:${TESELAS_PUERTO:-8089}:8080"
+    mem_limit: ${TESELAS_MEMORIA:-1g}
+    healthcheck:
+      # Dibuja una tesela de verdad (el centro de San Fernando del Valle de Catamarca), no solo /health.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/styles/basico/14/5198/9543.png').then(r=>process.exit(r.ok&&r.headers.get('content-type')==='image/png'?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
 
 volumes:

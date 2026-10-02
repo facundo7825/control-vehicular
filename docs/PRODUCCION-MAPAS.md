@@ -51,18 +51,29 @@ Requisitos: Linux x86-64 (Debian 12 / Ubuntu 22.04 o 24.04), Docker Engine con e
 git clone <repositorio> /opt/control-vehiculos      # o copiar solo la carpeta infra/mapas
 cd /opt/control-vehiculos/infra/mapas
 ./preparar-datos.sh                                  # descarga, recorte, OSRM y teselas (idempotente)
+cp .env.example .env && nano .env                    # NOMINATIM_CLAVE_DB: obligatoria, una clave larga
 docker compose up -d
-docker compose logs -f nominatim                     # esperar "Nominatim is ready to accept requests"
+docker compose ps                                    # esperar (healthy) en los tres servicios
 ```
 
-- `preparar-datos.sh` se puede volver a correr cuando se quiera: salta lo que ya está hecho.
-- Los servicios tienen `restart: unless-stopped`: vuelven solos después de reiniciar el servidor.
-- Variables opcionales de `docker compose` (en el entorno o en un archivo `infra/mapas/.env`):
+- **Correr `preparar-datos.sh` antes del primer `docker compose up`.** Si no, Docker crea carpetas vacías donde van los
+  archivos de datos y los servicios no arrancan (arreglo: `docker compose down`, borrar esas carpetas vacías de
+  `datos/` y correr el script).
+- `preparar-datos.sh` se puede volver a correr cuando se quiera: salta lo que ya está hecho. Si se corta (Ctrl+C, un
+  corte de luz), al volver a correrlo rehace solo lo que no terminó: cada paso escribe en un temporal y lo pone en su
+  lugar al terminar bien, y la descarga se verifica con el MD5 que publica Geofabrik. En Linux los contenedores del
+  script corren con el usuario actual, así `datos/` no queda a nombre de root.
+- Los servicios tienen `restart: unless-stopped` (vuelven solos después de reiniciar el servidor) y `healthcheck`:
+  OSRM responde un `nearest`, Nominatim su `/status` y TileServer-GL dibuja una tesela de Catamarca.
+  `docker compose ps` muestra `(healthy)` o `(unhealthy)`.
+- Variables de `docker compose`, en `infra/mapas/.env` (ignorado por git; plantilla en `.env.example`):
+  `NOMINATIM_CLAVE_DB` (**obligatoria**: clave interna de PostgreSQL; sin ella `docker compose` no arranca),
   `MAPAS_ESCUCHA` (IP donde escuchan los puertos; por defecto `127.0.0.1`), `OSRM_PUERTO` (5001),
-  `NOMINATIM_PUERTO` (8088), `TESELAS_PUERTO` (8089), `NOMINATIM_WORKERS` (2) y `NOMINATIM_CLAVE_DB`
-  (clave interna de PostgreSQL: **cambiarla**).
-- Variables opcionales de `preparar-datos.sh`: `MAPAS_BBOX` (otro recuadro), `MAPAS_PBF_URL` (otro extracto) y
-  `PLANETILER_RAM` (memoria de Java para Planetiler; por defecto `2g`).
+  `NOMINATIM_PUERTO` (8088), `TESELAS_PUERTO` (8089), `NOMINATIM_WORKERS` (2) y los límites de memoria
+  `OSRM_MEMORIA` (1g), `NOMINATIM_MEMORIA` (3g) y `TESELAS_MEMORIA` (1g). Los límites tienen margen sobre lo medido
+  (sección 2); si se agranda la zona (otra `MAPAS_BBOX`), subirlos, sobre todo el de Nominatim durante la importación.
+- Variables opcionales de `preparar-datos.sh`: `MAPAS_BBOX` (otro recuadro), `MAPAS_PBF_URL` (otro extracto; tiene que
+  tener su `.md5` al lado, como en Geofabrik) y `PLANETILER_RAM` (memoria de Java para Planetiler; por defecto `2g`).
 
 **Windows (para probar):** con Docker Desktop iniciado, el script corre igual desde **Git Bash** (usa rutas `C:/...` y
 `MSYS_NO_PATHCONV=1` para los montajes) o desde **WSL2** (más rápido si el repo está en `~/`, no en `/mnt/c`). En
@@ -88,6 +99,10 @@ MAPAS_TESELAS_TMS=false
 MAPAS_TESELAS_MAX_ZOOM=18
 ```
 
+En `backend/.env.example` el bloque está escrito sin acentos ni `©` (ese archivo se mantiene en ASCII, como el resto de
+sus comentarios) y dice `"(c) OpenMapTiles (c) OpenStreetMap contributors"`. En el `.env` real conviene el texto de
+arriba, con `©`: Laravel lo lee en UTF-8 sin problema.
+
 Luego `php artisan config:cache` (si se usa) y reiniciar PHP y las colas. **No hace falta recompilar la app ni el
 panel:** la app recibe el mapa de fondo (`teselas`: `url`, `atribucion`, `atribucion_url`, `tms`, `max_zoom`) y el
 permiso de autocompletar (`lugares_autocompletar`) en `GET /api/configuracion`, y el mapa en vivo del panel usa la
@@ -103,8 +118,19 @@ misma configuración.
 ## 5. Seguridad y HTTPS
 
 - Los puertos escuchan solo en `127.0.0.1`. **OSRM y Nominatim no se exponen a internet**: los consulta solo el backend.
-  Si el backend está en otra máquina, usar `MAPAS_ESCUCHA=<IP de la red interna>` y un firewall que solo deje entrar
-  al backend.
+  Si el backend está en otra máquina, usar `MAPAS_ESCUCHA=<IP de la red interna>` (una interfaz que no dé a internet).
+- **Ojo con el firewall: Docker se saltea UFW**. Los puertos publicados por Docker se abren con sus
+  propias reglas de iptables, antes que las de UFW, así que un `ufw deny 8088` **no** los cierra. Por eso los puertos
+  escuchan en `127.0.0.1` o en una IP interna, nunca en `0.0.0.0`. Si hace falta filtrar por origen (por ejemplo,
+  dejar entrar solo al backend `10.0.0.10` desde la red interna), las reglas van en la cadena `DOCKER-USER`:
+
+  ```bash
+  sudo iptables -I DOCKER-USER -i eth1 -p tcp -m multiport --dports 5000,8080 ! -s 10.0.0.10 -j DROP
+  ```
+
+  (`eth1` es la interfaz de la red interna. Los puertos son los de **dentro** del contenedor, porque `DOCKER-USER` ve
+  el tráfico ya traducido; lo que llega desde el mismo servidor, como nginx a 127.0.0.1, no pasa por esa cadena. Hacerlas persistentes
+  con `iptables-persistent` o el mecanismo de la distribución.)
 - **Las teselas sí salen a internet**, porque las piden los celulares y los navegadores. La app en producción exige
   HTTPS, así que van detrás de un proxy inverso con certificado (por ejemplo Let's Encrypt) y con cache.
 
@@ -114,7 +140,15 @@ Ejemplo de nginx (`/etc/nginx/sites-available/mapas`):
 proxy_cache_path /var/cache/nginx/teselas levels=1:2 keys_zone=teselas:50m max_size=2g inactive=30d use_temp_path=off;
 
 server {
-    listen 443 ssl http2;
+    listen 80;
+    server_name mapas.ejemplo.gob.ar;
+    location /.well-known/acme-challenge/ { root /var/www/html; }   # renovación de Let's Encrypt
+    location / { return 301 https://$host$request_uri; }
+}
+
+server {
+    listen 443 ssl;
+    http2 on;                      # nginx 1.25.1 o más nuevo; en uno anterior: "listen 443 ssl http2;"
     server_name mapas.ejemplo.gob.ar;
     ssl_certificate     /etc/letsencrypt/live/mapas.ejemplo.gob.ar/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/mapas.ejemplo.gob.ar/privkey.pem;
@@ -133,6 +167,10 @@ server {
 }
 ```
 
+Certificado: con el bloque del puerto 80 ya activo, `sudo certbot certonly --webroot -w /var/www/html -d
+mapas.ejemplo.gob.ar` (paquete `certbot`). La renovación queda automática con el temporizador que instala el paquete;
+agregar `--deploy-hook "systemctl reload nginx"` para que nginx tome el certificado nuevo.
+
 TileServer-GL avisa al arrancar que no tiene `allowedHosts`/`--public_url` (protección contra encabezados `Host`
 falsos). Solo importa para las respuestas JSON con URLs (`/styles.json`, TileJSON); con el proxy de arriba, que deja
 pasar únicamente PNG, no aplica.
@@ -142,6 +180,8 @@ pasar únicamente PNG, no aplica.
 Dos puntos de San Fernando del Valle de Catamarca:
 
 ```bash
+# Estado de los healthchecks: los tres tienen que decir (healthy)
+docker compose ps
 # OSRM: recorrido (debe responder "code":"Ok" con distance/duration)
 curl -s "http://127.0.0.1:5001/route/v1/driving/-65.779,-28.469;-65.77,-28.46?overview=false"
 # OSRM: tabla de duraciones (segundos)
@@ -168,14 +208,25 @@ OpenStreetMap cambia todos los días y Geofabrik publica el extracto de Argentin
 ```bash
 cd /opt/control-vehiculos/infra/mapas
 ./preparar-datos.sh --actualizar          # baja el extracto solo si es más nuevo y rehace recorte, OSRM y teselas
-docker compose restart osrm teselas       # toman los archivos nuevos
-docker compose stop nominatim && docker compose rm -f nominatim
-docker volume rm mapas_nominatim-db       # Nominatim reimporta el recorte nuevo al arrancar
+```
+
+**Si dice "Sin cambios en Geofabrik", termina ahí**: no hay que reiniciar nada ni reimportar Nominatim. Si el recorte
+cambió (el script lo avisa al final), aplicar los datos nuevos:
+
+```bash
+docker compose restart osrm teselas                    # toman los archivos nuevos (cortan unos segundos)
+sudo find /var/cache/nginx/teselas -type f -delete     # vaciar la cache de teselas del proxy
+docker compose rm -sf nominatim                        # para y borra el contenedor de Nominatim
+docker volume rm mapas_nominatim-db                    # Nominatim reimporta el recorte nuevo al arrancar
 docker compose up -d
 ```
 
-Mientras Nominatim reimporta (unos minutos) la búsqueda no responde; el backend lo tolera y, si está configurado, sigue
-contestando Georef. Conviene hacerlo de noche (por ejemplo con `cron` el primer domingo del mes).
+- Mientras OSRM y TileServer-GL reinician (unos segundos) no hay recorridos ni teselas nuevas: el backend lo tolera
+  (corta un minuto y sigue sin dato) y las teselas ya cacheadas en la app siguen viéndose.
+- Mientras Nominatim reimporta (2–3 minutos con Catamarca) la búsqueda no responde; el backend lo tolera y, si está
+  configurado, sigue contestando Georef.
+- Sin vaciar la cache de nginx, las teselas viejas se siguen sirviendo hasta 7 días (`proxy_cache_valid`).
+- Conviene hacerlo de noche (por ejemplo con `cron` el primer domingo del mes).
 
 ## 8. Copias de seguridad
 
