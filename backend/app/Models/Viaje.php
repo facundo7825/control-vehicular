@@ -32,6 +32,7 @@ class Viaje extends Model
             'programado_para' => 'datetime',
             'aceptado_en' => 'datetime', 'llego_en' => 'datetime', 'iniciado_en' => 'datetime',
             'finalizado_en' => 'datetime', 'cancelado_en' => 'datetime',
+            'metros_recorridos' => 'integer',
         ];
     }
 

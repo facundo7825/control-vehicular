@@ -4,10 +4,11 @@ namespace App\Servicios;
 
 use App\Enums\EstadoViaje as E;
 use App\Enums\ResultadoOferta;
-use App\Events\EstadoChoferActualizado;
 use App\Events\ViajeActualizado;
 use App\Excepciones\TransicionInvalida;
+use App\Models\Alerta;
 use App\Models\OfertaViaje;
+use App\Models\Usuario;
 use App\Models\Viaje;
 use Illuminate\Support\Facades\DB;
 
@@ -36,6 +37,9 @@ class MaquinaEstadosViaje
 
     /** Estados desde los que el admin puede reasignar el viaje a otro chofer (queda aceptado). */
     private const REASIGNABLES = [E::Buscando, E::Ofrecido, E::Aceptado, E::EnCamino, E::Llego, E::SinChofer];
+
+    /** Estados en los que el viaje todavía no tiene chofer: el admin puede asignarlo a mano. */
+    private const SIN_ASIGNAR = [E::Buscando, E::Ofrecido, E::SinChofer];
 
     private const MARCAS = [
         'aceptado' => 'aceptado_en',
@@ -77,11 +81,23 @@ class MaquinaEstadosViaje
      */
     public function reasignar(Viaje $viaje, int $choferId, ?int $vehiculoId): void
     {
-        DB::transaction(function () use ($viaje, $choferId, $vehiculoId) {
+        $this->asignarDirecto($viaje, $choferId, $vehiculoId, self::REASIGNABLES, 'reasignarse');
+    }
+
+    /** El admin asigna a mano un viaje que todavía no tiene chofer (buscando, ofrecido o sin chofer). */
+    public function asignar(Viaje $viaje, int $choferId, ?int $vehiculoId): void
+    {
+        $this->asignarDirecto($viaje, $choferId, $vehiculoId, self::SIN_ASIGNAR, 'asignarse');
+    }
+
+    /** @param  array<int, E>  $desde */
+    private function asignarDirecto(Viaje $viaje, int $choferId, ?int $vehiculoId, array $desde, string $accion): void
+    {
+        DB::transaction(function () use ($viaje, $choferId, $vehiculoId, $desde, $accion) {
             $this->sincronizarConFilaBloqueada($viaje);
 
-            if (! in_array($viaje->estado, self::REASIGNABLES, true)) {
-                throw new TransicionInvalida("El viaje no puede reasignarse en estado {$viaje->estado->value}.");
+            if (! in_array($viaje->estado, $desde, true)) {
+                throw new TransicionInvalida("El viaje no puede {$accion} en estado {$viaje->estado->value}.");
             }
 
             $this->guardar($viaje, E::Aceptado, [
@@ -144,7 +160,13 @@ class MaquinaEstadosViaje
         if ($marca = self::MARCAS[$hacia->value] ?? null) {
             $viaje->{$marca} = now();
         }
+        if ($hacia === E::Finalizado) {
+            // Se calcula una sola vez (los puntos de un viaje): el mapa y los reportes solo suman la columna.
+            $viaje->metros_recorridos = KilometrosRecorridos::metrosDe($viaje->id);
+        }
         $viaje->save();
+
+        $this->actualizarAlertaSinChofer($viaje, $desde);
 
         ViajeActualizado::dispatch($viaje, $choferAnterior !== $viaje->chofer_id ? $choferAnterior : null, $conOferta, $porAdmin);
         foreach (array_unique(array_filter([$choferAnterior, $viaje->chofer_id])) as $choferId) {
@@ -152,9 +174,30 @@ class MaquinaEstadosViaje
         }
     }
 
+    /**
+     * Alerta del panel "viaje sin chofer": se crea al entrar en sin_chofer (una pendiente por viaje como
+     * máximo) y se resuelve sola al salir (asignado, cancelado o de vuelta a buscar). Corre dentro de la
+     * misma transacción que el cambio de estado.
+     */
+    private function actualizarAlertaSinChofer(Viaje $viaje, E $desde): void
+    {
+        $pendiente = Alerta::pendientes()->where('tipo', Alerta::VIAJE_SIN_CHOFER)->where('viaje_id', $viaje->id);
+
+        if ($viaje->estado === E::SinChofer && ! $pendiente->exists()) {
+            $solicitante = $viaje->solicitante?->nombre;
+            Alerta::create([
+                'tipo' => Alerta::VIAJE_SIN_CHOFER,
+                'viaje_id' => $viaje->id,
+                'mensaje' => "El viaje #{$viaje->id}".($solicitante ? " ($solicitante)" : '').' quedó sin chofer.',
+            ]);
+        } elseif ($desde === E::SinChofer && $viaje->estado !== E::SinChofer) {
+            $pendiente->update(['resuelta_en' => now()]);
+        }
+    }
+
     private function emitirEstadoChofer(int $choferId): void
     {
-        $chofer = \App\Models\Usuario::find($choferId);
+        $chofer = Usuario::find($choferId);
         $this->aviso->publicarSiCambio($chofer);
     }
 }

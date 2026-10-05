@@ -6,8 +6,11 @@ use App\Enums\EstadoChofer;
 use App\Enums\EstadoViaje;
 use App\Enums\RolUsuario;
 use App\Enums\TipoViaje;
+use App\Models\UbicacionChofer;
 use App\Models\Usuario;
 use App\Models\Viaje;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 
 /** El estado del chofer se calcula siempre; nunca se guarda (spec 4.1). */
@@ -21,32 +24,42 @@ class CalculadorEstadoChofer
             return EstadoChofer::FueraDeTurno;
         }
 
-        $ubicacion = $chofer->ubicacion()->first();
-        $limiteSenal = now()->subMinutes($this->parametros->entero('sin_senal_min'));
-        if (! $ubicacion || $ubicacion->actualizado_en->lt($limiteSenal)) {
-            return EstadoChofer::SinSenal;
-        }
-
-        if (Viaje::activosDeChofer($chofer->id)->exists()) {
-            return EstadoChofer::EnViaje;
-        }
-
-        if ($this->tieneReservaProxima($chofer->id)) {
-            return EstadoChofer::ReservadoPronto;
-        }
-
-        return EstadoChofer::Libre;
+        return $this->segun(
+            $chofer->ubicacion()->first(),
+            fn () => Viaje::activosDeChofer($chofer->id)->exists(),
+            fn () => $this->reservasProximas()->where('chofer_id', $chofer->id)->exists(),
+            $this->limiteSenal(),
+        );
     }
 
-    /** @return Collection<int, array{chofer: Usuario, estado: EstadoChofer}> */
+    /**
+     * Mismo criterio que estado(), con consultas agrupadas: una cantidad fija de consultas sin importar
+     * cuántos choferes haya en turno (lo usan el mapa, el tablero y el despachador).
+     *
+     * @return Collection<int, array{chofer: Usuario, estado: EstadoChofer}>
+     */
     public function choferesEnTurno(): Collection
     {
-        return Usuario::where('rol', RolUsuario::Chofer)
+        $choferes = Usuario::where('rol', RolUsuario::Chofer)
             ->whereHas('turnoAbierto')
             ->with(['ubicacion', 'turnoAbierto.vehiculo'])
             ->orderBy('id')
-            ->get()
-            ->map(fn (Usuario $c) => ['chofer' => $c, 'estado' => $this->estado($c)]);
+            ->get();
+        if ($choferes->isEmpty()) {
+            return collect();
+        }
+
+        $ids = $choferes->modelKeys();
+        $enViaje = Viaje::activos()->whereIn('chofer_id', $ids)->distinct()->pluck('chofer_id')->flip();
+        $conReserva = $this->reservasProximas()->whereIn('chofer_id', $ids)->distinct()->pluck('chofer_id')->flip();
+        $limiteSenal = $this->limiteSenal();
+
+        return $choferes->map(fn (Usuario $c) => ['chofer' => $c, 'estado' => $this->segun(
+            $c->ubicacion,
+            fn () => $enViaje->has($c->id),
+            fn () => $conReserva->has($c->id),
+            $limiteSenal,
+        )]);
     }
 
     /** @return Collection<int, Usuario> */
@@ -58,14 +71,39 @@ class CalculadorEstadoChofer
             ->values();
     }
 
-    private function tieneReservaProxima(int $choferId): bool
+    /**
+     * El estado de un chofer en turno. Lo que falta saber se pide con closures, así estado() consulta
+     * solo lo necesario.
+     */
+    private function segun(?UbicacionChofer $ubicacion, callable $tieneViajeActivo, callable $tieneReservaProxima, Carbon $limiteSenal): EstadoChofer
     {
-        return Viaje::where('chofer_id', $choferId)
-            ->where('tipo', TipoViaje::Reserva)
+        if (! $ubicacion || $ubicacion->actualizado_en->lt($limiteSenal)) {
+            return EstadoChofer::SinSenal;
+        }
+
+        if ($tieneViajeActivo()) {
+            return EstadoChofer::EnViaje;
+        }
+
+        if ($tieneReservaProxima()) {
+            return EstadoChofer::ReservadoPronto;
+        }
+
+        return EstadoChofer::Libre;
+    }
+
+    private function limiteSenal(): Carbon
+    {
+        return now()->subMinutes($this->parametros->entero('sin_senal_min'));
+    }
+
+    /** Reservas aceptadas que empiezan dentro del bloqueo previo (spec 4.1: "reservado pronto"). */
+    private function reservasProximas(): Builder
+    {
+        return Viaje::where('tipo', TipoViaje::Reserva)
             ->where('estado', EstadoViaje::Aceptado)
             ->whereBetween('programado_para', [
                 now(), now()->addMinutes($this->parametros->entero('bloqueo_antes_reserva_min')),
-            ])
-            ->exists();
+            ]);
     }
 }

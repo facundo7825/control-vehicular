@@ -23,12 +23,20 @@ class ViewViaje extends ViewRecord
     protected function getHeaderActions(): array
     {
         return [
+            ViajeResource::accionAsignar()
+                ->action(function (Viaje $record, array $data): void {
+                    $this->ejecutar(
+                        fn () => app(ServicioViaje::class)->asignarPorAdmin($record, Usuario::findOrFail($data['chofer_id'])),
+                        'Chofer asignado',
+                    );
+                }),
             Action::make('reasignar')
                 ->label('Reasignar')
                 ->icon(Heroicon::OutlinedArrowPath)
                 ->modalHeading('Reasignar a otro chofer')
                 ->modalDescription('Se asigna directo, sin oferta, y se avisa al chofer anterior, al nuevo y al solicitante.')
-                ->visible(fn (Viaje $record): bool => ServicioViaje::reasignable($record))
+                // Si todavía no tiene chofer, la acción es "Asignar chofer".
+                ->visible(fn (Viaje $record): bool => ServicioViaje::reasignable($record) && ! ServicioViaje::asignable($record))
                 ->schema([
                     Select::make('chofer_id')
                         ->label('Chofer')
