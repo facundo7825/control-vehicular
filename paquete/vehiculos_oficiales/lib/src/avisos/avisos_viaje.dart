@@ -53,14 +53,17 @@ class AvisosViaje extends Notifier<void> {
     ref.onDispose(() => unawaited(escucha.cancel()));
   }
 
-  /// Chofer: el fichaje abrió o cerró el turno. En primer plano la pantalla cambia sola; en segundo plano
-  /// sale la notificación (sin sonido: no es algo que haya que atender ya).
+  /// Chofer: el fichaje abrió o cerró el turno (o dejó o anuló su cierre pendiente). En primer plano la
+  /// pantalla cambia sola; en segundo plano sale la notificación, con los textos del push del backend (sin
+  /// sonido: no es algo que haya que atender ya). Un estado desconocido no notifica (el turno igual se refresca).
   void _alPushChofer(AvisoPush aviso) {
     if (aviso.tipo != 'turno') return;
     final (titulo, texto) = switch (aviso.estado) {
       'abierto' => ('Tu turno empezó', 'Abrí la app para compartir tu ubicación'),
       'sin_vehiculo' => ('Fichaste la entrada', 'Abrí la app y elegí el vehículo para empezar el turno'),
       'cerrado' => ('Tu turno terminó', 'Se registró tu salida.'),
+      'cierre_pendiente' => ('Fichaste la salida', 'Tu turno se cierra al terminar el viaje.'),
+      'cierre_cancelado' => ('Seguís de turno', 'Fichaste la entrada: se anuló el cierre del turno.'),
       _ => (null, null),
     };
     if (titulo != null && texto != null) _notificar(titulo, texto);

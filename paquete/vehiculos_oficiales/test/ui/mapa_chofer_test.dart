@@ -119,4 +119,18 @@ void main() {
     expect(find.textContaining('Turno por fichaje'), findsOneWidget);
     expect(find.textContaining('se cierra al terminar el viaje'), findsOneWidget);
   });
+
+  testWidgets('el push "cierre_pendiente" muestra que el turno se cierra al terminar el viaje', (tester) async {
+    final conCierre = p.json(c.turnoActual);
+    (conCierre['turno'] as Map<String, dynamic>)['cierre_pendiente_en'] = '2026-10-01T18:00:00.000000Z';
+    // La primera consulta (al abrir) trae el turno sin cierre; la del push, con cierre pendiente.
+    final e = entornoChofer()..http.responder('GET', 'turnos/actual', 200, jsonEncode(conCierre));
+    await montarChofer(tester, e, ubicador: gps);
+    expect(find.textContaining('se cierra al terminar el viaje'), findsNothing);
+
+    e.puente.controlador.add({'modulo': 'vehiculos_oficiales', 'tipo': 'turno', 'estado': 'cierre_pendiente'});
+    await tester.pumpAndSettle();
+
+    expect(find.text('Fichaste la salida: se cierra al terminar el viaje.'), findsOneWidget);
+  });
 }

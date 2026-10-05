@@ -459,6 +459,8 @@ void main() {
           pushTurno('abierto');
           pushTurno('sin_vehiculo');
           pushTurno('cerrado');
+          pushTurno('cierre_pendiente');
+          pushTurno('cierre_cancelado');
           pushTurno('otro'); // desconocido: nada
           async.flushMicrotasks();
 
@@ -466,6 +468,8 @@ void main() {
             ('Tu turno empezó', 'Abrí la app para compartir tu ubicación'),
             ('Fichaste la entrada', 'Abrí la app y elegí el vehículo para empezar el turno'),
             ('Tu turno terminó', 'Se registró tu salida.'),
+            ('Fichaste la salida', 'Tu turno se cierra al terminar el viaje.'),
+            ('Seguís de turno', 'Fichaste la entrada: se anuló el cierre del turno.'),
           ]);
           expect(sonados(), isEmpty);
         });
