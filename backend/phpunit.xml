@@ -43,6 +43,10 @@
         <env name="LUGARES_LIMITE_POR_MINUTO" value="30"/>
         <env name="RUTAS_OSRM_URL" value="https://router.project-osrm.org"/>
         <env name="ASISTENCIA_CLAVE" value=""/>
+        <env name="ASISTENCIA_LIMITE_POR_MINUTO" value="300"/>
+        <env name="ASISTENCIA_ENTRADA_MAX_HORAS" value="12"/>
+        <env name="ASISTENCIA_RETENCION_DIAS" value="90"/>
+        <env name="ASISTENCIA_SIMULACION" value=""/>
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
         <env name="SESSION_DRIVER" value="array"/>

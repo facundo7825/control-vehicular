@@ -104,8 +104,10 @@ class AppServiceProvider extends ServiceProvider
                 ['message' => 'Demasiados pedidos de recorrido. Probá de nuevo en un minuto.'], 429, $headers,
             )));
 
-        // Fichajes del sistema de asistencia (entre servidores): 120 por minuto por IP.
-        RateLimiter::for('asistencia', fn (Request $request) => Limit::perMinute(120)
+        // Fichajes del sistema de asistencia (entre servidores): ASISTENCIA_LIMITE_POR_MINUTO (300 por defecto) por IP.
+        RateLimiter::for('asistencia', fn (Request $request) => Limit::perMinute(
+            ($limite = (int) config('vehiculos.asistencia.limite_por_minuto')) > 0 ? $limite : 300,
+        )
             ->by((string) $request->ip())
             ->response(fn (Request $request, array $headers) => response()->json(
                 ['message' => 'Demasiados eventos de asistencia. Probá de nuevo en un minuto.'], 429, $headers,

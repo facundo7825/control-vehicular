@@ -27,6 +27,16 @@ class AsistenciaController extends Controller
         $lote = $request->has('eventos');
         $prefijo = $lote ? 'eventos.*.' : '';
 
+        // id_externo e id_evento pueden llegar como número JSON: se toman como texto.
+        if ($lote && is_array($request->input('eventos'))) {
+            $request->merge(['eventos' => array_map(
+                fn ($evento) => is_array($evento) ? $this->comoTexto($evento) : $evento,
+                $request->input('eventos'),
+            )]);
+        } elseif (! $lote) {
+            $request->merge($this->comoTexto($request->only(['id_externo', 'id_evento'])));
+        }
+
         $datos = $request->validate([
             ...($lote ? ['eventos' => ['required', 'array', 'min:1', 'max:100']] : []),
             $prefijo.'id_evento' => ['nullable', 'string', 'max:100'],
@@ -60,6 +70,18 @@ class AsistenciaController extends Controller
         ksort($resultados);
 
         return response()->json($lote ? ['resultados' => array_values($resultados)] : $resultados[0]);
+    }
+
+    private function comoTexto(array $evento): array
+    {
+        foreach (['id_externo', 'id_evento'] as $campo) {
+            // Solo enteros: un número con decimales o más grande que un entero perdería dígitos (queda 422).
+            if (is_int($evento[$campo] ?? null)) {
+                $evento[$campo] = (string) $evento[$campo];
+            }
+        }
+
+        return $evento;
     }
 
     /**

@@ -3,6 +3,7 @@
 use App\Enums\EstadoChofer;
 use App\Enums\EstadoViaje;
 use App\Enums\OrigenTurno;
+use App\Jobs\AvisarTurno;
 use App\Models\Alerta;
 use App\Models\EventoAsistencia;
 use App\Models\OfertaViaje;
@@ -12,12 +13,15 @@ use App\Models\Usuario;
 use App\Models\Vehiculo;
 use App\Models\Viaje;
 use App\Notificaciones\Notificador;
+use App\Servicios\AvisoEstadoChofer;
 use App\Servicios\CalculadorEstadoChofer;
 use App\Servicios\Despachador;
 use App\Servicios\DisponibilidadReservas;
 use App\Servicios\MaquinaEstadosViaje;
 use App\Servicios\ServicioAsistencia;
+use App\Servicios\ServicioTurnos;
 use App\Servicios\ServicioViaje;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Queue;
@@ -329,12 +333,13 @@ describe('ventana del momento', function () {
     })->with(['2026-09-28T11:59:00Z', '1900-01-01T00:00:00']);
 
     it('acepta los bordes de la ventana', function () {
-        choferConHabitual();
+        $chofer = choferConHabitual();
+        Turno::factory()->create(['chofer_id' => $chofer->id, 'inicio' => now()->subDays(8)]);
 
-        ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'entrada', 'momento' => '2026-09-28T12:00:00Z'])
-            ->assertOk()->assertJsonPath('resultado', 'abierto');
-        ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'salida', 'momento' => '2026-10-05T12:05:00Z'])
+        ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'salida', 'momento' => '2026-09-28T12:00:00Z'])
             ->assertOk()->assertJsonPath('resultado', 'cerrado');
+        ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'entrada', 'momento' => '2026-10-05T12:05:00Z'])
+            ->assertOk()->assertJsonPath('resultado', 'abierto');
     });
 });
 
@@ -368,16 +373,6 @@ it('en un lote, un evento que falla queda ignorado y los demás se procesan', fu
         ->assertJsonPath('resultados.1.resultado', 'abierto');
 
     expect(Turno::count())->toBe(1)->and(Alerta::count())->toBe(0);
-});
-
-it('limita los eventos a 120 por minuto por IP', function () {
-    for ($i = 0; $i < 120; $i++) {
-        ($this->fichar)(['id_externo' => 'X'.$i, 'tipo' => 'entrada'])->assertOk();
-    }
-
-    ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'entrada'])
-        ->assertStatus(429)
-        ->assertJsonPath('message', 'Demasiados eventos de asistencia. Probá de nuevo en un minuto.');
 });
 
 it('el push de sin_vehiculo y el de cierre llevan los datos y textos acordados', function () {
@@ -467,5 +462,263 @@ describe('cierre pendiente', function () {
         expect($viaje->fresh()->estado)->toBe(EstadoViaje::Finalizado)
             ->and($turno->fresh()->fin)->toBeNull();
         Exceptions::assertReported(RuntimeException::class);
+    });
+});
+
+describe('fichajes atrasados', function () {
+    it('ignora una salida anterior al inicio de un turno manual', function () {
+        $chofer = choferConHabitual();
+        $turno = Turno::factory()->create(['chofer_id' => $chofer->id, 'inicio' => now()->subHours(2)]); // 10:00 UTC
+
+        ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'salida', 'momento' => '2026-10-05T09:59:00Z'])
+            ->assertOk()
+            ->assertJsonPath('resultado', 'ignorado')
+            ->assertJsonPath('motivo', 'La salida es anterior al inicio del turno abierto.');
+
+        expect($turno->fresh()->fin)->toBeNull()->and($this->push->enviados)->toBe([]);
+    });
+
+    it('en un turno abierto por fichaje compara la salida con la entrada que lo abrió', function () {
+        $chofer = choferConHabitual();
+
+        // Ponerse al día: la entrada de las 08:00 y la salida de las 08:30 llegan juntas a las 09:00.
+        ($this->fichar)(['eventos' => [
+            ['id_externo' => 'L123', 'tipo' => 'entrada', 'momento' => '2026-10-05T08:00:00'],
+            ['id_externo' => 'L123', 'tipo' => 'salida', 'momento' => '2026-10-05T08:30:00'],
+        ]])
+            ->assertOk()
+            ->assertJsonPath('resultados.0.resultado', 'abierto')
+            ->assertJsonPath('resultados.1.resultado', 'cerrado');
+
+        expect($chofer->turnoAbierto()->exists())->toBeFalse();
+    });
+
+    it('una salida anterior a la entrada que abrió el turno se ignora', function () {
+        $chofer = choferConHabitual();
+
+        ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'entrada', 'momento' => '2026-10-05T08:00:00'])
+            ->assertJsonPath('resultado', 'abierto');
+        ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'salida', 'momento' => '2026-10-05T07:59:00'])
+            ->assertJsonPath('resultado', 'ignorado');
+
+        expect($chofer->turnoAbierto()->exists())->toBeTrue();
+    });
+
+    it('ignora una entrada anterior al cierre del último turno', function () {
+        $chofer = choferConHabitual();
+        Turno::factory()->create(['chofer_id' => $chofer->id, 'inicio' => now()->subHours(6), 'fin' => now()->subHour()]); // fin 11:00 UTC
+
+        ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'entrada', 'momento' => '2026-10-05T10:59:00Z'])
+            ->assertOk()
+            ->assertJsonPath('resultado', 'ignorado')
+            ->assertJsonPath('motivo', 'La entrada es anterior al cierre del último turno.');
+
+        expect($chofer->turnoAbierto()->exists())->toBeFalse()->and($this->push->enviados)->toBe([]);
+    });
+
+    it('ignora una entrada de más de 12 horas (configurable) sin abrir turno ni crear alertas', function () {
+        choferConHabitual(['vehiculo_habitual_id' => null]);
+
+        ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'entrada', 'momento' => '2026-10-04T23:59:00Z'])
+            ->assertOk()
+            ->assertJsonPath('resultado', 'ignorado')
+            ->assertJsonPath('motivo', 'Fichaje de entrada demasiado antiguo para abrir el turno.');
+
+        expect(Alerta::count())->toBe(0)->and($this->push->enviados)->toBe([]);
+
+        config(['vehiculos.asistencia.entrada_max_horas' => 24]);
+        ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'entrada', 'momento' => '2026-10-05T00:00:00Z'])
+            ->assertJsonPath('resultado', 'sin_vehiculo');
+    });
+
+    it('acepta una entrada de exactamente 12 horas', function () {
+        choferConHabitual();
+
+        ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'entrada', 'momento' => '2026-10-05T00:00:00Z'])
+            ->assertJsonPath('resultado', 'abierto');
+    });
+
+    it('un lote viejo de entrada y salida no abre ningún turno', function () {
+        $chofer = choferConHabitual();
+
+        ($this->fichar)(['eventos' => [
+            ['id_externo' => 'L123', 'tipo' => 'entrada', 'momento' => '2026-10-03T08:00:00'],
+            ['id_externo' => 'L123', 'tipo' => 'salida', 'momento' => '2026-10-03T16:00:00'],
+        ]])
+            ->assertOk()
+            ->assertJsonPath('resultados.0.resultado', 'ignorado')
+            ->assertJsonPath('resultados.1.resultado', 'ignorado');
+
+        expect(Turno::where('chofer_id', $chofer->id)->exists())->toBeFalse()
+            ->and($this->push->enviados)->toBe([]);
+    });
+});
+
+describe('avisos de cierre pendiente', function () {
+    it('la salida con un viaje activo avisa que el turno se cierra al terminar el viaje', function () {
+        $chofer = choferConHabitual();
+        $turno = Turno::factory()->create(['chofer_id' => $chofer->id]);
+        Viaje::factory()->create(['chofer_id' => $chofer->id, 'vehiculo_id' => $turno->vehiculo_id, 'estado' => EstadoViaje::EnCurso]);
+
+        ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'salida'])->assertJsonPath('resultado', 'cierre_pendiente');
+
+        expect($this->push->enviados)->toHaveCount(1)
+            ->and($this->push->enviados[0])->toMatchArray([
+                'destino' => $chofer->id,
+                'titulo' => 'Fichaste la salida',
+                'cuerpo' => 'Tu turno se cierra al terminar el viaje.',
+                'datos' => ['tipo' => 'turno', 'estado' => 'cierre_pendiente'],
+            ]);
+    });
+
+    it('la entrada que anula el cierre pendiente avisa al chofer', function () {
+        $chofer = choferConHabitual();
+        $turno = Turno::factory()->create(['chofer_id' => $chofer->id]);
+        Viaje::factory()->create(['chofer_id' => $chofer->id, 'vehiculo_id' => $turno->vehiculo_id, 'estado' => EstadoViaje::EnCurso]);
+
+        ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'salida', 'momento' => '2026-10-05T08:00:00']);
+        ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'entrada', 'momento' => '2026-10-05T08:10:00']);
+
+        expect($this->push->enviados)->toHaveCount(2)
+            ->and($this->push->enviados[1])->toMatchArray([
+                'destino' => $chofer->id,
+                'titulo' => 'Seguís de turno',
+                'cuerpo' => 'Fichaste la entrada: se anuló el cierre del turno.',
+                'datos' => ['tipo' => 'turno', 'estado' => 'cierre_cancelado'],
+            ]);
+    });
+
+    it('si el reintento del cierre falla después del commit, se reporta y el resultado no cambia', function () {
+        Exceptions::fake();
+        $chofer = choferConHabitual();
+        Usuario::factory()->chofer()->create(['id_externo' => 'L999', 'vehiculo_habitual_id' => Vehiculo::factory()->create()->id]);
+        $turno = Turno::factory()->create(['chofer_id' => $chofer->id]);
+        Viaje::factory()->create(['chofer_id' => $chofer->id, 'vehiculo_id' => $turno->vehiculo_id, 'estado' => EstadoViaje::EnCurso]);
+        $turnos = Mockery::mock(ServicioTurnos::class, [app(AvisoEstadoChofer::class)])->makePartial();
+        $turnos->shouldReceive('finalizarPendiente')->andThrow(new RuntimeException('falla al cerrar'));
+        $this->app->instance(ServicioTurnos::class, $turnos);
+
+        ($this->fichar)(['eventos' => [
+            ['id_evento' => 'E-1', 'id_externo' => 'L123', 'tipo' => 'salida', 'momento' => '2026-10-05T08:00:00'],
+            ['id_evento' => 'E-2', 'id_externo' => 'L999', 'tipo' => 'entrada', 'momento' => '2026-10-05T08:00:00'],
+        ]])
+            ->assertOk()
+            ->assertJsonPath('resultados.0.resultado', 'cierre_pendiente')
+            ->assertJsonPath('resultados.1.resultado', 'abierto');
+
+        ($this->fichar)(['id_evento' => 'E-3', 'id_externo' => 'L123', 'tipo' => 'salida', 'momento' => '2026-10-05T08:10:00'])
+            ->assertOk()
+            ->assertJsonPath('resultado', 'cierre_pendiente');
+
+        expect($turno->fresh()->fin)->toBeNull()
+            ->and(EventoAsistencia::where('id_externo', 'L123')->pluck('resultado')->all())->toBe(['cierre_pendiente', 'cierre_pendiente']);
+        Exceptions::assertReported(RuntimeException::class);
+    });
+});
+
+describe('alertas de fichaje sin vehículo', function () {
+    it('no repite la alerta pendiente y la salida la resuelve', function () {
+        $chofer = choferConHabitual(['vehiculo_habitual_id' => null]);
+
+        ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'entrada', 'momento' => '2026-10-05T08:00:00'])->assertJsonPath('resultado', 'sin_vehiculo');
+        ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'entrada', 'momento' => '2026-10-05T08:10:00'])->assertJsonPath('resultado', 'sin_vehiculo');
+        expect(Alerta::pendientes()->where('chofer_id', $chofer->id)->count())->toBe(1);
+
+        ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'salida', 'momento' => '2026-10-05T08:20:00'])
+            ->assertJsonPath('resultado', 'ignorado');
+        expect(Alerta::pendientes()->count())->toBe(0)->and(Alerta::count())->toBe(1);
+
+        ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'entrada', 'momento' => '2026-10-05T08:30:00'])->assertJsonPath('resultado', 'sin_vehiculo');
+        expect(Alerta::pendientes()->count())->toBe(1)->and(Alerta::count())->toBe(2);
+    });
+});
+
+it('acepta id_externo e id_evento como número o texto', function () {
+    $chofer = choferConHabitual(['id_externo' => '20123456']);
+    Usuario::factory()->chofer()->create(['id_externo' => '27999888']);
+
+    ($this->fichar)(['id_evento' => 555, 'id_externo' => 20123456, 'tipo' => 'entrada', 'momento' => '2026-10-05T08:00:00'])
+        ->assertOk()
+        ->assertJsonPath('id_evento', '555')
+        ->assertJsonPath('id_externo', '20123456')
+        ->assertJsonPath('resultado', 'abierto');
+
+    ($this->fichar)(['eventos' => [
+        ['id_evento' => 556, 'id_externo' => 20123456, 'tipo' => 'salida', 'momento' => '2026-10-05T08:30:00'],
+        ['id_evento' => '557', 'id_externo' => 27999888, 'tipo' => 'entrada'],
+    ]])
+        ->assertOk()
+        ->assertJsonPath('resultados.0.id_evento', '556')
+        ->assertJsonPath('resultados.0.resultado', 'cerrado')
+        ->assertJsonPath('resultados.1.resultado', 'sin_vehiculo');
+
+    expect(EventoAsistencia::where('usuario_id', $chofer->id)->orderBy('id')->pluck('id_evento')->all())->toBe(['555', '556']);
+});
+
+it('los avisos del fichaje van por la cola, después del commit', function () {
+    Queue::fake();
+    $chofer = choferConHabitual();
+
+    ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'entrada'])->assertJsonPath('resultado', 'abierto');
+
+    expect($this->push->enviados)->toBe([]);
+    Queue::assertPushed(AvisarTurno::class, 1);
+    Queue::assertPushed(AvisarTurno::class, function (AvisarTurno $job) use ($chofer) {
+        $job->handle($this->push);
+
+        return $job->choferId === $chofer->id;
+    });
+    expect($this->push->enviados[0])->toMatchArray([
+        'destino' => $chofer->id,
+        'titulo' => 'Tu turno empezó',
+        'datos' => ['tipo' => 'turno', 'estado' => 'abierto'],
+    ]);
+});
+
+describe('retención y límite', function () {
+    it('limita los eventos por minuto y por IP según ASISTENCIA_LIMITE_POR_MINUTO (300 por defecto)', function () {
+        expect((int) config('vehiculos.asistencia.limite_por_minuto'))->toBe(300);
+        config(['vehiculos.asistencia.limite_por_minuto' => 3]);
+
+        for ($i = 0; $i < 3; $i++) {
+            ($this->fichar)(['id_externo' => 'X'.$i, 'tipo' => 'entrada'])->assertOk();
+        }
+
+        ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'entrada'])
+            ->assertStatus(429)
+            ->assertJsonPath('message', 'Demasiados eventos de asistencia. Probá de nuevo en un minuto.');
+    });
+
+    it('purga los fichajes sin usuario a los 7 días y todos a los 90 (configurable)', function () {
+        $chofer = choferConHabitual();
+        $evento = function (?int $usuarioId, int $dias): EventoAsistencia {
+            $e = EventoAsistencia::create([
+                'usuario_id' => $usuarioId, 'id_externo' => $usuarioId ? 'L123' : 'X1', 'tipo' => 'entrada',
+                'momento' => now()->subDays($dias), 'resultado' => 'ignorado', 'motivo' => 'x',
+            ]);
+            $e->forceFill(['created_at' => now()->subDays($dias)])->save();
+
+            return $e;
+        };
+
+        $evento(null, 8);
+        $ajenoNuevo = $evento(null, 6);
+        $evento($chofer->id, 91);
+        $choferNuevo = $evento($chofer->id, 89);
+
+        $this->artisan('vehiculos:purgar-fichajes')->assertSuccessful();
+
+        expect(EventoAsistencia::orderBy('id')->pluck('id')->all())->toBe([$ajenoNuevo->id, $choferNuevo->id]);
+
+        config(['vehiculos.asistencia.retencion_dias' => 30]);
+        $this->artisan('vehiculos:purgar-fichajes')->assertSuccessful();
+        expect(EventoAsistencia::pluck('id')->all())->toBe([$ajenoNuevo->id]);
+    });
+
+    it('la purga de fichajes corre todos los días', function () {
+        $eventos = collect(app(Schedule::class)->events())
+            ->filter(fn ($e) => str_contains((string) $e->command, 'vehiculos:purgar-fichajes'));
+
+        expect($eventos)->toHaveCount(1)->and($eventos->first()->expression)->toBe('15 3 * * *');
     });
 });
