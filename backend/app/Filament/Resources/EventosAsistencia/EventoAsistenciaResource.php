@@ -65,6 +65,9 @@ class EventoAsistenciaResource extends Resource
                 TextColumn::make('momento')->label('Fecha')->dateTime('d/m H:i', config('vehiculos.zona_horaria'))->sortable(),
                 TextColumn::make('persona')
                     ->state(fn (EventoAsistencia $record): string => $record->usuario?->nombre ?? "{$record->id_externo} (sin usuario)")
+                    ->searchable(query: fn (Builder $query, string $search): Builder => $query->where(fn (Builder $q) => $q
+                        ->where('id_externo', 'like', "%{$search}%")
+                        ->orWhereHas('usuario', fn (Builder $u) => $u->where('nombre', 'like', "%{$search}%"))))
                     ->url(fn (EventoAsistencia $record): ?string => $record->usuario_id
                         ? UsuarioResource::getUrl('edit', ['record' => $record->usuario_id])
                         : null),

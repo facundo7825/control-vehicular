@@ -37,7 +37,8 @@ class EditUsuario extends EditRecord
                         ->inline()
                         ->required(),
                 ])
-                ->visible(fn (): bool => $this->getRecord()->esChofer() && filled($this->getRecord()->id_externo))
+                ->visible(fn (): bool => self::simulacionHabilitada()
+                    && $this->getRecord()->esChofer() && filled($this->getRecord()->id_externo))
                 ->action(function (array $data, ServicioAsistencia $asistencia): void {
                     $r = $asistencia->procesar($this->getRecord()->id_externo, $data['tipo']);
                     $tipo = mb_strtolower(EventoAsistenciaResource::TIPOS[$data['tipo']]);
@@ -56,6 +57,18 @@ class EditUsuario extends EditRecord
                     $this->dispatch(TurnosRelationManager::EVENTO_ACTUALIZAR);
                 }),
         ];
+    }
+
+    /** ASISTENCIA_SIMULACION (true/false); sin valor, habilitada salvo en producción. */
+    private static function simulacionHabilitada(): bool
+    {
+        $valor = config('vehiculos.asistencia.simulacion');
+
+        if ($valor === null || $valor === '') {
+            return ! app()->isProduction();
+        }
+
+        return filter_var($valor, FILTER_VALIDATE_BOOLEAN);
     }
 
     protected function mutateFormDataBeforeSave(array $data): array

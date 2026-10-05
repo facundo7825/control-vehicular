@@ -201,3 +201,59 @@ it('simular fichaje solo está para los choferes', function () {
     Livewire::test(EditUsuario::class, ['record' => Usuario::factory()->create()->getRouteKey()])
         ->assertActionHidden('simularFichaje');
 });
+
+it('simular una segunda entrada avisa que se ignoró', function () {
+    $this->app->instance(Notificador::class, new NotificadorFalso);
+    $chofer = Turno::factory()->create()->chofer;
+
+    Livewire::test(EditUsuario::class, ['record' => $chofer->getRouteKey()])
+        ->callAction('simularFichaje', data: ['tipo' => EventoAsistencia::ENTRADA])
+        ->assertNotified(
+            Notification::make()
+                ->info()
+                ->title('Fichaje de entrada: ignorado')
+                ->body('Ya tenía un turno abierto.')
+        );
+
+    expect(Turno::where('chofer_id', $chofer->id)->count())->toBe(1);
+});
+
+it('simular fichaje no está para un chofer sin id_externo', function () {
+    $chofer = Usuario::factory()->chofer()->create(['id_externo' => '']); // la columna no admite null: "sin id" es vacío
+
+    Livewire::test(EditUsuario::class, ['record' => $chofer->getRouteKey()])
+        ->assertActionHidden('simularFichaje');
+});
+
+it('simular fichaje solo está si la simulación está habilitada', function () {
+    $chofer = Usuario::factory()->chofer()->create();
+
+    config(['vehiculos.asistencia.simulacion' => true]);
+    Livewire::test(EditUsuario::class, ['record' => $chofer->getRouteKey()])->assertActionVisible('simularFichaje');
+
+    config(['vehiculos.asistencia.simulacion' => false]);
+    Livewire::test(EditUsuario::class, ['record' => $chofer->getRouteKey()])->assertActionHidden('simularFichaje');
+});
+
+it('sin ASISTENCIA_SIMULACION, simular fichaje está fuera de producción y no en producción', function () {
+    $chofer = Usuario::factory()->chofer()->create();
+    config(['vehiculos.asistencia.simulacion' => null]);
+
+    Livewire::test(EditUsuario::class, ['record' => $chofer->getRouteKey()])->assertActionVisible('simularFichaje');
+
+    $this->app['env'] = 'production';
+    Livewire::test(EditUsuario::class, ['record' => $chofer->getRouteKey()])->assertActionHidden('simularFichaje');
+});
+
+it('ofrece el vehículo habitual actual aunque se haya desactivado', function () {
+    $inactivo = Vehiculo::factory()->create(['activo' => false, 'patente' => 'ZZ999ZZ', 'marca' => 'Ford', 'modelo' => 'Ka']);
+    $otroInactivo = Vehiculo::factory()->create(['activo' => false]);
+    $chofer = Usuario::factory()->chofer()->create(['vehiculo_habitual_id' => $inactivo->id]);
+
+    $opciones = Livewire::test(EditUsuario::class, ['record' => $chofer->getRouteKey()])
+        ->instance()->form->getComponent('vehiculo_habitual_id')->getOptions();
+
+    expect($opciones)->toHaveKey($inactivo->id)
+        ->and($opciones[$inactivo->id])->toBe('ZZ999ZZ — Ford Ka')
+        ->and($opciones)->not->toHaveKey($otroInactivo->id);
+});

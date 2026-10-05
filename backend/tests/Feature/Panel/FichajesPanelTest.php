@@ -55,3 +55,17 @@ it('filtra los fichajes por resultado y por fecha', function () {
         ->assertCanSeeTableRecords([$abierto, $sinVehiculo])
         ->assertCanNotSeeTableRecords([$ayer]);
 });
+
+it('busca los fichajes por el nombre de la persona o por su id_externo', function () {
+    $chofer = Usuario::factory()->chofer()->create(['nombre' => 'Carlos Chofer', 'id_externo' => 'L1']);
+    $deCarlos = fichaje(['usuario_id' => $chofer->id]);
+    $ajeno = fichaje(['id_externo' => 'X9', 'resultado' => EventoAsistencia::IGNORADO]);
+
+    Livewire::test(ListEventosAsistencia::class)
+        ->searchTable('Carlos')
+        ->assertCanSeeTableRecords([$deCarlos])
+        ->assertCanNotSeeTableRecords([$ajeno])
+        ->searchTable('X9')
+        ->assertCanSeeTableRecords([$ajeno])
+        ->assertCanNotSeeTableRecords([$deCarlos]);
+});
