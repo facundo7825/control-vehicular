@@ -130,7 +130,13 @@ class _MapaChoferState extends ConsumerState<MapaChofer> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(yo?.estado.texto ?? 'En turno', style: texto.titleLarge),
-                  if (turno.vehiculo case final v?) Text([v.descripcion, ?v.color].join(' · ')),
+                  _FilaVehiculo(
+                    turno: turno,
+                    alCambiar: () => _cambiarVehiculo(context, hayViaje: hayViaje),
+                  ),
+                  if (turno.porFichaje) const Text('Turno por fichaje'),
+                  if (turno.cierrePendienteEn != null)
+                    const Text('Fichaste la salida: se cierra al terminar el viaje.'),
                   if (aqui == null && !posicion.sinGps) const Text('Buscando tu ubicación…'),
                   const SizedBox(height: 16),
                   OutlinedButton(onPressed: () => _finalizar(context), child: const Text('Finalizar turno')),
@@ -141,6 +147,25 @@ class _MapaChoferState extends ConsumerState<MapaChofer> {
         ],
       ),
     );
+  }
+
+  /// Si ese día usa otro vehículo que el del turno (el habitual, si lo abrió el fichaje). Durante un viaje no
+  /// se puede: se explica y no se pregunta nada.
+  Future<void> _cambiarVehiculo(BuildContext context, {required bool hayViaje}) async {
+    if (hayViaje) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('No podés cambiar el vehículo durante un viaje.')));
+      return;
+    }
+    final elegido = await showModalBottomSheet<Vehiculo>(context: context, builder: (_) => const _HojaVehiculos());
+    final id = elegido?.id;
+    if (id == null || !context.mounted) return;
+    try {
+      await ref.read(turnoProvider.notifier).cambiarVehiculo(id);
+    } on ErrorApi catch (e) {
+      if (context.mounted) mostrarError(context, e);
+    }
   }
 
   Future<void> _finalizar(BuildContext context) async {
@@ -161,5 +186,78 @@ class _MapaChoferState extends ConsumerState<MapaChofer> {
     } on ErrorApi catch (e) {
       if (context.mounted) mostrarError(context, e);
     }
+  }
+}
+
+/// El vehículo del turno; tocarlo (o el ícono) abre "Cambiar vehículo".
+class _FilaVehiculo extends StatelessWidget {
+  const _FilaVehiculo({required this.turno, required this.alCambiar});
+
+  final Turno turno;
+  final VoidCallback alCambiar;
+
+  @override
+  Widget build(BuildContext context) {
+    final v = turno.vehiculo;
+    return InkWell(
+      onTap: alCambiar,
+      child: Row(
+        children: [
+          Expanded(child: Text(v == null ? 'Sin vehículo' : [v.descripcion, ?v.color].join(' · '))),
+          IconButton(icon: const Icon(Icons.swap_horiz), tooltip: 'Cambiar vehículo', onPressed: alCambiar),
+        ],
+      ),
+    );
+  }
+}
+
+/// Los vehículos libres (`GET /vehiculos/disponibles`); devuelve el elegido.
+class _HojaVehiculos extends ConsumerWidget {
+  const _HojaVehiculos();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final vehiculos = ref.watch(vehiculosDisponiblesProvider);
+    return SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Text('Cambiar vehículo', style: Theme.of(context).textTheme.titleMedium),
+          ),
+          ...switch (vehiculos) {
+            AsyncData(:final value) when value.isEmpty => [
+              const ListTile(title: Text('No hay otros vehículos disponibles.')),
+            ],
+            AsyncData(:final value) => [
+              for (final v in value)
+                ListTile(
+                  leading: const Icon(Icons.directions_car),
+                  title: Text(v.descripcion),
+                  subtitle: v.color == null ? null : Text(v.color!),
+                  onTap: () => Navigator.pop(context, v),
+                ),
+            ],
+            AsyncError(:final error) => [
+              ListTile(
+                title: Text(mensajeDeError(error)),
+                trailing: TextButton(
+                  onPressed: () => ref.invalidate(vehiculosDisponiblesProvider),
+                  child: const Text('Reintentar'),
+                ),
+              ),
+            ],
+            _ => [
+              const Padding(
+                padding: EdgeInsets.all(24),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+            ],
+          },
+        ],
+      ),
+    );
   }
 }

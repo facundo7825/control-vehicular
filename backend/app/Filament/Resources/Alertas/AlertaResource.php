@@ -32,6 +32,7 @@ class AlertaResource extends Resource
         Alerta::RESERVA_SIN_TURNO => 'Reserva sin turno',
         Alerta::CHOFER_SIN_SENAL => 'Chofer sin señal',
         Alerta::VIAJE_SIN_CHOFER => 'Viaje sin chofer',
+        Alerta::ASISTENCIA_SIN_VEHICULO => 'Fichaje sin vehículo',
     ];
 
     public static function getNavigationBadge(): ?string

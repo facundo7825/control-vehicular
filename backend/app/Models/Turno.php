@@ -13,11 +13,11 @@ class Turno extends Model
 
     protected $table = 'turnos';
 
-    protected $fillable = ['chofer_id', 'vehiculo_id', 'inicio', 'fin', 'origen'];
+    protected $fillable = ['chofer_id', 'vehiculo_id', 'inicio', 'fin', 'origen', 'cierre_pendiente_en'];
 
     protected function casts(): array
     {
-        return ['inicio' => 'datetime', 'fin' => 'datetime', 'origen' => OrigenTurno::class];
+        return ['inicio' => 'datetime', 'fin' => 'datetime', 'cierre_pendiente_en' => 'datetime', 'origen' => OrigenTurno::class];
     }
 
     public function chofer(): BelongsTo

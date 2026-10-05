@@ -20,11 +20,13 @@ class CalculadorEstadoChofer
 
     public function estado(Usuario $chofer): EstadoChofer
     {
-        if (! $chofer->turnoAbierto()->exists()) {
+        $turno = $chofer->turnoAbierto()->first();
+        if (! $turno) {
             return EstadoChofer::FueraDeTurno;
         }
 
         return $this->segun(
+            $turno->cierre_pendiente_en !== null,
             $chofer->ubicacion()->first(),
             fn () => Viaje::activosDeChofer($chofer->id)->exists(),
             fn () => $this->reservasProximas()->where('chofer_id', $chofer->id)->exists(),
@@ -55,6 +57,7 @@ class CalculadorEstadoChofer
         $limiteSenal = $this->limiteSenal();
 
         return $choferes->map(fn (Usuario $c) => ['chofer' => $c, 'estado' => $this->segun(
+            $c->turnoAbierto->cierre_pendiente_en !== null,
             $c->ubicacion,
             fn () => $enViaje->has($c->id),
             fn () => $conReserva->has($c->id),
@@ -74,9 +77,17 @@ class CalculadorEstadoChofer
     /**
      * El estado de un chofer en turno. Lo que falta saber se pide con closures, así estado() consulta
      * solo lo necesario.
+     *
+     * Con cierre pendiente (fichó la salida durante un viaje) el turno sigue abierto solo para terminar ese
+     * viaje: sin viaje activo cuenta como fuera de turno, así no recibe viajes ni ofertas nuevas en ningún
+     * camino (despacho, asignación, ofertas) mientras se le cierra el turno.
      */
-    private function segun(?UbicacionChofer $ubicacion, callable $tieneViajeActivo, callable $tieneReservaProxima, Carbon $limiteSenal): EstadoChofer
+    private function segun(bool $cierrePendiente, ?UbicacionChofer $ubicacion, callable $tieneViajeActivo, callable $tieneReservaProxima, Carbon $limiteSenal): EstadoChofer
     {
+        if ($cierrePendiente && ! $tieneViajeActivo()) {
+            return EstadoChofer::FueraDeTurno;
+        }
+
         if (! $ubicacion || $ubicacion->actualizado_en->lt($limiteSenal)) {
             return EstadoChofer::SinSenal;
         }

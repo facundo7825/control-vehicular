@@ -64,6 +64,30 @@ void main() {
     );
   });
 
+  test('cambiar el vehículo del turno manda el vehículo y lee el turno; un 422 llega con su message', () async {
+    http.responder('POST', 'turnos/actual/vehiculo', 200, c.turnoConOtroVehiculo);
+    http.responder('POST', 'turnos/actual/vehiculo', 422, c.cambioConViaje);
+
+    final t = await api.cambiarVehiculo(2);
+
+    expect(http.pedidos.first.uri.path, '/api/turnos/actual/vehiculo');
+    expect(cuerpo(0), {'vehiculo_id': 2});
+    expect(t.id, 1);
+    expect(t.vehiculo!.patente, 'AC456EF');
+    await expectLater(
+      api.cambiarVehiculo(2),
+      throwsA(
+        isA<ErrorNegocio>().having((e) => e.mensaje, 'mensaje', 'No podés cambiar el vehículo durante un viaje.'),
+      ),
+    );
+  });
+
+  test('cambiar el vehículo: una respuesta sin turno es un error del servidor, no un error de tipos', () async {
+    http.responder('POST', 'turnos/actual/vehiculo', 200, '{"turno":null}');
+
+    await expectLater(api.cambiarVehiculo(2), throwsA(isA<ErrorServidor>()));
+  });
+
   test('ubicación: lote de puntos con fechas UTC y 204', () async {
     http.responder('POST', 'ubicacion', 204);
 

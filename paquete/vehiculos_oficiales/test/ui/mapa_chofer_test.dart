@@ -1,7 +1,11 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
 
+import '../fixtures/payloads.dart' as p;
+import '../fixtures/payloads_chofer.dart' as c;
 import '../soporte/dobles.dart';
 import '../soporte/dobles_chofer.dart';
 import '../soporte/montar.dart';
@@ -56,5 +60,77 @@ void main() {
     final despues = enfoqueDelMapa(tester)!;
     expect(despues.puntos, [const Coordenada(-26.9, -65.2)]);
     expect(despues.version, antes.version + 1);
+  });
+
+  group('cambiar vehículo', () {
+    testWidgets('tocar el vehículo abre la hoja, elige otro y el mapa muestra el nuevo', (tester) async {
+      final e = entornoChofer()
+        ..http.responder('GET', 'vehiculos/disponibles', 200, c.otroVehiculoDisponible)
+        ..http.responder('POST', 'turnos/actual/vehiculo', 200, c.turnoConOtroVehiculo);
+      await montarChofer(tester, e, ubicador: gps);
+
+      await tester.tap(find.byTooltip('Cambiar vehículo'));
+      await esperar(tester);
+      expect(find.text('Cambiar vehículo'), findsOneWidget);
+      await tester.tap(find.text('Ford Ranger (AC456EF)'));
+      await esperar(tester);
+
+      final pedido = e.http.pedidos.singleWhere((r) => r.uri.path == '/api/turnos/actual/vehiculo');
+      expect(jsonDecode(pedido.cuerpo), {'vehiculo_id': 2});
+      expect(find.text('Ford Ranger (AC456EF) · Gris'), findsOneWidget);
+      expect(find.text('Toyota Corolla (AB123CD) · Blanco'), findsNothing);
+      expect(gps.siguiendo, isTrue);
+    });
+
+    testWidgets('un 422 muestra el mensaje y el turno sigue con su vehículo', (tester) async {
+      final e = entornoChofer()
+        ..http.responder('GET', 'vehiculos/disponibles', 200, c.otroVehiculoDisponible)
+        ..http.responder('POST', 'turnos/actual/vehiculo', 422, c.vehiculoEnUso);
+      await montarChofer(tester, e, ubicador: gps);
+
+      await tester.tap(find.byTooltip('Cambiar vehículo'));
+      await esperar(tester);
+      await tester.tap(find.text('Ford Ranger (AC456EF)'));
+      await esperar(tester);
+
+      expect(find.text('El vehículo está en uso por otro chofer.'), findsOneWidget);
+      expect(find.text('Toyota Corolla (AB123CD) · Blanco'), findsOneWidget);
+    });
+
+    testWidgets('con un viaje en curso no se puede cambiar y se explica por qué', (tester) async {
+      final e = entornoChofer(viajeActual: '{"viaje":${p.viajeAceptado},"oferta":null}');
+      await montarChofer(tester, e, ubicador: gps);
+      await tester.binding.handlePopRoute(); // del viaje vuelve al mapa
+      await tester.pumpAndSettle();
+      expect(find.text('Tenés un viaje en curso.'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Cambiar vehículo'));
+      await esperar(tester);
+
+      expect(find.text('No podés cambiar el vehículo durante un viaje.'), findsOneWidget);
+      expect(pedidosHechos(e), isNot(contains('GET vehiculos/disponibles')));
+    });
+  });
+
+  testWidgets('un turno abierto por fichaje lo dice, y también si se cierra al terminar el viaje', (tester) async {
+    final e = entornoChofer(turno: c.turnoPorFichaje);
+    await montarChofer(tester, e, ubicador: gps);
+
+    expect(find.textContaining('Turno por fichaje'), findsOneWidget);
+    expect(find.textContaining('se cierra al terminar el viaje'), findsOneWidget);
+  });
+
+  testWidgets('el push "cierre_pendiente" muestra que el turno se cierra al terminar el viaje', (tester) async {
+    final conCierre = p.json(c.turnoActual);
+    (conCierre['turno'] as Map<String, dynamic>)['cierre_pendiente_en'] = '2026-10-01T18:00:00.000000Z';
+    // La primera consulta (al abrir) trae el turno sin cierre; la del push, con cierre pendiente.
+    final e = entornoChofer()..http.responder('GET', 'turnos/actual', 200, jsonEncode(conCierre));
+    await montarChofer(tester, e, ubicador: gps);
+    expect(find.textContaining('se cierra al terminar el viaje'), findsNothing);
+
+    e.puente.controlador.add({'modulo': 'vehiculos_oficiales', 'tipo': 'turno', 'estado': 'cierre_pendiente'});
+    await tester.pumpAndSettle();
+
+    expect(find.text('Fichaste la salida: se cierra al terminar el viaje.'), findsOneWidget);
   });
 }

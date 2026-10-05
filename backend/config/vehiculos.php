@@ -65,6 +65,20 @@ return [
         'user_agent' => env('RUTAS_USER_AGENT', env('LUGARES_USER_AGENT', 'VehiculosOficiales/1.0 (+https://github.com/facundo7825/control-vehicular)')),
     ],
 
+    // Fichajes del control de asistencia (POST /api/asistencia/eventos, encabezado X-Clave-Asistencia).
+    // Sin clave la integración está apagada y el endpoint responde 503.
+    'asistencia' => [
+        'clave' => env('ASISTENCIA_CLAVE'),
+        // Pedidos por minuto y por IP de origen.
+        'limite_por_minuto' => (int) env('ASISTENCIA_LIMITE_POR_MINUTO', 300),
+        // Una entrada más vieja que esto se registra pero no abre el turno (ponerse al día tras un corte).
+        'entrada_max_horas' => (int) env('ASISTENCIA_ENTRADA_MAX_HORAS', 12),
+        // Días que se guardan los fichajes (vehiculos:purgar-fichajes). Los de un id_externo sin usuario, 7.
+        'retencion_dias' => (int) env('ASISTENCIA_RETENCION_DIAS', 90),
+        // Acción "Simular fichaje" del panel. Sin valor: habilitada salvo con APP_ENV=production.
+        'simulacion' => env('ASISTENCIA_SIMULACION'),
+    ],
+
     'notificaciones' => [
         // registro | fcm
         'driver' => env('NOTIFICACIONES_DRIVER', 'registro'),

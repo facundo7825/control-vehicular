@@ -7,8 +7,8 @@ import '../../ubicacion/ubicador.dart';
 import '../comunes/comunes.dart';
 import 'inicio_chofer.dart';
 
-/// Spec 7, chofer 1: elegir el vehículo e iniciar el turno. Es la pieza que después reemplazará la
-/// asistencia: toda la lógica está en `TurnoNotifier`.
+/// Spec 7, chofer 1: elegir el vehículo e iniciar el turno a mano, si el fichaje no lo abrió (no tiene
+/// vehículo habitual libre, o no fichó). Toda la lógica está en `TurnoNotifier`.
 class IniciarTurno extends ConsumerStatefulWidget {
   const IniciarTurno({super.key});
 
@@ -53,6 +53,11 @@ class _IniciarTurnoState extends ConsumerState<IniciarTurno> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (_permiso case final permiso?) _AvisoPermiso(permiso: permiso),
+          // El turno también lo abre el fichaje de entrada; TurnoNotifier pregunta cada 30 s y escucha el push.
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 16, 16, 0),
+            child: Text('Si fichaste la entrada, el turno se abre solo con tu vehículo habitual.'),
+          ),
           const Padding(padding: EdgeInsets.fromLTRB(16, 16, 16, 8), child: Text('Elegí el vehículo de hoy:')),
           Expanded(
             child: switch (vehiculos) {

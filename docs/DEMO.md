@@ -61,7 +61,8 @@ Datos de demo: vehículos AB123CD, AC456EF y AD789GH; "Juez" marcado como cargo 
 6. **Reserva:** como Ana → *Reservar para más tarde* → mañana a las 10:00 → elegir a Carlos → confirmar. En el celular: *Agenda* → la solicitud → *Aceptar*. En el mapa del chofer aparece la próxima reserva.
 7. **Panel — gestión:** en *Viajes* abrir uno y mostrar la línea de tiempo, las ofertas y el recorrido; probar **Reasignar** y **Cancelar**; mostrar *Alertas*.
 8. **Base de datos:** en DB Browser (*Navegar datos*), tablas `viajes`, `ofertas_viaje`, `recorrido_viaje`, `ubicaciones_chofer`, `turnos`, `usuarios`. Refrescar (F5) para ver los cambios en vivo.
-9. **Fin de turno:** en el celular *Finalizar turno*: desaparece la notificación y la fila de `ubicaciones_chofer` se borra (privacidad).
+9. **Simular fichaje (turno por asistencia):** en el panel → *Usuarios* → "Carlos Chofer", cargar primero su **Vehículo habitual** y guardar. Con el turno cerrado, tocar **Simular fichaje** → *Entrada* → *Fichar*: se abre su turno con ese vehículo y al celular le llega el aviso "Tu turno empezó". Después **Simular fichaje** → *Salida* cierra el turno (con un viaje activo queda como *cierre pendiente* y se cierra al terminar el viaje). Sin vehículo habitual la entrada da *sin vehículo*: aparece una alerta y el chofer elige el vehículo en la app. Los fichajes se ven en *Fichajes*. El contrato real con el sistema de asistencia del PJ está en [`ASISTENCIA.md`](ASISTENCIA.md).
+10. **Fin de turno:** en el celular *Finalizar turno*: desaparece la notificación y la fila de `ubicaciones_chofer` se borra (privacidad).
 
 ## Problemas comunes
 

@@ -14,6 +14,7 @@ use App\Models\Usuario;
 use App\Models\Viaje;
 use App\Servicios\Asignador;
 use App\Servicios\Despachador;
+use App\Servicios\ServicioAsistencia;
 use App\Servicios\ServicioTurnos;
 use App\Servicios\ServicioViaje;
 
@@ -41,6 +42,9 @@ try {
             'destino_lat' => -34.61, 'destino_lng' => -58.39,
         ])->id,
         'finalizar_turno' => app(ServicioTurnos::class)->finalizar(Usuario::find($a['chofer']))->id,
+        'iniciar_turno' => app(ServicioTurnos::class)->iniciar(Usuario::find($a['chofer']), $a['vehiculo'])->id,
+        'fichar' => app(ServicioAsistencia::class)
+            ->procesar($a['id_externo'], $a['tipo'], null, $a['id_evento'] ?? null)['resultado'],
         'reasignar_admin' => app(ServicioViaje::class)
             ->reasignarPorAdmin(Viaje::find($a['viaje']), Usuario::find($a['chofer']))->estado->value,
         'aceptar_oferta' => (function () use ($a) {

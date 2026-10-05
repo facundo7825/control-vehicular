@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/errores_api.dart';
+import '../chofer/turno.dart';
 import '../entorno.dart';
 import '../viaje/viaje_actual.dart';
 
@@ -13,7 +14,9 @@ class AvisoPush {
 
   static const modulo = 'vehiculos_oficiales';
 
-  /// `oferta`, `oferta_reserva`, `viaje`, `recordatorio_reserva` o `alerta_reserva` (AvisosViaje y jobs).
+  /// `oferta`, `oferta_reserva`, `viaje`, `recordatorio_reserva`, `alerta_reserva` (AvisosViaje y jobs) o
+  /// `turno` (ServicioAsistencia: `estado` = `abierto`, `cerrado`, `sin_vehiculo`, `cierre_pendiente` o
+  /// `cierre_cancelado`; cualquier `turno`, también con un estado desconocido, refresca el turno).
   final String tipo;
   final int? viajeId;
   final int? ofertaId;
@@ -72,6 +75,12 @@ class PushModulo {
     if (aviso.tipo == 'viaje' || aviso.tipo == 'oferta') {
       // El push puede llegar antes que el evento del socket (o sin socket): se pide el estado a la API.
       unawaited(_ref.read(viajeActualProvider.notifier).refrescar());
+    } else if (aviso.tipo == 'turno') {
+      // Un fichaje abrió o cerró el turno, o dejó o anuló su cierre pendiente (el mapa lo muestra con el turno
+      // refrescado). Si el chofer no está en su pantalla, se lee al entrar.
+      if (_ref.exists(turnoProvider)) unawaited(_ref.read(turnoProvider.notifier).refrescar());
+      // Fichó sin vehículo habitual libre: va a elegir uno.
+      if (aviso.estado == 'sin_vehiculo') _ref.invalidate(vehiculosDisponiblesProvider);
     }
     _avisos.add(aviso);
   }
