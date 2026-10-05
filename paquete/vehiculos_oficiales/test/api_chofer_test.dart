@@ -82,6 +82,12 @@ void main() {
     );
   });
 
+  test('cambiar el vehículo: una respuesta sin turno es un error del servidor, no un error de tipos', () async {
+    http.responder('POST', 'turnos/actual/vehiculo', 200, '{"turno":null}');
+
+    await expectLater(api.cambiarVehiculo(2), throwsA(isA<ErrorServidor>()));
+  });
+
   test('ubicación: lote de puntos con fechas UTC y 204', () async {
     http.responder('POST', 'ubicacion', 204);
 

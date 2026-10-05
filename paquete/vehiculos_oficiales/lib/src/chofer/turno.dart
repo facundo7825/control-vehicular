@@ -74,8 +74,9 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
   /// Solo corre sin turno (la pantalla "Iniciar turno").
   Timer? _sondeo;
 
-  /// La consulta de [refrescar] en curso: un push y el sondeo juntos hacen una sola.
+  /// La consulta de [refrescar] en curso, y si hay que repetirla al terminar (llegó otro aviso mientras tanto).
   Future<void>? _refresco;
+  bool _otraVez = false;
 
   /// Cambia al detener el rastreo o descartar el notifier: un arranque que quedó esperando la
   /// configuración no arranca un rastreo viejo.
@@ -109,26 +110,61 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
       await _borrarCola(); // lo guardado es de un turno que ya se cerró (spec 10)
     } else {
       // Turno abierto de antes (la app se cerró o se reabrió el módulo).
-      await _retomar(turno);
+      await _retomar(turno, desdeBuild: true);
     }
     return turno;
   }
 
   /// Un turno abierto que la app no inició (de antes, o abierto por un fichaje): se retoma el rastreo con lo
   /// que quedó sin enviar. Si el permiso ya no está, el GPS falla y el mapa lo avisa.
-  Future<void> _retomar(Turno turno) async {
-    await ref.read(ubicadorProvider).pedirPermiso();
-    if (!ref.mounted) return;
-    unawaited(ref.read(notificacionesLocalesProvider).pedirPermiso());
-    final pendientes = await _leerCola(turno.id);
-    if (!ref.mounted) return;
-    await _iniciarRastreo(turno, pendientes: pendientes);
+  ///
+  /// Mientras espera (el diálogo de permiso, el archivo de la cola, la configuración) el turno puede
+  /// cerrarse (finalizar, push `cerrado`, módulo cerrado): después de cada espera se verifica que siga
+  /// siendo el mismo, y si no, no abre el GPS. Nunca lanza: si algo falla queda el aviso "Sin señal de GPS"
+  /// del mapa, y su "Reintentar" vuelve a llamar acá ([reintentarGps]). [desdeBuild]: el turno todavía no
+  /// está en `state` (lo devuelve build).
+  Future<void> _retomar(Turno turno, {bool desdeBuild = false}) async {
+    final generacion = _generacion;
+    bool vigente() => ref.mounted && generacion == _generacion && (desdeBuild || state.value?.id == turno.id);
+    try {
+      await ref.read(ubicadorProvider).pedirPermiso();
+      if (!vigente()) return;
+      unawaited(ref.read(notificacionesLocalesProvider).pedirPermiso());
+      final pendientes = await _leerCola(turno.id);
+      if (!vigente()) return;
+      await _iniciarRastreo(turno, pendientes: pendientes, generacion: generacion);
+    } catch (e) {
+      debugPrint('vehiculos_oficiales: no se pudo retomar el rastreo del turno (${e.runtimeType}).');
+      if (vigente()) ref.read(posicionPropiaProvider.notifier).sinGps();
+    }
   }
 
   /// Vuelve a preguntar el turno: lo llaman el push `turno` (un fichaje lo abrió o lo cerró) y el sondeo.
   /// Si apareció un turno arranca el GPS como al abrir la app; si se cerró, lo corta; si es el mismo, no
   /// toca el rastreo. Nunca lanza: un error de red se ignora y se reintenta en el próximo sondeo.
-  Future<void> refrescar() => _refresco ??= _refrescar().whenComplete(() => _refresco = null);
+  ///
+  /// Una llamada mientras otra consulta está en curso no se pierde: al terminar se consulta otra vez (el
+  /// push más nuevo siempre se procesa). La consulta no espera a que arranque el GPS ([_retomar] corre
+  /// aparte), así un push `cerrado` con el diálogo de permiso abierto se procesa enseguida.
+  Future<void> refrescar() {
+    final enCurso = _refresco;
+    if (enCurso != null) {
+      _otraVez = true;
+      return enCurso;
+    }
+    return _refresco = _refrescarMientrasHaga().whenComplete(() => _refresco = null);
+  }
+
+  Future<void> _refrescarMientrasHaga() async {
+    do {
+      _otraVez = false;
+      try {
+        await _refrescar();
+      } catch (e) {
+        debugPrint('vehiculos_oficiales: no se pudo refrescar el turno (${e.runtimeType}).');
+      }
+    } while (_otraVez && ref.mounted);
+  }
 
   Future<void> _refrescar() async {
     if (state.isLoading) return; // lo está leyendo build: ya trae lo último
@@ -140,8 +176,8 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
     } on ErrorApi {
       return;
     }
-    // Mientras tanto el chofer inició o finalizó el turno: su resultado manda.
-    if (!ref.mounted || state.value?.id != antes?.id) return;
+    // Mientras tanto el chofer inició, finalizó o cambió de vehículo: lo suyo es más nuevo y manda.
+    if (!ref.mounted || !identical(state.value, antes)) return;
     if (turno?.id == antes?.id) {
       if (turno != null) state = AsyncData(turno);
       return;
@@ -149,7 +185,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
     if (antes != null) _detenerRastreo();
     state = AsyncData(turno);
     _ajustarSondeo(sinTurno: turno == null);
-    if (turno != null) await _retomar(turno);
+    if (turno != null) unawaited(_retomar(turno));
   }
 
   /// Cambia el vehículo del turno abierto, sin tocar el rastreo. Los 422 (vehículo en uso, viaje activo)
@@ -200,18 +236,23 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
   }
 
   /// "Reintentar" del aviso de GPS: vuelve a pedir permiso y reabre el GPS (un stream que falló no se
-  /// recupera solo). Lo pendiente en la cola se conserva.
+  /// recupera solo). Lo pendiente en la cola se conserva. Si el rastreo no llegó a arrancar (falló al
+  /// retomar un turno), lo vuelve a intentar.
   Future<void> reintentarGps() async {
+    final turno = state.value;
+    if (_rastreador == null && turno != null) return _retomar(turno);
     await ref.read(ubicadorProvider).pedirPermiso();
     if (ref.mounted) _rastreador?.reabrirGps();
   }
 
   /// [pendientes]: los puntos guardados del mismo turno, que vuelven a la cola antes de abrir el GPS.
-  Future<void> _iniciarRastreo(Turno turno, {List<PuntoGps> pendientes = const []}) async {
+  /// [generacion]: la de cuando se decidió arrancar (por defecto, la actual); si cambió, no arranca.
+  Future<void> _iniciarRastreo(Turno turno, {List<PuntoGps> pendientes = const [], int? generacion}) async {
     if (_rastreador != null) return;
-    final generacion = _generacion;
+    final gen = generacion ?? _generacion;
+    if (gen != _generacion) return;
     final conf = await ref.read(configuracionProvider.future);
-    if (!ref.mounted || generacion != _generacion || _rastreador != null) return;
+    if (!ref.mounted || gen != _generacion || _rastreador != null) return;
 
     final cola = ColaUbicaciones()..cargar(pendientes);
     final posicion = ref.read(posicionPropiaProvider.notifier);

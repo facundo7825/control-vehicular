@@ -227,9 +227,17 @@ class UbicadorFalso implements Ubicador {
     return posicion;
   }
 
+  /// Si no es nulo, `pedirPermiso()` espera a que el test lo complete (el diálogo del sistema abierto).
+  Completer<void>? demoraPermiso;
+
+  /// Si no es nulo, `pedirPermiso()` lo lanza (un plugin que falla).
+  Object? errorPermiso;
+
   @override
   Future<PermisoUbicacion> pedirPermiso() async {
     pedidosDePermiso++;
+    await demoraPermiso?.future;
+    if (errorPermiso != null) throw errorPermiso!;
     return permiso;
   }
 

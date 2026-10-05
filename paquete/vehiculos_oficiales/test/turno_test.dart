@@ -892,6 +892,140 @@ void main() {
         expect(gps.siguiendo, isTrue);
       });
     });
+
+    test('finalizar mientras se retoma el turno (diálogo de permiso abierto) no abre el GPS', () {
+      fakeAsync((async) {
+        final c = crear();
+        async.flushMicrotasks();
+        api.turno = turnoDePrueba();
+        gps.demoraPermiso = Completer<void>();
+        async.elapse(TurnoNotifier.intervaloSondeo);
+        expect(c.read(turnoProvider).value!.id, 1);
+
+        c.read(turnoProvider.notifier).finalizar();
+        async.flushMicrotasks();
+        expect(c.read(turnoProvider).value, isNull);
+
+        gps.demoraPermiso!.complete();
+        async.flushMicrotasks();
+        expect(gps.intervalos, isEmpty);
+        expect(gps.siguiendo, isFalse);
+      });
+    });
+
+    test('un push "cerrado" con el permiso pendiente se procesa enseguida y no se abre el GPS', () {
+      fakeAsync((async) {
+        final c = crear();
+        c.read(pushModuloProvider);
+        async.flushMicrotasks();
+        api.turno = turnoDePrueba();
+        gps.demoraPermiso = Completer<void>();
+        pushTurno('abierto');
+        async.flushMicrotasks();
+        expect(c.read(turnoProvider).value!.id, 1);
+
+        api.turno = null;
+        pushTurno('cerrado');
+        async.flushMicrotasks();
+        expect(c.read(turnoProvider).value, isNull);
+
+        gps.demoraPermiso!.complete();
+        async.flushMicrotasks();
+        expect(gps.intervalos, isEmpty);
+      });
+    });
+
+    test('un push que llega con una consulta en curso no se pierde: se vuelve a consultar al terminar', () {
+      fakeAsync((async) {
+        final c = crear();
+        c.read(pushModuloProvider);
+        async.flushMicrotasks();
+        api.demoraTurno = Completer<void>();
+        pushTurno('abierto');
+        async.flushMicrotasks();
+        pushTurno('cerrado');
+        async.flushMicrotasks();
+        expect(consultasTurno(), 2);
+
+        api.demoraTurno!.complete();
+        async.flushMicrotasks();
+        expect(consultasTurno(), 3);
+        expect(c.read(turnoProvider).value, isNull);
+      });
+    });
+
+    test('si retomar el turno falla, no escapa el error: avisa en el mapa y "Reintentar" lo arranca', () {
+      fakeAsync((async) {
+        final c = crear();
+        async.flushMicrotasks();
+        api.turno = turnoDePrueba();
+        gps.errorPermiso = StateError('plugin');
+        async.elapse(TurnoNotifier.intervaloSondeo);
+
+        expect(c.read(turnoProvider).value!.id, 1);
+        expect(c.read(posicionPropiaProvider).sinGps, isTrue);
+        expect(gps.intervalos, isEmpty);
+
+        gps.errorPermiso = null;
+        c.read(turnoProvider.notifier).reintentarGps();
+        async.flushMicrotasks();
+        expect(gps.siguiendo, isTrue);
+      });
+    });
+
+    test('una consulta que vuelve después de cambiar el vehículo no pisa el cambio', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        final c = crear();
+        c.read(pushModuloProvider);
+        async.flushMicrotasks();
+
+        api.demoraTurno = Completer<void>();
+        pushTurno('abierto');
+        async.flushMicrotasks();
+        c.read(turnoProvider.notifier).cambiarVehiculo(2);
+        async.flushMicrotasks();
+        api.turno = turnoDePrueba(); // la consulta trae lo de antes del cambio
+        api.demoraTurno!.complete();
+        async.flushMicrotasks();
+
+        expect(c.read(turnoProvider).value!.vehiculo!.patente, 'AC456EF');
+      });
+    });
+
+    test('el push de turno sin la pantalla del chofer abierta no crea el turno ni falla', () {
+      fakeAsync((async) {
+        entorno = EntornoPrueba()..almacenCola = almacen;
+        final contenedor = entorno.contenedor([
+          apiProvider.overrideWithValue(api),
+          ubicadorProvider.overrideWithValue(gps),
+          tiempoRealProvider.overrideWithValue(tr),
+          usuarioProvider.overrideWithValue(chofer),
+        ]);
+        contenedor.read(pushModuloProvider);
+        async.flushMicrotasks();
+
+        pushTurno('abierto');
+        async.flushMicrotasks();
+
+        expect(contenedor.exists(turnoProvider), isFalse);
+        expect(api.llamadas, isNot(contains('turnoActual')));
+      });
+    });
+
+    test('el push "sin_vehiculo" recarga los vehículos disponibles', () {
+      fakeAsync((async) {
+        final c = crear();
+        c.read(pushModuloProvider);
+        c.listen(vehiculosDisponiblesProvider, (_, _) {});
+        async.flushMicrotasks();
+        expect(api.llamadas.where((l) => l == 'vehiculos'), hasLength(1));
+
+        pushTurno('sin_vehiculo');
+        async.elapse(Duration.zero); // Riverpod reconstruye lo invalidado en su próximo ciclo
+        expect(api.llamadas.where((l) => l == 'vehiculos'), hasLength(2));
+      });
+    });
   });
 
   group('cambiar vehículo', () {

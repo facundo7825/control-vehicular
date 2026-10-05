@@ -108,11 +108,11 @@ class ApiVehiculos {
       _leer(() async => Turno.fromJson(await cliente.postMapa('turnos/actual/finalizar')));
 
   /// Cambia el vehículo del turno abierto (spec del turno por fichaje). Responde `{"turno": …}` como
-  /// `GET /turnos/actual`; se acepta también el turno suelto, como `POST /turnos`. 422 con el motivo en
-  /// español (vehículo en uso o inactivo, viaje activo).
+  /// `GET /turnos/actual`; sin turno en la respuesta es un [ErrorServidor]. 422 con el motivo en español
+  /// (vehículo en uso o inactivo, viaje activo).
   Future<Turno> cambiarVehiculo(int vehiculoId) => _leer(() async {
     final j = await cliente.postMapa('turnos/actual/vehiculo', datos: {'vehiculo_id': vehiculoId});
-    return Turno.fromJson(j['turno'] is Map ? leerMapa(j['turno']) : j);
+    return Turno.fromJson(leerMapa(j['turno']));
   });
 
   /// 204. Hasta 500 puntos por pedido (lo que valida `UbicacionController`).
