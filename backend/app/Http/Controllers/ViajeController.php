@@ -117,8 +117,11 @@ class ViajeController extends Controller
         $this->autorizarVerViaje($request, $viaje);
 
         $terminado = $viaje->finalizado_en ?? $viaje->cancelado_en;
-        if ($terminado && $terminado->lt(now()->subDays($parametros->entero('retencion_recorrido_dias')))) {
-            return response()->json(['puntos' => [], 'disponible' => false]);
+        $retencion = $parametros->entero('retencion_recorrido_dias');
+        if ($terminado && $terminado->lt(now()->subDays($retencion))) {
+            return response()->json([
+                'puntos' => [], 'disponible' => false, 'vencido' => true, 'retencion_dias' => $retencion,
+            ]);
         }
 
         $puntos = PuntoRecorrido::where('viaje_id', $viaje->id)
@@ -137,7 +140,9 @@ class ViajeController extends Controller
                 ->map(fn ($i) => $puntos[intdiv($i * ($total - 1), $max - 1)]);
         }
 
-        return response()->json(['puntos' => $puntos->values(), 'disponible' => $total > 0]);
+        return response()->json([
+            'puntos' => $puntos->values(), 'disponible' => $total > 0, 'vencido' => false, 'retencion_dias' => $retencion,
+        ]);
     }
 
     private function autorizarVerViaje(Request $request, Viaje $viaje): void

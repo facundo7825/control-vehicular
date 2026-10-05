@@ -117,7 +117,7 @@ it('devuelve el recorrido ordenado por fecha', function () {
 
     $this->actingAs($viaje->solicitante)->getJson("/api/viajes/{$viaje->id}/recorrido")
         ->assertOk()
-        ->assertExactJson(['puntos' => [[1, 10], [2, 20], [3, 30]], 'disponible' => true]);
+        ->assertExactJson(['puntos' => [[1, 10], [2, 20], [3, 30]], 'disponible' => true, 'vencido' => false, 'retencion_dias' => 90]);
 });
 
 it('reduce a 500 puntos conservando el primero y el último', function () {
@@ -155,18 +155,42 @@ it('el admin y el chofer ven el recorrido y un tercero recibe 403', function () 
         ->assertExactJson(['message' => 'Este viaje no es tuyo.']);
 });
 
-it('marca el recorrido no disponible sin puntos o pasada la retención', function () {
+it('reduce a 500 puntos el caso más chico (501) conservando el primero y el último', function () {
+    $viaje = viajeParaDetalle(choferEnTurno());
+    puntosDeRecorrido($viaje, 501);
+
+    $puntos = $this->actingAs($viaje->solicitante)->getJson("/api/viajes/{$viaje->id}/recorrido")
+        ->assertOk()->json('puntos');
+
+    expect($puntos)->toHaveCount(500)
+        ->and($puntos[0][0])->toEqualWithDelta(-34.0, 1e-9)
+        ->and($puntos[499][0])->toEqualWithDelta(-34.0 - 500 / 100000, 1e-9);
+});
+
+it('sin puntos no está disponible pero tampoco vencido', function () {
     $viaje = viajeParaDetalle(choferEnTurno(), EstadoViaje::Finalizado);
     $viaje->update(['finalizado_en' => now()]);
 
     $this->actingAs($viaje->solicitante)->getJson("/api/viajes/{$viaje->id}/recorrido")
-        ->assertOk()->assertExactJson(['puntos' => [], 'disponible' => false]);
+        ->assertOk()->assertExactJson(['puntos' => [], 'disponible' => false, 'vencido' => false, 'retencion_dias' => 90]);
+});
 
+it('marca el recorrido vencido pasada la retención', function () {
+    $viaje = viajeParaDetalle(choferEnTurno(), EstadoViaje::Finalizado);
     puntosDeRecorrido($viaje, 3);
     $viaje->update(['finalizado_en' => now()->subDays(91)]);
 
     $this->actingAs($viaje->solicitante)->getJson("/api/viajes/{$viaje->id}/recorrido")
-        ->assertOk()->assertExactJson(['puntos' => [], 'disponible' => false]);
+        ->assertOk()->assertExactJson(['puntos' => [], 'disponible' => false, 'vencido' => true, 'retencion_dias' => 90]);
+});
+
+it('aplica la retención también a un viaje cancelado', function () {
+    $viaje = viajeParaDetalle(choferEnTurno(), EstadoViaje::Cancelado);
+    puntosDeRecorrido($viaje, 3);
+    $viaje->update(['cancelado_en' => now()->subDays(91)]);
+
+    $this->actingAs($viaje->solicitante)->getJson("/api/viajes/{$viaje->id}/recorrido")
+        ->assertOk()->assertExactJson(['puntos' => [], 'disponible' => false, 'vencido' => true, 'retencion_dias' => 90]);
 });
 
 it('exige sesión para el recorrido', function () {
