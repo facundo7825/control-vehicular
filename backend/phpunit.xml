@@ -30,6 +30,19 @@
         <env name="DB_URL" value=""/>
         <env name="LUGARES_DRIVER" value="falso"/>
         <env name="RUTAS_DRIVER" value="falso"/>
+        <!-- Mapas: valores fijos para que un .env local (p. ej. apuntando a servidores propios) no cambie los tests. -->
+        <env name="MAPAS_DRIVER" value="falso"/>
+        <env name="MAPAS_TESELAS_URL" value="https://tile.openstreetmap.org/{z}/{x}/{y}.png"/>
+        <env name="MAPAS_TESELAS_ATRIBUCION" value="© OpenStreetMap contributors"/>
+        <env name="MAPAS_TESELAS_ATRIBUCION_URL" value="https://www.openstreetmap.org/copyright"/>
+        <env name="MAPAS_TESELAS_TMS" value="false"/>
+        <env name="MAPAS_TESELAS_MAX_ZOOM" value="19"/>
+        <env name="LUGARES_NOMINATIM_URL" value="https://nominatim.openstreetmap.org"/>
+        <env name="LUGARES_GEOREF_URL" value="https://apis.datos.gob.ar/georef/api"/>
+        <env name="LUGARES_PROVINCIA" value=""/>
+        <env name="LUGARES_LIMITE_POR_MINUTO" value="30"/>
+        <env name="RUTAS_OSRM_URL" value="https://router.project-osrm.org"/>
+        <env name="ASISTENCIA_CLAVE" value=""/>
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
         <env name="SESSION_DRIVER" value="array"/>
