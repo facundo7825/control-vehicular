@@ -198,6 +198,75 @@ void main() {
     });
   });
 
+  for (final error in <ErrorApi>[
+    const ErrorNegocio('El viaje ya no se puede cancelar.'),
+    const NoEncontrado(),
+    const AccesoDenegado('No es tu viaje.'),
+  ]) {
+    test('si cancelar falla con ${error.runtimeType}, trae el estado real y el error llega a la pantalla', () {
+      fakeAsync((async) {
+        api.actual = ViajeActual(viaje: viaje(estado: 'buscando'));
+        final c = crear();
+        async.flushMicrotasks();
+        expect(leer(c).viaje!.estado, EstadoViaje.buscando);
+
+        // En el servidor ya pasó a sin_chofer (los eventos se perdieron).
+        api.errorCancelar = error;
+        api.actual = ViajeActual.vacio;
+        api.mis = MisViajes(
+          proximas: const [],
+          historial: [viaje(estado: 'sin_chofer')],
+        );
+
+        Object? recibido;
+        c.read(viajeActualProvider.notifier).cancelar().catchError((Object e) => recibido = e);
+        async.flushMicrotasks();
+
+        expect(recibido, same(error));
+        expect(leer(c).viaje!.estado, EstadoViaje.sinChofer);
+        expect(c.read(viajeActualProvider.notifier).canceladoPorMi(1), isFalse);
+      });
+    });
+  }
+
+  test('si cancelar falla sin conexión, el error llega a la pantalla y el refresco fallido no lanza', () {
+    fakeAsync((async) {
+      api.actual = ViajeActual(viaje: viaje(estado: 'buscando'));
+      final c = crear();
+      async.flushMicrotasks();
+
+      api.errorCancelar = const SinConexion();
+      api.fallarConsultas = const SinConexion();
+
+      Object? recibido;
+      c.read(viajeActualProvider.notifier).cancelar().catchError((Object e) => recibido = e);
+      async.flushMicrotasks();
+
+      expect(recibido, isA<SinConexion>());
+      expect(leer(c).viaje!.estado, EstadoViaje.buscando);
+    });
+  });
+
+  test('si el refresco tras un cancelar fallido lanza algo inesperado, igual llega el error original', () {
+    fakeAsync((async) {
+      api.actual = ViajeActual(viaje: viaje(estado: 'buscando'));
+      final c = crear();
+      async.flushMicrotasks();
+
+      const error = ErrorNegocio('No se puede cancelar.');
+      api.errorCancelar = error;
+      api.actual = ViajeActual.vacio;
+      // Sin respuesta preparada para el historial: `misViajes` lanza un StateError.
+      api.errorMisViajes = StateError('inesperado');
+
+      Object? recibido;
+      c.read(viajeActualProvider.notifier).cancelar().catchError((Object e) => recibido = e);
+      async.flushMicrotasks();
+
+      expect(recibido, same(error));
+    });
+  });
+
   test('un viaje terminado que se recuperó del historial se conserva al refrescar hasta descartarlo', () {
     fakeAsync((async) {
       tr = TiempoRealFalso(estado: EstadoConexion.desconectado);
