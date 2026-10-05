@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/errores_api.dart';
@@ -66,13 +66,28 @@ final turnoProvider = AsyncNotifierProvider<TurnoNotifier, Turno?>(TurnoNotifier
 ///
 /// El turno también lo abre y lo cierra el fichaje de asistencia: el push `turno` llama a [refrescar] y, sin
 /// turno, se pregunta cada [intervaloSondeo] por si el push no llega.
+///
+/// El sondeo corre solo con la app en primer plano, y al volver a primer plano se pregunta enseguida. Un turno
+/// que aparece con la app en segundo plano (push, fichaje) se muestra, pero el GPS arranca recién al volver:
+/// Android 12+ no deja iniciar el servicio de ubicación en primer plano desde segundo plano. Un rastreo que ya
+/// corre sigue en segundo plano.
 class TurnoNotifier extends AsyncNotifier<Turno?> {
   static const intervaloSondeo = Duration(seconds: 30);
 
   RastreadorTurno? _rastreador;
 
-  /// Solo corre sin turno (la pantalla "Iniciar turno").
+  /// Solo corre sin turno (la pantalla "Iniciar turno") y en primer plano.
   Timer? _sondeo;
+
+  /// Sin turno: hay que preguntar cada [intervaloSondeo] (mientras la app esté en primer plano).
+  bool _sinTurno = false;
+
+  /// La app se ve: `resumed` o `inactive` (tapada un momento por un diálogo del sistema o el panel de
+  /// notificaciones). Sin estado todavía (al arrancar) cuenta como primer plano.
+  bool _enPrimerPlano = true;
+
+  /// Hay un turno que no se retomó por estar en segundo plano: se retoma al volver.
+  bool _retomarAlVolver = false;
 
   /// La consulta de [refrescar] en curso, y si hay que repetirla al terminar (llegó otro aviso mientras tanto).
   Future<void>? _refresco;
@@ -84,10 +99,14 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
 
   @override
   Future<Turno?> build() async {
+    _enPrimerPlano = _esPrimerPlano(WidgetsBinding.instance.lifecycleState);
+    final ciclo = AppLifecycleListener(onStateChange: _alCambiarCiclo);
     ref.onDispose(() {
       // Al cerrar el módulo (o recargar el turno) se corta el GPS. En onDispose no se puede usar `ref`.
       // Lo que no se llegó a guardar se guarda: el turno sigue abierto y se retoma al volver.
+      ciclo.dispose();
       _generacion++;
+      _retomarAlVolver = false;
       _sondeo?.cancel();
       _sondeo = null;
       final r = _rastreador;
@@ -108,11 +127,39 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
     _ajustarSondeo(sinTurno: turno == null);
     if (turno == null) {
       await _borrarCola(); // lo guardado es de un turno que ya se cerró (spec 10)
-    } else {
+    } else if (_enPrimerPlano) {
       // Turno abierto de antes (la app se cerró o se reabrió el módulo).
       await _retomar(turno, desdeBuild: true);
+    } else {
+      _retomarAlVolver = true;
     }
     return turno;
+  }
+
+  static bool _esPrimerPlano(AppLifecycleState? ciclo) =>
+      ciclo == null || ciclo == AppLifecycleState.resumed || ciclo == AppLifecycleState.inactive;
+
+  /// En segundo plano se pausa el sondeo. Al volver: se retoma el turno que quedó esperando, se pregunta
+  /// enseguida (pudo abrirse o cerrarse mientras tanto) y se rearma el sondeo.
+  void _alCambiarCiclo(AppLifecycleState ciclo) {
+    final antes = _enPrimerPlano;
+    _enPrimerPlano = _esPrimerPlano(ciclo);
+    if (!ref.mounted || antes == _enPrimerPlano) return;
+    _armarSondeo();
+    if (!_enPrimerPlano) return;
+    final turno = state.value;
+    if (_retomarAlVolver && turno != null && _rastreador == null) unawaited(_retomar(turno));
+    _retomarAlVolver = false;
+    unawaited(refrescar());
+  }
+
+  /// Retoma [turno] ya si la app está en primer plano; si no, al volver.
+  void _retomarEnPrimerPlano(Turno turno) {
+    if (_enPrimerPlano) {
+      unawaited(_retomar(turno));
+    } else {
+      _retomarAlVolver = true;
+    }
   }
 
   /// Un turno abierto que la app no inició (de antes, o abierto por un fichaje): se retoma el rastreo con lo
@@ -152,18 +199,24 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
       _otraVez = true;
       return enCurso;
     }
-    return _refresco = _refrescarMientrasHaga().whenComplete(() => _refresco = null);
+    return _refresco = _refrescarMientrasHaga();
   }
 
+  /// `_refresco` se limpia acá, en el mismo paso en que el bucle decide terminar: un [refrescar] que llegue
+  /// después ya arranca una consulta nueva (no se cuelga de esta, que ya no vuelve a consultar).
   Future<void> _refrescarMientrasHaga() async {
-    do {
-      _otraVez = false;
-      try {
-        await _refrescar();
-      } catch (e) {
-        debugPrint('vehiculos_oficiales: no se pudo refrescar el turno (${e.runtimeType}).');
-      }
-    } while (_otraVez && ref.mounted);
+    try {
+      do {
+        _otraVez = false;
+        try {
+          await _refrescar();
+        } catch (e) {
+          debugPrint('vehiculos_oficiales: no se pudo refrescar el turno (${e.runtimeType}).');
+        }
+      } while (_otraVez && ref.mounted);
+    } finally {
+      _refresco = null;
+    }
   }
 
   Future<void> _refrescar() async {
@@ -185,7 +238,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
     if (antes != null) _detenerRastreo();
     state = AsyncData(turno);
     _ajustarSondeo(sinTurno: turno == null);
-    if (turno != null) unawaited(_retomar(turno));
+    if (turno != null) _retomarEnPrimerPlano(turno);
   }
 
   /// Cambia el vehículo del turno abierto, sin tocar el rastreo. Los 422 (vehículo en uso, viaje activo)
@@ -196,7 +249,12 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
   }
 
   void _ajustarSondeo({required bool sinTurno}) {
-    if (sinTurno) {
+    _sinTurno = sinTurno;
+    _armarSondeo();
+  }
+
+  void _armarSondeo() {
+    if (_sinTurno && _enPrimerPlano) {
       _sondeo ??= Timer.periodic(intervaloSondeo, (_) => unawaited(refrescar()));
     } else {
       _sondeo?.cancel();
@@ -253,6 +311,11 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
     if (gen != _generacion) return;
     final conf = await ref.read(configuracionProvider.future);
     if (!ref.mounted || gen != _generacion || _rastreador != null) return;
+    // Pasó a segundo plano mientras esperaba (el permiso, la cola, la configuración): arranca al volver.
+    if (!_enPrimerPlano) {
+      _retomarAlVolver = true;
+      return;
+    }
 
     final cola = ColaUbicaciones()..cargar(pendientes);
     final posicion = ref.read(posicionPropiaProvider.notifier);
@@ -277,6 +340,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
   /// El turno terminó (se finalizó, o el backend dice que no hay): también se borra la cola guardada.
   void _detenerRastreo() {
     _generacion++;
+    _retomarAlVolver = false;
     _rastreador?.detener();
     _rastreador = null;
     ref.read(posicionPropiaProvider.notifier).limpiar();
@@ -316,7 +380,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
       if (!ref.mounted) return;
       state = AsyncData(turno);
       _ajustarSondeo(sinTurno: turno == null);
-      if (turno != null) await _iniciarRastreo(turno);
+      if (turno != null) await _iniciarRastreo(turno); // en segundo plano, arranca al volver
     } on ErrorApi {
       if (!ref.mounted) return;
       state = const AsyncData(null);

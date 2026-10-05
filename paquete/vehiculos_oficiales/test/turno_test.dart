@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:fake_async/fake_async.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vehiculos_oficiales/src/api/errores_api.dart';
@@ -17,11 +18,14 @@ import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real.dart';
 import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real_provider.dart';
 import 'package:vehiculos_oficiales/src/ubicacion/ubicador.dart';
 
+import 'fixtures/payloads.dart' as p;
+import 'fixtures/payloads_chofer.dart' as cp;
 import 'soporte/dobles.dart';
 import 'soporte/dobles_chofer.dart';
 import 'soporte/entorno_prueba.dart';
 
 void main() {
+  final binding = TestWidgetsFlutterBinding.ensureInitialized();
   late ApiChofer api;
   late UbicadorFalso gps;
   late TiempoRealFalso tr;
@@ -33,6 +37,17 @@ void main() {
     gps = UbicadorFalso();
     tr = TiempoRealFalso();
     almacen = AlmacenColaMemoria();
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+  });
+
+  // Vuelve a primer plano por estados válidos (AppLifecycleListener verifica las transiciones).
+  tearDown(() {
+    const vuelta = [AppLifecycleState.hidden, AppLifecycleState.inactive, AppLifecycleState.resumed];
+    final desde = binding.lifecycleState;
+    if (desde == null || desde == AppLifecycleState.resumed) return;
+    for (final e in vuelta.skip(desde == AppLifecycleState.paused ? 0 : vuelta.indexOf(desde) + 1)) {
+      binding.handleAppLifecycleStateChanged(e);
+    }
   });
 
   ProviderContainer crear() {
@@ -1013,6 +1028,59 @@ void main() {
       });
     });
 
+    test('un refrescar que llega justo cuando termina la consulta no se pierde', () {
+      fakeAsync((async) {
+        final c = crear();
+        async.flushMicrotasks();
+        final notifier = c.read(turnoProvider.notifier);
+        api.turno = turnoDePrueba();
+
+        // Al llegar el turno (todavía dentro del bucle) se encola un refrescar para la vuelta siguiente del
+        // bucle de microtareas: corre cuando la consulta ya terminó.
+        var pedidos = 0;
+        c.listen(turnoProvider, (_, s) {
+          if (s.value != null && pedidos++ == 0) scheduleMicrotask(() => unawaited(notifier.refrescar()));
+        });
+        unawaited(notifier.refrescar());
+        async.flushMicrotasks();
+
+        expect(consultasTurno(), 3);
+      });
+    });
+
+    test('el push "cierre_pendiente" refresca el turno y muestra el cierre pendiente', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        final c = crear();
+        c.read(pushModuloProvider);
+        async.flushMicrotasks();
+        expect(c.read(turnoProvider).value!.cierrePendienteEn, isNull);
+
+        api.turno = Turno.fromJson(
+          leerMapa(p.json(cp.turnoActual)['turno'])..['cierre_pendiente_en'] = '2026-10-01T18:00:00.000000Z',
+        );
+        pushTurno('cierre_pendiente');
+        async.flushMicrotasks();
+
+        expect(c.read(turnoProvider).value!.cierrePendienteEn, isNotNull);
+        expect(gps.intervalos, hasLength(1)); // el mismo turno: no se reabre el GPS
+      });
+    });
+
+    test('un estado desconocido del push de turno igual refresca el turno', () {
+      fakeAsync((async) {
+        final c = crear();
+        c.read(pushModuloProvider);
+        async.flushMicrotasks();
+
+        api.turno = turnoDePrueba();
+        pushTurno('cierre_cancelado');
+        async.flushMicrotasks();
+
+        expect(c.read(turnoProvider).value!.id, 1);
+      });
+    });
+
     test('el push "sin_vehiculo" recarga los vehículos disponibles', () {
       fakeAsync((async) {
         final c = crear();
@@ -1024,6 +1092,180 @@ void main() {
         pushTurno('sin_vehiculo');
         async.elapse(Duration.zero); // Riverpod reconstruye lo invalidado en su próximo ciclo
         expect(api.llamadas.where((l) => l == 'vehiculos'), hasLength(2));
+      });
+    });
+  });
+
+  group('ciclo de vida de la app', () {
+    int consultasTurno() => api.llamadas.where((l) => l == 'turnoActual').length;
+
+    void pasar(List<AppLifecycleState> estados) {
+      for (final e in estados) {
+        binding.handleAppLifecycleStateChanged(e);
+      }
+    }
+
+    void aSegundoPlano() => pasar([AppLifecycleState.inactive, AppLifecycleState.hidden, AppLifecycleState.paused]);
+    void aPrimerPlano() => pasar([AppLifecycleState.hidden, AppLifecycleState.inactive, AppLifecycleState.resumed]);
+    void pushTurno(String estado) =>
+        entorno.puente.controlador.add({'modulo': 'vehiculos_oficiales', 'tipo': 'turno', 'estado': estado});
+    Turno otroTurno() => Turno.fromJson(leerMapa(p.json(cp.turnoPorFichaje)['turno']));
+
+    test('sin turno, en segundo plano no se pregunta; al volver se pregunta enseguida y sigue el sondeo', () {
+      fakeAsync((async) {
+        crear();
+        async.flushMicrotasks();
+        expect(consultasTurno(), 1);
+
+        aSegundoPlano();
+        async.elapse(TurnoNotifier.intervaloSondeo * 4);
+        expect(consultasTurno(), 1);
+        expect(async.pendingTimers, isEmpty);
+
+        aPrimerPlano();
+        async.flushMicrotasks();
+        expect(consultasTurno(), 2);
+        async.elapse(TurnoNotifier.intervaloSondeo);
+        expect(consultasTurno(), 3);
+      });
+    });
+
+    test('"inactive" (un diálogo del sistema encima) sigue siendo primer plano: el sondeo no para', () {
+      fakeAsync((async) {
+        crear();
+        async.flushMicrotasks();
+
+        pasar([AppLifecycleState.inactive]);
+        async.elapse(TurnoNotifier.intervaloSondeo);
+        expect(consultasTurno(), 2);
+      });
+    });
+
+    test('un push que abre el turno en segundo plano lo muestra, pero el GPS arranca al volver', () {
+      fakeAsync((async) {
+        final c = crear();
+        c.read(pushModuloProvider);
+        async.flushMicrotasks();
+
+        aSegundoPlano();
+        api.turno = turnoDePrueba();
+        pushTurno('abierto');
+        async.flushMicrotasks();
+        expect(c.read(turnoProvider).value!.id, 1);
+        expect(gps.pedidosDePermiso, 0);
+        expect(gps.intervalos, isEmpty);
+
+        aPrimerPlano();
+        async.flushMicrotasks();
+        expect(gps.pedidosDePermiso, 1);
+        expect(gps.intervalos, hasLength(1));
+        expect(gps.siguiendo, isTrue);
+
+        // Ya arrancado, el GPS sigue en segundo plano (el servicio en primer plano está corriendo).
+        aSegundoPlano();
+        async.elapse(const Duration(minutes: 1));
+        expect(gps.siguiendo, isTrue);
+        expect(gps.intervalos, hasLength(1));
+      });
+    });
+
+    test('un turno abierto que se cierra antes de volver no abre el GPS', () {
+      fakeAsync((async) {
+        final c = crear();
+        c.read(pushModuloProvider);
+        async.flushMicrotasks();
+
+        aSegundoPlano();
+        api.turno = turnoDePrueba();
+        pushTurno('abierto');
+        async.flushMicrotasks();
+        api.turno = null;
+        pushTurno('cerrado');
+        async.flushMicrotasks();
+        expect(c.read(turnoProvider).value, isNull);
+
+        aPrimerPlano();
+        async.flushMicrotasks();
+        expect(gps.pedidosDePermiso, 0);
+        expect(gps.intervalos, isEmpty);
+      });
+    });
+
+    test('si pasa a segundo plano mientras espera el permiso, el GPS arranca al volver', () {
+      fakeAsync((async) {
+        final c = crear();
+        c.read(pushModuloProvider);
+        async.flushMicrotasks();
+        api.turno = turnoDePrueba();
+        gps.demoraPermiso = Completer<void>();
+        pushTurno('abierto');
+        async.flushMicrotasks();
+
+        aSegundoPlano();
+        gps.demoraPermiso!.complete();
+        async.flushMicrotasks();
+        expect(c.read(turnoProvider).value!.id, 1);
+        expect(gps.intervalos, isEmpty);
+
+        gps.demoraPermiso = null;
+        aPrimerPlano();
+        async.flushMicrotasks();
+        expect(gps.siguiendo, isTrue);
+        expect(gps.intervalos, hasLength(1));
+      });
+    });
+
+    test('al leer el turno con la app en segundo plano, el GPS espera a que vuelva', () {
+      fakeAsync((async) {
+        aSegundoPlano();
+        api.turno = turnoDePrueba();
+        final c = crear();
+        async.flushMicrotasks();
+        expect(c.read(turnoProvider).value!.id, 1);
+        expect(gps.intervalos, isEmpty);
+
+        aPrimerPlano();
+        async.flushMicrotasks();
+        expect(gps.siguiendo, isTrue);
+        expect(gps.intervalos, hasLength(1));
+      });
+    });
+
+    test('si el backend cambia el turno mientras está en segundo plano, el nuevo arranca al volver', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        final c = crear();
+        async.flushMicrotasks();
+        expect(gps.siguiendo, isTrue);
+
+        aSegundoPlano();
+        api
+          ..turno = otroTurno()
+          ..erroresUbicacion.add(const ErrorNegocio('Iniciá un turno para compartir tu ubicación.'));
+        gps.emitir(punto(0));
+        async.elapse(const Duration(seconds: 10));
+        expect(c.read(turnoProvider).value!.id, 4);
+        expect(gps.siguiendo, isFalse);
+        expect(gps.intervalos, hasLength(1));
+
+        aPrimerPlano();
+        async.flushMicrotasks();
+        expect(gps.siguiendo, isTrue);
+        expect(gps.intervalos, hasLength(2));
+      });
+    });
+
+    test('cerrar el módulo deja de escuchar el ciclo de vida', () {
+      fakeAsync((async) {
+        final c = crear();
+        async.flushMicrotasks();
+        c.dispose();
+        async.flushMicrotasks();
+
+        aSegundoPlano();
+        aPrimerPlano();
+        async.flushMicrotasks();
+        expect(consultasTurno(), 1);
       });
     });
   });
