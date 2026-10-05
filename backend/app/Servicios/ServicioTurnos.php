@@ -55,6 +55,40 @@ class ServicioTurnos
         return $turno;
     }
 
+    /**
+     * Cambia el vehículo del turno abierto (el turno abierto por fichaje usa el habitual y ese día maneja otro).
+     * Mismos locks y orden que iniciar: primero el chofer (que también toma Asignador) y después el vehículo.
+     * Con un viaje activo no se permite: el viaje ya quedó con el vehículo del turno.
+     */
+    public function cambiarVehiculo(Usuario $chofer, int $vehiculoId): Turno
+    {
+        return DB::transaction(function () use ($chofer, $vehiculoId) {
+            Usuario::whereKey($chofer->id)->lockForUpdate()->first();
+            $vehiculo = Vehiculo::whereKey($vehiculoId)->lockForUpdate()->first();
+
+            $turno = $chofer->turnoAbierto()->first();
+            if (! $turno) {
+                throw new ReglaNegocio('No tenés un turno abierto.');
+            }
+            if ((int) $turno->vehiculo_id === $vehiculoId) {
+                return $turno;
+            }
+            if (! $vehiculo || ! $vehiculo->activo) {
+                throw new ReglaNegocio('El vehículo no existe o no está activo.');
+            }
+            if (Viaje::activosDeChofer($chofer->id)->exists()) {
+                throw new ReglaNegocio('Terminá el viaje en curso antes de cambiar de vehículo.');
+            }
+            if (Turno::where('vehiculo_id', $vehiculo->id)->whereNull('fin')->exists()) {
+                throw new ReglaNegocio('El vehículo está en uso por otro chofer.');
+            }
+
+            $turno->update(['vehiculo_id' => $vehiculo->id]);
+
+            return $turno;
+        }, attempts: 3);
+    }
+
     public function finalizar(Usuario $chofer): Turno
     {
         return $this->cerrar($chofer, soloPendiente: false);

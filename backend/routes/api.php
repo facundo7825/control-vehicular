@@ -47,6 +47,7 @@ Route::middleware(['auth:sanctum', 'activo'])->group(function () {
         Route::get('/turnos/actual', [TurnoController::class, 'actual']);
         Route::post('/turnos', [TurnoController::class, 'iniciar']);
         Route::post('/turnos/actual/finalizar', [TurnoController::class, 'finalizar']);
+        Route::post('/turnos/actual/vehiculo', [TurnoController::class, 'cambiarVehiculo']);
         Route::post('/ubicacion', UbicacionController::class);
         Route::post('/ofertas/{oferta}/aceptar', [OfertaController::class, 'aceptar']);
         Route::post('/ofertas/{oferta}/rechazar', [OfertaController::class, 'rechazar']);
