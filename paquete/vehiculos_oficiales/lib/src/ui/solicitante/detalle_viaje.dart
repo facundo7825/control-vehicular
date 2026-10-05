@@ -63,13 +63,9 @@ class _Contenido extends ConsumerWidget {
     final texto = Theme.of(context).textTheme;
     final chofer = viaje.chofer;
     final vehiculo = viaje.vehiculo;
+    // El mismo orden que la fila de "Mis viajes", así el viaje muestra la misma fecha en los dos lados.
     final cuando =
-        viaje.programadoPara ??
-        viaje.pedidoEn ??
-        viaje.aceptadoEn ??
-        viaje.iniciadoEn ??
-        viaje.finalizadoEn ??
-        viaje.canceladoEn;
+        viaje.programadoPara ?? viaje.finalizadoEn ?? viaje.canceladoEn ?? viaje.aceptadoEn ?? viaje.pedidoEn;
     final inicio = viaje.iniciadoEn;
     final fin = viaje.finalizadoEn;
     final metros = viaje.metrosRecorridos;
