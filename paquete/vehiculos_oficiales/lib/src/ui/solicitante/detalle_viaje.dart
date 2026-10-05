@@ -1,0 +1,177 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../api/reloj_servidor.dart';
+import '../../mapa/mapa.dart';
+import '../../modelos/modelos.dart';
+import '../../solicitante/mis_viajes.dart';
+import '../comunes/comunes.dart';
+
+/// Días que el backend guarda el recorrido de un viaje (`retencion_recorrido_dias`, spec 10).
+const _diasRetencionRecorrido = 90;
+
+/// Detalle de un viaje del historial del solicitante: el recorrido real en el mapa, chofer, vehículo,
+/// horarios, duración, km y, si se canceló, quién y por qué.
+class DetalleViaje extends ConsumerWidget {
+  const DetalleViaje({super.key, required this.viajeId});
+
+  final int viajeId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final detalle = ref.watch(detalleViajeProvider(viajeId));
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Detalle del viaje')),
+      body: switch (detalle) {
+        AsyncData(:final value) => _Contenido(viaje: value),
+        AsyncError(:final error) => Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(mensajeDeError(error)),
+              TextButton(
+                onPressed: () => ref.invalidate(detalleViajeProvider(viajeId)),
+                child: const Text('Reintentar'),
+              ),
+            ],
+          ),
+        ),
+        _ => const Center(child: CircularProgressIndicator()),
+      },
+    );
+  }
+}
+
+class _Contenido extends ConsumerWidget {
+  const _Contenido({required this.viaje});
+
+  final Viaje viaje;
+
+  /// La nota debajo del mapa cuando no hay recorrido para dibujar; nula si lo hay o si falló al pedirlo.
+  String? _notaRecorrido(RecorridoReal? recorrido, DateTime ahora) {
+    if (recorrido == null || recorrido.disponible) return null;
+    final terminado = viaje.finalizadoEn ?? viaje.canceladoEn;
+    if (terminado != null && ahora.difference(terminado).inDays >= _diasRetencionRecorrido) {
+      return 'El recorrido ya no está disponible (se conserva $_diasRetencionRecorrido días)';
+    }
+    return 'Este viaje no tiene recorrido registrado';
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final recorrido = ref.watch(recorridoRealProvider(viaje.id)).value;
+    final puntos = recorrido != null && recorrido.disponible ? recorrido.puntos : const <Coordenada>[];
+    final nota = _notaRecorrido(recorrido, ref.watch(relojServidorProvider).ahora());
+    final mapa = ref.watch(constructorMapaProvider);
+    final texto = Theme.of(context).textTheme;
+    final chofer = viaje.chofer;
+    final vehiculo = viaje.vehiculo;
+    final cuando =
+        viaje.programadoPara ??
+        viaje.pedidoEn ??
+        viaje.aceptadoEn ??
+        viaje.iniciadoEn ??
+        viaje.finalizadoEn ??
+        viaje.canceladoEn;
+    final inicio = viaje.iniciadoEn;
+    final fin = viaje.finalizadoEn;
+    final metros = viaje.metrosRecorridos;
+    final quienCancelo = switch (viaje.canceladoPor) {
+      CanceladoPor.solicitante => 'Lo cancelaste vos',
+      CanceladoPor.admin => 'Lo canceló la administración',
+      null => null,
+    };
+
+    return Column(
+      children: [
+        SizedBox(
+          height: 280,
+          child: mapa(
+            context,
+            DatosMapa(
+              centro: viaje.origen.coordenada,
+              enfoque: Enfoque.entre([viaje.origen.coordenada, viaje.destino.coordenada, ...puntos]),
+              lineas: [if (puntos.length >= 2) LineaMapa.recorrido(puntos)],
+              marcadores: [
+                MarcadorMapa(
+                  id: 'origen',
+                  posicion: viaje.origen.coordenada,
+                  tipo: TipoMarcador.origen,
+                  titulo: 'Origen',
+                ),
+                MarcadorMapa(
+                  id: 'destino',
+                  posicion: viaje.destino.coordenada,
+                  tipo: TipoMarcador.destino,
+                  titulo: 'Destino',
+                ),
+              ],
+            ),
+          ),
+        ),
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (nota != null) ...[Text(nota, style: texto.bodySmall), const SizedBox(height: 12)],
+                Text(viaje.estado.texto, style: texto.titleLarge),
+                if (cuando != null) Text(formatearFechaHora(cuando)),
+                if (viaje.estado == EstadoViaje.cancelado) ...[
+                  const SizedBox(height: 8),
+                  if (quienCancelo != null) Text(quienCancelo),
+                  if (viaje.motivoCancelacion case final motivo? when motivo.isNotEmpty) Text('Motivo: $motivo'),
+                ],
+                if (viaje.estado == EstadoViaje.sinChofer) ...[
+                  const SizedBox(height: 8),
+                  const Text('No hubo choferes disponibles'),
+                ],
+                const SizedBox(height: 16),
+                _Fila('Origen', viaje.origen.descripcion),
+                _Fila('Destino', viaje.destino.descripcion),
+                if (chofer != null) ...[
+                  const SizedBox(height: 16),
+                  Text(chofer.nombre, style: texto.titleMedium),
+                  if (vehiculo != null) Text([vehiculo.descripcion, ?vehiculo.color].join(' · ')),
+                ],
+                const SizedBox(height: 16),
+                if (viaje.pedidoEn case final t?) _Fila('Pedido', formatearFechaHora(t)),
+                if (viaje.aceptadoEn case final t?) _Fila('Chofer asignado', formatearFechaHora(t)),
+                if (viaje.llegoEn case final t?) _Fila('Llegó', formatearFechaHora(t)),
+                if (inicio != null) _Fila('Inicio', formatearFechaHora(inicio)),
+                if (fin != null) _Fila('Fin', formatearFechaHora(fin)),
+                if (inicio != null && fin != null && !fin.isBefore(inicio))
+                  _Fila('Duración', formatearDuracion(fin.difference(inicio).inSeconds.toDouble())),
+                if (metros != null) _Fila('Distancia', formatearDistancia(metros.toDouble())),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _Fila extends StatelessWidget {
+  const _Fila(this.etiqueta, this.valor);
+
+  final String etiqueta;
+  final String valor;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 2),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 130,
+          child: Text(etiqueta, style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+        ),
+        Expanded(child: Text(valor)),
+      ],
+    ),
+  );
+}

@@ -42,6 +42,11 @@ class ApiVehiculos {
   /// Detalle de un viaje. 403 "Este viaje no es tuyo." si no es su solicitante, su chofer actual ni un admin.
   Future<Viaje> viaje(int id) => _leer(() async => Viaje.fromJson(await cliente.getMapa('viajes/$id')));
 
+  /// Recorrido real de un viaje (los puntos GPS del chofer mientras estuvo en curso). Misma autorización
+  /// que [viaje].
+  Future<RecorridoReal> recorridoViaje(int viajeId) =>
+      _leer(() async => RecorridoReal.fromJson(await cliente.getMapa('viajes/$viajeId/recorrido')));
+
   Future<Eta> eta(int viajeId) => _leer(() async => Eta.fromJson(await cliente.getMapa('viajes/$viajeId/eta')));
 
   Future<Viaje> pedirViaje(PedidoViaje pedido) =>

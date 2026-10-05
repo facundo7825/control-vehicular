@@ -14,6 +14,7 @@ import 'chofer/pantalla_oferta.dart';
 import 'chofer/viaje_asignado.dart';
 import 'chofer/viaje_chofer.dart';
 import 'sesion/pantalla_inicio.dart';
+import 'solicitante/detalle_viaje.dart';
 import 'solicitante/inicio_solicitante.dart';
 import 'solicitante/mis_viajes.dart';
 import 'solicitante/pantalla_reserva.dart';
@@ -28,6 +29,7 @@ abstract final class Rutas {
   static const viaje = '/solicitante/viaje';
   static const reservar = '/solicitante/reservar';
   static const misViajes = '/solicitante/mis-viajes';
+  static String detalleViaje(int id) => '$misViajes/viaje/$id';
   static const chofer = '/chofer';
   static const viajeChofer = '/chofer/viaje';
   static const ofertaChofer = '/chofer/oferta';
@@ -113,7 +115,16 @@ class _RaizModuloState extends ConsumerState<_RaizModulo> {
                   path: 'reservar',
                   builder: (_, estado) => PantallaReserva(fechaInicial: estado.extra as DateTime?),
                 ),
-                GoRoute(path: 'mis-viajes', builder: (_, _) => const MisViajesPantalla()),
+                GoRoute(
+                  path: 'mis-viajes',
+                  builder: (_, _) => const MisViajesPantalla(),
+                  routes: [
+                    GoRoute(
+                      path: 'viaje/:id',
+                      builder: (_, estado) => DetalleViaje(viajeId: int.parse(estado.pathParameters['id']!)),
+                    ),
+                  ],
+                ),
               ],
             ),
             GoRoute(

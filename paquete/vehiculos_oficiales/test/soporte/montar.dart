@@ -42,9 +42,16 @@ class _EnfoqueDePrueba extends StatelessWidget {
   Widget build(BuildContext context) => const SizedBox.shrink();
 }
 
-/// El enfoque que la pantalla le pasó a [mapaDePrueba] (nulo si no pidió mirar a ningún lado).
-Enfoque? enfoqueDelMapa(WidgetTester tester) =>
-    tester.widget<_EnfoqueDePrueba>(find.byType(_EnfoqueDePrueba, skipOffstage: false)).enfoque;
+/// El enfoque que la pantalla le pasó a [mapaDePrueba] (nulo si no pidió mirar a ningún lado). Con otra
+/// pantalla debajo (también con mapa), [en] elige la de arriba.
+Enfoque? enfoqueDelMapa(WidgetTester tester, {Finder? en}) {
+  final enfoques = find.byType(_EnfoqueDePrueba, skipOffstage: false);
+  return tester
+      .widget<_EnfoqueDePrueba>(
+        en == null ? enfoques : find.descendant(of: en, matching: enfoques, skipOffstage: false),
+      )
+      .enfoque;
+}
 
 class _LineasDePrueba extends StatelessWidget {
   const _LineasDePrueba(this.lineas);

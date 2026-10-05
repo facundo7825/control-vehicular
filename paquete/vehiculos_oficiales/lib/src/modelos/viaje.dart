@@ -54,7 +54,19 @@ enum ModoViaje {
   );
 }
 
+/// Quién canceló un viaje (`cancelado_por`).
+enum CanceladoPor {
+  solicitante,
+  admin;
+
+  /// Nulo si no viene (backend viejo) o es un valor que la app no conoce.
+  static CanceladoPor? desde(Object? valor) => values.where((e) => e.name == valor).firstOrNull;
+}
+
 /// `ViajeResource` del backend (también es el payload del evento `viaje.actualizado`).
+///
+/// [pedidoEn], [canceladoPor], [motivoCancelacion] y [metrosRecorridos] llegaron después: un backend
+/// viejo no los manda y quedan nulos.
 class Viaje {
   const Viaje({
     required this.id,
@@ -75,6 +87,10 @@ class Viaje {
     this.iniciadoEn,
     this.finalizadoEn,
     this.canceladoEn,
+    this.pedidoEn,
+    this.canceladoPor,
+    this.motivoCancelacion,
+    this.metrosRecorridos,
   });
 
   factory Viaje.fromJson(Json j) => Viaje(
@@ -96,6 +112,10 @@ class Viaje {
     iniciadoEn: leerFechaOpcional(j['iniciado_en']),
     finalizadoEn: leerFechaOpcional(j['finalizado_en']),
     canceladoEn: leerFechaOpcional(j['cancelado_en']),
+    pedidoEn: leerFechaOpcional(j['pedido_en']),
+    canceladoPor: CanceladoPor.desde(j['cancelado_por']),
+    motivoCancelacion: j['motivo_cancelacion'] as String?,
+    metrosRecorridos: j['metros_recorridos'] as int?,
   );
 
   final int id;
@@ -116,6 +136,30 @@ class Viaje {
   final DateTime? iniciadoEn;
   final DateTime? finalizadoEn;
   final DateTime? canceladoEn;
+
+  /// Cuándo se pidió (`created_at`).
+  final DateTime? pedidoEn;
+  final CanceladoPor? canceladoPor;
+  final String? motivoCancelacion;
+
+  /// Se calcula al finalizar.
+  final int? metrosRecorridos;
+}
+
+/// `GET /viajes/{id}/recorrido`: `{puntos: [[lat,lng],…], disponible}`. `disponible` es falso si no hay
+/// puntos o el viaje terminó hace más de los días de retención del recorrido.
+class RecorridoReal {
+  const RecorridoReal({required this.puntos, required this.disponible});
+
+  factory RecorridoReal.fromJson(Json j) => RecorridoReal(
+    puntos: List.unmodifiable([
+      for (final p in j['puntos'] as List) Coordenada(leerDouble((p as List)[0]), leerDouble(p[1])),
+    ]),
+    disponible: j['disponible'] as bool,
+  );
+
+  final List<Coordenada> puntos;
+  final bool disponible;
 }
 
 /// Oferta de viaje para un chofer. Llega como `{id, vence_en, viaje}` (`GET /viajes/actual`,

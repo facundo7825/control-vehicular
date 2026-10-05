@@ -126,6 +126,17 @@ void main() {
     },
   );
 
+  test('el recorrido real sale por GET viajes/{id}/recorrido; uno ilegible es ErrorServidor', () async {
+    http.responder('GET', 'viajes/7/recorrido', 200, p.recorrido);
+    http.responder('GET', 'viajes/8/recorrido', 200, '{"puntos":[[1]],"disponible":true}');
+
+    final r = await api.recorridoViaje(7);
+
+    expect(r.disponible, isTrue);
+    expect(r.puntos, hasLength(3));
+    await expectLater(api.recorridoViaje(8), throwsA(isA<ErrorServidor>()));
+  });
+
   test('sin red es SinConexion; un 500 o una respuesta que no es JSON es ErrorServidor', () async {
     http.sinRed('GET', 'choferes');
     http.responder('GET', 'viajes/actual', 500, '{"message":"Server Error"}');
