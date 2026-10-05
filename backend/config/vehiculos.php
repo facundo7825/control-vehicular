@@ -65,6 +65,12 @@ return [
         'user_agent' => env('RUTAS_USER_AGENT', env('LUGARES_USER_AGENT', 'VehiculosOficiales/1.0 (+https://github.com/facundo7825/control-vehicular)')),
     ],
 
+    // Fichajes del control de asistencia (POST /api/asistencia/eventos, encabezado X-Clave-Asistencia).
+    // Sin clave la integración está apagada y el endpoint responde 503.
+    'asistencia' => [
+        'clave' => env('ASISTENCIA_CLAVE'),
+    ],
+
     'notificaciones' => [
         // registro | fcm
         'driver' => env('NOTIFICACIONES_DRIVER', 'registro'),

@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\AgendaController;
+use App\Http\Controllers\AsistenciaController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ConfiguracionController;
 use App\Http\Controllers\EtaController;
@@ -13,9 +14,14 @@ use App\Http\Controllers\RutaController;
 use App\Http\Controllers\TurnoController;
 use App\Http\Controllers\UbicacionController;
 use App\Http\Controllers\ViajeController;
+use App\Http\Middleware\AsegurarClaveAsistencia;
 use Illuminate\Support\Facades\Route;
 
 Route::post('/auth/intercambio', [AuthController::class, 'intercambio']);
+
+// Entre servidores: fichajes del sistema de asistencia del PJ (clave propia, sin usuario).
+Route::post('/asistencia/eventos', AsistenciaController::class)
+    ->middleware(['throttle:asistencia', AsegurarClaveAsistencia::class]);
 
 Route::middleware(['auth:sanctum', 'activo'])->group(function () {
     Route::get('/yo', [AuthController::class, 'yo']);

@@ -8,6 +8,7 @@ use Filament\Models\Contracts\FilamentUser;
 use Filament\Models\Contracts\HasName;
 use Filament\Panel;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
@@ -19,13 +20,19 @@ class Usuario extends Authenticatable implements FilamentUser, HasName
 
     protected $table = 'usuarios';
 
-    protected $fillable = ['id_externo', 'nombre', 'cargo', 'rol', 'telefono', 'token_push', 'activo', 'email', 'password'];
+    protected $fillable = ['id_externo', 'nombre', 'cargo', 'rol', 'telefono', 'token_push', 'activo', 'email', 'password', 'vehiculo_habitual_id'];
 
     protected $hidden = ['token_push', 'password', 'remember_token'];
 
     protected function casts(): array
     {
         return ['rol' => RolUsuario::class, 'activo' => 'boolean', 'password' => 'hashed'];
+    }
+
+    /** Vehículo con el que se abre el turno al fichar la entrada (ServicioAsistencia). */
+    public function vehiculoHabitual(): BelongsTo
+    {
+        return $this->belongsTo(Vehiculo::class, 'vehiculo_habitual_id');
     }
 
     public function turnos(): HasMany

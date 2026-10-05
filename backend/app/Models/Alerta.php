@@ -17,6 +17,9 @@ class Alerta extends Model
     /** Un viaje (inmediato o reserva) quedó sin chofer. Se resuelve sola al salir de sin_chofer (MaquinaEstadosViaje). */
     public const VIAJE_SIN_CHOFER = 'viaje_sin_chofer';
 
+    /** El chofer fichó la entrada pero su vehículo habitual falta, está inactivo o en uso (ServicioAsistencia). */
+    public const ASISTENCIA_SIN_VEHICULO = 'asistencia_sin_vehiculo';
+
     protected $table = 'alertas';
 
     protected $fillable = ['tipo', 'viaje_id', 'chofer_id', 'mensaje', 'resuelta_en'];

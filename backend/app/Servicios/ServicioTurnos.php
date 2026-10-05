@@ -52,14 +52,35 @@ class ServicioTurnos
 
     public function finalizar(Usuario $chofer): Turno
     {
-        $turno = DB::transaction(function () use ($chofer) {
+        return $this->cerrar($chofer, soloPendiente: false);
+    }
+
+    /**
+     * Cierra el turno que quedó con cierre pendiente (fichó la salida con un viaje activo) si ya no tiene
+     * viajes activos. Devuelve null, sin lanzar, si no corresponde: no hay turno, no está pendiente (una
+     * entrada posterior lo anuló) o todavía tiene un viaje activo. Se decide con la fila del chofer bloqueada.
+     */
+    public function finalizarPendiente(Usuario $chofer): ?Turno
+    {
+        return $this->cerrar($chofer, soloPendiente: true);
+    }
+
+    private function cerrar(Usuario $chofer, bool $soloPendiente): ?Turno
+    {
+        $turno = DB::transaction(function () use ($chofer, $soloPendiente) {
             // Mismo bloqueo que toma Asignador::asignar: no se puede cerrar el turno mientras se le asigna un viaje.
             Usuario::whereKey($chofer->id)->lockForUpdate()->first();
 
-            $turno = $chofer->turnoAbierto()->first()
-                ?? throw new ReglaNegocio('No tenés un turno abierto.');
+            $turno = $chofer->turnoAbierto()->first();
+            $conViaje = Viaje::activosDeChofer($chofer->id)->exists();
 
-            if (Viaje::activosDeChofer($chofer->id)->exists()) {
+            if ($soloPendiente && (! $turno?->cierre_pendiente_en || $conViaje)) {
+                return null;
+            }
+            if (! $turno) {
+                throw new ReglaNegocio('No tenés un turno abierto.');
+            }
+            if ($conViaje) {
                 throw new ReglaNegocio('Finalizá el viaje en curso antes de cerrar el turno.');
             }
 
@@ -70,7 +91,9 @@ class ServicioTurnos
             return $turno;
         }, attempts: 3);
 
-        $this->aviso->publicarSiCambio($chofer);
+        if ($turno) {
+            $this->aviso->publicarSiCambio($chofer);
+        }
 
         return $turno;
     }
