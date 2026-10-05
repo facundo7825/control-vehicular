@@ -54,6 +54,12 @@ class _HerramientasState extends State<Herramientas> {
             subtitle: const Text('Como si FCM trajera un cambio de estado'),
             onTap: () => _push.simular({'modulo': 'vehiculos_oficiales', 'tipo': 'viaje'}),
           ),
+          ListTile(
+            leading: const Icon(Icons.badge),
+            title: const Text('Simular push "turno"'),
+            subtitle: const Text('Como si el fichaje abriera o cerrara el turno del chofer'),
+            onTap: () => _push.simular({'modulo': 'vehiculos_oficiales', 'tipo': 'turno', 'estado': 'abierto'}),
+          ),
         ],
       ),
     );

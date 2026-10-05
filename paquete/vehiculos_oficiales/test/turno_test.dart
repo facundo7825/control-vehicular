@@ -11,6 +11,7 @@ import 'package:vehiculos_oficiales/src/chofer/rastreador_turno.dart';
 import 'package:vehiculos_oficiales/src/chofer/turno.dart';
 import 'package:vehiculos_oficiales/src/entorno.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
+import 'package:vehiculos_oficiales/src/push/push_modulo.dart';
 import 'package:vehiculos_oficiales/src/sesion/sesion.dart';
 import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real.dart';
 import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real_provider.dart';
@@ -25,6 +26,7 @@ void main() {
   late UbicadorFalso gps;
   late TiempoRealFalso tr;
   late AlmacenColaMemoria almacen;
+  late EntornoPrueba entorno;
 
   setUp(() {
     api = ApiChofer();
@@ -34,7 +36,8 @@ void main() {
   });
 
   ProviderContainer crear() {
-    final c = (EntornoPrueba()..almacenCola = almacen).contenedor([
+    entorno = EntornoPrueba()..almacenCola = almacen;
+    final c = entorno.contenedor([
       apiProvider.overrideWithValue(api),
       ubicadorProvider.overrideWithValue(gps),
       tiempoRealProvider.overrideWithValue(tr),
@@ -520,7 +523,8 @@ void main() {
 
         c.read(turnoProvider.notifier).finalizar();
         async.flushMicrotasks();
-        expect(async.pendingTimers, isEmpty);
+        // Solo queda el sondeo del turno (sin turno se pregunta cada 30 s).
+        expect(async.pendingTimers.map((t) => t.duration), [TurnoNotifier.intervaloSondeo]);
         async.elapse(const Duration(minutes: 2));
         expect(c.read(posicionPropiaProvider).sinGps, isFalse);
       });
@@ -762,6 +766,165 @@ void main() {
         c.read(turnoProvider.notifier).finalizar();
         async.flushMicrotasks();
         expect(c.read(turnoProvider).value, isNull);
+      });
+    });
+  });
+
+  group('turno abierto o cerrado por un fichaje', () {
+    int consultasTurno() => api.llamadas.where((l) => l == 'turnoActual').length;
+
+    void pushTurno(String estado) =>
+        entorno.puente.controlador.add({'modulo': 'vehiculos_oficiales', 'tipo': 'turno', 'estado': estado});
+
+    test('sin turno pregunta cada 30 s y, cuando aparece uno, lo adopta, arranca el GPS y deja de preguntar', () {
+      fakeAsync((async) {
+        final c = crear();
+        async.flushMicrotasks();
+        expect(consultasTurno(), 1);
+
+        async.elapse(TurnoNotifier.intervaloSondeo);
+        expect(consultasTurno(), 2);
+        expect(c.read(turnoProvider).value, isNull);
+        expect(gps.siguiendo, isFalse);
+
+        api.turno = turnoDePrueba();
+        async.elapse(TurnoNotifier.intervaloSondeo);
+        expect(consultasTurno(), 3);
+        expect(c.read(turnoProvider).value!.id, 1);
+        expect(gps.siguiendo, isTrue);
+        expect(gps.pedidosDePermiso, 1);
+
+        async.elapse(TurnoNotifier.intervaloSondeo * 4);
+        expect(consultasTurno(), 3);
+      });
+    });
+
+    test('con el turno abierto no pregunta; al finalizarlo vuelve a preguntar', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        final c = crear();
+        async.flushMicrotasks();
+
+        async.elapse(TurnoNotifier.intervaloSondeo * 3);
+        expect(consultasTurno(), 1);
+
+        c.read(turnoProvider.notifier).finalizar();
+        async.flushMicrotasks();
+        async.elapse(TurnoNotifier.intervaloSondeo);
+        expect(consultasTurno(), 2);
+      });
+    });
+
+    test('un error al preguntar no corta el sondeo ni deja la pantalla en error', () {
+      fakeAsync((async) {
+        final c = crear();
+        async.flushMicrotasks();
+
+        api.errorTurnoActual = const SinConexion();
+        async.elapse(TurnoNotifier.intervaloSondeo);
+        expect(c.read(turnoProvider).hasError, isFalse);
+        expect(c.read(turnoProvider).value, isNull);
+
+        api
+          ..errorTurnoActual = null
+          ..turno = turnoDePrueba();
+        async.elapse(TurnoNotifier.intervaloSondeo);
+        expect(c.read(turnoProvider).value!.id, 1);
+      });
+    });
+
+    test('cerrar el módulo corta el sondeo', () {
+      fakeAsync((async) {
+        final c = crear();
+        async.flushMicrotasks();
+
+        c.dispose();
+        async.flushMicrotasks();
+        expect(async.pendingTimers, isEmpty);
+      });
+    });
+
+    test('el push "turno abierto" adopta el turno y arranca el GPS sin esperar el sondeo', () {
+      fakeAsync((async) {
+        final c = crear();
+        c.read(pushModuloProvider);
+        async.flushMicrotasks();
+
+        api.turno = turnoDePrueba();
+        pushTurno('abierto');
+        async.flushMicrotasks();
+
+        expect(c.read(turnoProvider).value!.id, 1);
+        expect(gps.siguiendo, isTrue);
+      });
+    });
+
+    test('el push "turno cerrado" corta el GPS y vuelve a "sin turno"', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        final c = crear();
+        c.read(pushModuloProvider);
+        async.flushMicrotasks();
+        expect(gps.siguiendo, isTrue);
+
+        api.turno = null;
+        pushTurno('cerrado');
+        async.flushMicrotasks();
+
+        expect(c.read(turnoProvider).value, isNull);
+        expect(gps.siguiendo, isFalse);
+        expect(c.read(posicionPropiaProvider).punto, isNull);
+      });
+    });
+
+    test('un push del mismo turno abierto no reabre el GPS', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        final c = crear();
+        c.read(pushModuloProvider);
+        async.flushMicrotasks();
+
+        pushTurno('abierto');
+        async.flushMicrotasks();
+
+        expect(consultasTurno(), 2);
+        expect(gps.intervalos, hasLength(1));
+        expect(gps.siguiendo, isTrue);
+      });
+    });
+  });
+
+  group('cambiar vehículo', () {
+    test('cambia el vehículo del turno sin cortar el rastreo', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        final c = crear();
+        async.flushMicrotasks();
+
+        c.read(turnoProvider.notifier).cambiarVehiculo(2);
+        async.flushMicrotasks();
+
+        expect(api.llamadas, contains('cambiar:2'));
+        expect(c.read(turnoProvider).value!.vehiculo!.patente, 'AC456EF');
+        expect(gps.intervalos, hasLength(1));
+        expect(gps.siguiendo, isTrue);
+      });
+    });
+
+    test('un 422 llega a la pantalla y el turno sigue con su vehículo', () {
+      fakeAsync((async) {
+        api
+          ..turno = turnoDePrueba()
+          ..errorCambiar = const ErrorNegocio('No podés cambiar el vehículo durante un viaje.');
+        final c = crear();
+        async.flushMicrotasks();
+
+        Object? error;
+        c.read(turnoProvider.notifier).cambiarVehiculo(2).catchError((Object e) => error = e);
+        async.flushMicrotasks();
+
+        expect(error, isA<ErrorNegocio>());
+        expect(c.read(turnoProvider).value!.vehiculo!.patente, 'AB123CD');
       });
     });
   });

@@ -20,6 +20,21 @@ const turnoActual =
 const turnoFinalizado =
     r'''{"id":1,"chofer_id":2,"vehiculo_id":1,"inicio":"2026-10-01T12:00:00.000000Z","fin":"2026-10-01T12:00:00.000000Z","origen":"manual","created_at":"2026-10-01T12:00:00.000000Z","updated_at":"2026-10-01T12:00:00.000000Z"}''';
 
+// GET /api/turnos/actual (abierto por un fichaje, con la salida fichada durante un viaje) -> 200
+const turnoPorFichaje =
+    r'''{"turno":{"id":4,"chofer_id":2,"vehiculo_id":1,"inicio":"2026-10-01T12:00:00.000000Z","fin":null,"origen":"asistencia","cierre_pendiente_en":"2026-10-01T18:00:00.000000Z","created_at":"2026-10-01T12:00:00.000000Z","updated_at":"2026-10-01T12:00:00.000000Z","vehiculo":{"id":1,"patente":"AB123CD","marca":"Toyota","modelo":"Corolla","color":"Blanco","activo":true,"created_at":"2026-10-01T12:00:00.000000Z","updated_at":"2026-10-01T12:00:00.000000Z"}}}''';
+
+// GET /api/vehiculos/disponibles (con el turno abierto: el propio no aparece) -> 200
+const otroVehiculoDisponible =
+    r'''[{"id":2,"patente":"AC456EF","marca":"Ford","modelo":"Ranger","color":"Gris","activo":true,"created_at":"2026-10-01T12:00:00.000000Z","updated_at":"2026-10-01T12:00:00.000000Z"}]''';
+
+// POST /api/turnos/actual/vehiculo {"vehiculo_id":2} -> 200 (contrato del plan: `{turno}` como GET /turnos/actual)
+const turnoConOtroVehiculo =
+    r'''{"turno":{"id":1,"chofer_id":2,"vehiculo_id":2,"inicio":"2026-10-01T12:00:00.000000Z","fin":null,"origen":"manual","cierre_pendiente_en":null,"created_at":"2026-10-01T12:00:00.000000Z","updated_at":"2026-10-01T12:05:00.000000Z","vehiculo":{"id":2,"patente":"AC456EF","marca":"Ford","modelo":"Ranger","color":"Gris","activo":true,"created_at":"2026-10-01T12:00:00.000000Z","updated_at":"2026-10-01T12:00:00.000000Z"}}}''';
+
+// POST /api/turnos/actual/vehiculo con un viaje activo -> 422
+const cambioConViaje = r'''{"message":"No podés cambiar el vehículo durante un viaje."}''';
+
 // POST /api/turnos con el vehículo tomado -> 422
 const vehiculoEnUso = r'''{"message":"El vehículo está en uso por otro chofer."}''';
 

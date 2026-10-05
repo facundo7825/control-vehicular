@@ -447,6 +447,42 @@ void main() {
       });
     });
 
+    group('push del turno (fichaje)', () {
+      void pushTurno(String estado) =>
+          e.puente.controlador.add({'modulo': 'vehiculos_oficiales', 'tipo': 'turno', 'estado': estado});
+
+      test('en segundo plano sale la notificación de cada estado, sin sonido', () {
+        fakeAsync((async) {
+          libre(async);
+          binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+
+          pushTurno('abierto');
+          pushTurno('sin_vehiculo');
+          pushTurno('cerrado');
+          pushTurno('otro'); // desconocido: nada
+          async.flushMicrotasks();
+
+          expect(e.notificaciones.mostradas, [
+            ('Tu turno empezó', 'Abrí la app para compartir tu ubicación'),
+            ('Fichaste la entrada', 'Abrí la app y elegí el vehículo para empezar el turno'),
+            ('Tu turno terminó', 'Se registró tu salida.'),
+          ]);
+          expect(sonados(), isEmpty);
+        });
+      });
+
+      test('en primer plano no sale notificación: la pantalla ya cambia sola', () {
+        fakeAsync((async) {
+          libre(async);
+
+          pushTurno('abierto');
+          async.flushMicrotasks();
+
+          expect(e.notificaciones.mostradas, isEmpty);
+        });
+      });
+    });
+
     test('la notificación de la oferta tiene id fijo y se quita al cortar el timbre', () {
       fakeAsync((async) {
         final c = libre(async);

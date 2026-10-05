@@ -30,6 +30,20 @@ void main() {
     expect(finalizado.abierto, isFalse);
   });
 
+  test('turno: origen y cierre pendiente, opcionales', () {
+    final fichaje = Turno.fromJson(leerMapa(p.json(c.turnoPorFichaje)['turno']));
+    expect(fichaje.porFichaje, isTrue);
+    expect(fichaje.cierrePendienteEn, DateTime.utc(2026, 10, 1, 18));
+
+    final manual = Turno.fromJson(leerMapa(p.json(c.turnoActual)['turno']));
+    expect(manual.porFichaje, isFalse);
+    expect(manual.cierrePendienteEn, isNull);
+
+    // Un backend anterior no manda ninguno de los dos.
+    final viejo = Turno.fromJson(p.json(c.turnoActual)['turno'] as Json..remove('origen'));
+    expect(viejo.porFichaje, isFalse);
+  });
+
   test('agenda: reservas y solicitudes con su vencimiento', () {
     final a = Agenda.fromJson(p.json(c.agenda));
 

@@ -63,8 +63,19 @@ final turnoProvider = AsyncNotifierProvider<TurnoNotifier, Turno?>(TurnoNotifier
 
 /// Turno del chofer (spec 7, chofer 1 y 6). Mientras está abierto, y solo entonces, corre un [RastreadorTurno]
 /// (spec 10). Es el único dueño del rastreo: lo arranca, lo detiene y lo libera en `onDispose`.
+///
+/// El turno también lo abre y lo cierra el fichaje de asistencia: el push `turno` llama a [refrescar] y, sin
+/// turno, se pregunta cada [intervaloSondeo] por si el push no llega.
 class TurnoNotifier extends AsyncNotifier<Turno?> {
+  static const intervaloSondeo = Duration(seconds: 30);
+
   RastreadorTurno? _rastreador;
+
+  /// Solo corre sin turno (la pantalla "Iniciar turno").
+  Timer? _sondeo;
+
+  /// La consulta de [refrescar] en curso: un push y el sondeo juntos hacen una sola.
+  Future<void>? _refresco;
 
   /// Cambia al detener el rastreo o descartar el notifier: un arranque que quedó esperando la
   /// configuración no arranca un rastreo viejo.
@@ -76,6 +87,8 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
       // Al cerrar el módulo (o recargar el turno) se corta el GPS. En onDispose no se puede usar `ref`.
       // Lo que no se llegó a guardar se guarda: el turno sigue abierto y se retoma al volver.
       _generacion++;
+      _sondeo?.cancel();
+      _sondeo = null;
       final r = _rastreador;
       _rastreador = null;
       r
@@ -91,19 +104,68 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
     final turno = await ref.read(apiProvider).turnoActual();
     // Se cerró el módulo (o se recargó el turno) mientras tanto: no se pide permiso ni se abre el GPS.
     if (!ref.mounted) return turno;
+    _ajustarSondeo(sinTurno: turno == null);
     if (turno == null) {
       await _borrarCola(); // lo guardado es de un turno que ya se cerró (spec 10)
     } else {
-      // Turno abierto de antes (la app se cerró o se reabrió el módulo): se retoma el rastreo con lo que
-      // quedó sin enviar. Si el permiso ya no está, el GPS falla y el mapa lo avisa.
-      await ref.read(ubicadorProvider).pedirPermiso();
-      if (!ref.mounted) return turno;
-      unawaited(ref.read(notificacionesLocalesProvider).pedirPermiso());
-      final pendientes = await _leerCola(turno.id);
-      if (!ref.mounted) return turno;
-      await _iniciarRastreo(turno, pendientes: pendientes);
+      // Turno abierto de antes (la app se cerró o se reabrió el módulo).
+      await _retomar(turno);
     }
     return turno;
+  }
+
+  /// Un turno abierto que la app no inició (de antes, o abierto por un fichaje): se retoma el rastreo con lo
+  /// que quedó sin enviar. Si el permiso ya no está, el GPS falla y el mapa lo avisa.
+  Future<void> _retomar(Turno turno) async {
+    await ref.read(ubicadorProvider).pedirPermiso();
+    if (!ref.mounted) return;
+    unawaited(ref.read(notificacionesLocalesProvider).pedirPermiso());
+    final pendientes = await _leerCola(turno.id);
+    if (!ref.mounted) return;
+    await _iniciarRastreo(turno, pendientes: pendientes);
+  }
+
+  /// Vuelve a preguntar el turno: lo llaman el push `turno` (un fichaje lo abrió o lo cerró) y el sondeo.
+  /// Si apareció un turno arranca el GPS como al abrir la app; si se cerró, lo corta; si es el mismo, no
+  /// toca el rastreo. Nunca lanza: un error de red se ignora y se reintenta en el próximo sondeo.
+  Future<void> refrescar() => _refresco ??= _refrescar().whenComplete(() => _refresco = null);
+
+  Future<void> _refrescar() async {
+    if (state.isLoading) return; // lo está leyendo build: ya trae lo último
+    if (!state.hasValue) return ref.invalidateSelf(); // la pantalla muestra un error: se reintenta
+    final antes = state.value;
+    final Turno? turno;
+    try {
+      turno = await ref.read(apiProvider).turnoActual();
+    } on ErrorApi {
+      return;
+    }
+    // Mientras tanto el chofer inició o finalizó el turno: su resultado manda.
+    if (!ref.mounted || state.value?.id != antes?.id) return;
+    if (turno?.id == antes?.id) {
+      if (turno != null) state = AsyncData(turno);
+      return;
+    }
+    if (antes != null) _detenerRastreo();
+    state = AsyncData(turno);
+    _ajustarSondeo(sinTurno: turno == null);
+    if (turno != null) await _retomar(turno);
+  }
+
+  /// Cambia el vehículo del turno abierto, sin tocar el rastreo. Los 422 (vehículo en uso, viaje activo)
+  /// llegan a la pantalla y el turno sigue como estaba.
+  Future<void> cambiarVehiculo(int vehiculoId) async {
+    final turno = await ref.read(apiProvider).cambiarVehiculo(vehiculoId);
+    if (ref.mounted) state = AsyncData(turno);
+  }
+
+  void _ajustarSondeo({required bool sinTurno}) {
+    if (sinTurno) {
+      _sondeo ??= Timer.periodic(intervaloSondeo, (_) => unawaited(refrescar()));
+    } else {
+      _sondeo?.cancel();
+      _sondeo = null;
+    }
   }
 
   /// Spec 7, chofer 1. Sin permiso de ubicación no se llama a la API y se devuelve el motivo. Los errores
@@ -115,6 +177,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
     final turno = await ref.read(apiProvider).iniciarTurno(vehiculoId);
     if (!ref.mounted) return permiso;
     state = AsyncData(turno);
+    _ajustarSondeo(sinTurno: false);
     // Android 13+: sin este permiso las ofertas con la app en segundo plano no se ven.
     unawaited(ref.read(notificacionesLocalesProvider).pedirPermiso());
     await _iniciarRastreo(turno);
@@ -133,6 +196,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
     if (!ref.mounted) return;
     _detenerRastreo();
     state = const AsyncData(null);
+    _ajustarSondeo(sinTurno: true);
   }
 
   /// "Reintentar" del aviso de GPS: vuelve a pedir permiso y reabre el GPS (un stream que falló no se
@@ -210,9 +274,12 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
       final turno = await ref.read(apiProvider).turnoActual();
       if (!ref.mounted) return;
       state = AsyncData(turno);
+      _ajustarSondeo(sinTurno: turno == null);
       if (turno != null) await _iniciarRastreo(turno);
     } on ErrorApi {
-      if (ref.mounted) state = const AsyncData(null);
+      if (!ref.mounted) return;
+      state = const AsyncData(null);
+      _ajustarSondeo(sinTurno: true);
     }
   }
 }

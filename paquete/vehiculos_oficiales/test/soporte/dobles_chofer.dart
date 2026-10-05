@@ -31,6 +31,7 @@ class ApiChofer extends ApiFalsa {
   ErrorApi? errorTurnoActual;
   ErrorApi? errorIniciar;
   ErrorApi? errorFinalizar;
+  ErrorApi? errorCambiar;
 
   /// Lotes recibidos por `POST /ubicacion` (también los que fallaron).
   final lotes = <List<PuntoGps>>[];
@@ -96,6 +97,14 @@ class ApiChofer extends ApiFalsa {
     if (errorFinalizar != null) throw errorFinalizar!;
     turno = null;
     return Turno.fromJson(p.json(c.turnoFinalizado));
+  }
+
+  /// Responde el turno abierto con el vehículo 2 (Ford Ranger).
+  @override
+  Future<Turno> cambiarVehiculo(int vehiculoId) async {
+    llamadas.add('cambiar:$vehiculoId');
+    if (errorCambiar != null) throw errorCambiar!;
+    return turno = Turno.fromJson(leerMapa(p.json(c.turnoConOtroVehiculo)['turno']));
   }
 
   @override

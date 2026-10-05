@@ -46,6 +46,32 @@ void main() {
       expect(gps.siguiendo, isTrue);
     });
 
+    testWidgets('un turno abierto por fichaje aparece solo en 30 s, aunque no llegue el push', (tester) async {
+      e.http.responder('GET', 'turnos/actual', 200, c.turnoPorFichaje);
+
+      await montarChofer(tester, e, ubicador: gps);
+      expect(find.byType(IniciarTurno), findsOneWidget);
+      expect(find.textContaining('Si fichaste la entrada'), findsOneWidget);
+
+      await tester.pump(const Duration(seconds: 30));
+      await esperar(tester);
+
+      expect(find.byType(MapaChofer), findsOneWidget);
+      expect(find.textContaining('Turno por fichaje'), findsOneWidget);
+      expect(gps.siguiendo, isTrue);
+    });
+
+    testWidgets('con el push "turno abierto" pasa al mapa enseguida', (tester) async {
+      e.http.responder('GET', 'turnos/actual', 200, c.turnoPorFichaje);
+
+      await montarChofer(tester, e, ubicador: gps);
+      e.puente.controlador.add({'modulo': 'vehiculos_oficiales', 'tipo': 'turno', 'estado': 'abierto'});
+      await esperar(tester);
+
+      expect(find.byType(MapaChofer), findsOneWidget);
+      expect(gps.siguiendo, isTrue);
+    });
+
     testWidgets('permiso denegado: lo explica, ofrece los ajustes y no llama a la API', (tester) async {
       gps.permiso = PermisoUbicacion.denegadoParaSiempre;
 

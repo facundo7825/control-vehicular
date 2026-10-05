@@ -49,10 +49,21 @@ class AvisosViaje extends Notifier<void> {
     _usuario = ref.watch(usuarioProvider);
     ref.onDispose(_cortarBucle);
     ref.listen(viajeActualProvider, (antes, ahora) => _alCambiar(antes?.value, ahora.value));
-    if (!_usuario.esChofer) {
-      final escucha = ref.watch(pushModuloProvider).avisos.listen(_alPush);
-      ref.onDispose(() => unawaited(escucha.cancel()));
-    }
+    final escucha = ref.watch(pushModuloProvider).avisos.listen(_usuario.esChofer ? _alPushChofer : _alPush);
+    ref.onDispose(() => unawaited(escucha.cancel()));
+  }
+
+  /// Chofer: el fichaje abrió o cerró el turno. En primer plano la pantalla cambia sola; en segundo plano
+  /// sale la notificación (sin sonido: no es algo que haya que atender ya).
+  void _alPushChofer(AvisoPush aviso) {
+    if (aviso.tipo != 'turno') return;
+    final (titulo, texto) = switch (aviso.estado) {
+      'abierto' => ('Tu turno empezó', 'Abrí la app para compartir tu ubicación'),
+      'sin_vehiculo' => ('Fichaste la entrada', 'Abrí la app y elegí el vehículo para empezar el turno'),
+      'cerrado' => ('Tu turno terminó', 'Se registró tu salida.'),
+      _ => (null, null),
+    };
+    if (titulo != null && texto != null) _notificar(titulo, texto);
   }
 
   /// Chofer: tocó "Aceptar" o "Rechazar" en la oferta [ofertaId]; el timbre se corta ya, sin esperar la

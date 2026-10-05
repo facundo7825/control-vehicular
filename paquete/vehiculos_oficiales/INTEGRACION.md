@@ -68,7 +68,7 @@ class PuenteFcm implements PuenteNotificaciones {
 
 - `token()`: token FCM del dispositivo (o `null`). El módulo lo registra en el backend al abrirse. Si falla, sigue sin push.
 - `mensajes`: el `data` de cada mensaje recibido, **como stream broadcast** (`StreamController.broadcast()`). Un stream de una sola escucha falla desde la segunda apertura del módulo.
-- Los mensajes del módulo traen en `data` (todo string): `modulo = vehiculos_oficiales`, `tipo` (`oferta`, `oferta_reserva`, `viaje`, `recordatorio_reserva`, `alerta_reserva`) y, según el tipo, `viaje_id`, `oferta_id` y `estado`. Los que no tienen `modulo = vehiculos_oficiales` el módulo los ignora, así que se le pueden reenviar todos.
+- Los mensajes del módulo traen en `data` (todo string): `modulo = vehiculos_oficiales`, `tipo` (`oferta`, `oferta_reserva`, `viaje`, `recordatorio_reserva`, `alerta_reserva`, `turno`) y, según el tipo, `viaje_id`, `oferta_id` y `estado` (en `turno`: `abierto`, `cerrado` o `sin_vehiculo`). Los que no tienen `modulo = vehiculos_oficiales` el módulo los ignora, así que se le pueden reenviar todos.
 - El backend manda cada push con `notification` (título y texto) y prioridad alta en Android: con la app en segundo plano la notificación la muestra el sistema. Qué hacer al tocarla (por ejemplo, abrir el módulo) lo decide la app principal.
 - En Android 13 o más nuevo hace falta el permiso `POST_NOTIFICATIONS` en tiempo de ejecución: sin él no se ven ni los push, ni la notificación fija del turno del chofer, ni los avisos locales del módulo. El módulo lo pide al **iniciar el turno** (chofer) y al **pedir un viaje o una reserva** (solicitante); si la app principal ya lo pidió antes (por ejemplo con `FirebaseMessaging.instance.requestPermission()`), el sistema no vuelve a preguntar.
 
@@ -201,3 +201,14 @@ UNUserNotificationCenter.current().delegate = self as? UNUserNotificationCenterD
 - Con permiso "mientras se usa la app" en iOS el sistema puede cortar la ubicación con la pantalla bloqueada; "Siempre" (`NSLocationAlwaysAndWhenInUseUsageDescription`) es lo que la garantiza.
 - Los puntos que no se pudieron mandar (sin red) salen en orden al volver la conexión. Además de tenerlos en memoria, el módulo los guarda en un archivo (`vehiculos_oficiales/cola_ubicaciones.json`) en el **directorio de caché de la app** (`path_provider`), que iOS y Android no incluyen en las copias de seguridad; así sobreviven a que el sistema cierre la app a mitad del turno y se retoman al volver a abrir el módulo. El archivo se borra al terminar el turno, al vencer la sesión (401) y al entrar alguien que no es chofer. En web no se guarda nada.
 - Toda la comunicación es con el backend de Vehículos Oficiales (`/api` y Reverb); el módulo no usa otros servicios de la app principal.
+
+## 7. Turno por fichaje de asistencia
+
+- El turno del chofer **se abre al fichar la entrada y se cierra al fichar la salida** (el sistema de asistencia del PJ le avisa al backend; ver `docs/ASISTENCIA.md`). Al abrirse usa el vehículo habitual del chofer, que se carga en el panel. Si ese día usa otro, en el mapa toca el vehículo → "Cambiar vehículo" (no durante un viaje).
+- La app se entera por el push `tipo = turno` y, mientras el chofer está en "Iniciar turno", preguntando cada 30 s (por si el push no llega). Al abrirse el turno el GPS arranca solo, como al reabrir el módulo con un turno abierto; al cerrarse, se corta. Si fichó sin vehículo habitual libre, el push le pide elegir uno y el turno se inicia a mano como siempre.
+- Si ficha la salida durante un viaje, el turno se cierra solo al terminar ese viaje (el mapa lo avisa).
+- Para que el GPS arranque, el módulo tiene que estar abierto (ver 6). Con el módulo cerrado el chofer ve el push "Tu turno empezó" y, al abrir el módulo, el turno ya está abierto.
+
+### Extensión prevista (no implementada): fichar desde el celular
+
+Cuando el fichaje se haga desde la app móvil, el módulo expondría una función pública (por ejemplo `VehiculosOficiales.fichar(context, tipo: entrada | salida, ...)`) que llame a un endpoint de fichaje del chofer en el backend. Ese endpoint usaría la misma lógica que los eventos del sistema de asistencia (`ServicioAsistencia`), así que el turno se abriría y cerraría igual. La app principal decidiría desde dónde se ficha (su propia pantalla de asistencia, por ejemplo) y el módulo no necesitaría cambiar su pantalla de turno.
