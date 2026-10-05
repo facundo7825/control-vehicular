@@ -1,14 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../api/reloj_servidor.dart';
 import '../../mapa/mapa.dart';
 import '../../modelos/modelos.dart';
 import '../../solicitante/mis_viajes.dart';
 import '../comunes/comunes.dart';
-
-/// Días que el backend guarda el recorrido de un viaje (`retencion_recorrido_dias`, spec 10).
-const _diasRetencionRecorrido = 90;
 
 /// Detalle de un viaje del historial del solicitante: el recorrido real en el mapa, chofer, vehículo,
 /// horarios, duración, km y, si se canceló, quién y por qué.
@@ -49,20 +45,20 @@ class _Contenido extends ConsumerWidget {
   final Viaje viaje;
 
   /// La nota debajo del mapa cuando no hay recorrido para dibujar; nula si lo hay o si falló al pedirlo.
-  String? _notaRecorrido(RecorridoReal? recorrido, DateTime ahora) {
+  String? _notaRecorrido(RecorridoReal? recorrido) {
     if (recorrido == null || recorrido.disponible) return null;
-    final terminado = viaje.finalizadoEn ?? viaje.canceladoEn;
-    if (terminado != null && ahora.difference(terminado).inDays >= _diasRetencionRecorrido) {
-      return 'El recorrido ya no está disponible (se conserva $_diasRetencionRecorrido días)';
+    if (recorrido.vencido) {
+      final dias = recorrido.retencionDias;
+      return 'El recorrido ya no está disponible${dias == null ? '' : ' (se conserva $dias días)'}.';
     }
-    return 'Este viaje no tiene recorrido registrado';
+    return 'Este viaje no tiene recorrido registrado.';
   }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final recorrido = ref.watch(recorridoRealProvider(viaje.id)).value;
     final puntos = recorrido != null && recorrido.disponible ? recorrido.puntos : const <Coordenada>[];
-    final nota = _notaRecorrido(recorrido, ref.watch(relojServidorProvider).ahora());
+    final nota = _notaRecorrido(recorrido);
     final mapa = ref.watch(constructorMapaProvider);
     final texto = Theme.of(context).textTheme;
     final chofer = viaje.chofer;

@@ -134,6 +134,8 @@ void main() {
 
     expect(r.disponible, isTrue);
     expect(r.puntos, hasLength(3));
+    expect(r.vencido, isFalse);
+    expect(r.retencionDias, 90);
     await expectLater(api.recorridoViaje(8), throwsA(isA<ErrorServidor>()));
   });
 

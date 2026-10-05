@@ -121,7 +121,15 @@ class _RaizModuloState extends ConsumerState<_RaizModulo> {
                   routes: [
                     GoRoute(
                       path: 'viaje/:id',
-                      builder: (_, estado) => DetalleViaje(viajeId: int.parse(estado.pathParameters['id']!)),
+                      builder: (_, estado) {
+                        final id = int.tryParse(estado.pathParameters['id'] ?? '');
+                        return id == null
+                            ? Scaffold(
+                                appBar: AppBar(title: const Text('Detalle del viaje')),
+                                body: const Center(child: Text('Viaje no encontrado')),
+                              )
+                            : DetalleViaje(viajeId: id);
+                      },
                     ),
                   ],
                 ),

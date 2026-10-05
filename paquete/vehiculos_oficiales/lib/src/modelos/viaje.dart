@@ -146,20 +146,25 @@ class Viaje {
   final int? metrosRecorridos;
 }
 
-/// `GET /viajes/{id}/recorrido`: `{puntos: [[lat,lng],…], disponible}`. `disponible` es falso si no hay
-/// puntos o el viaje terminó hace más de los días de retención del recorrido.
+/// `GET /viajes/{id}/recorrido`: `{puntos: [[lat,lng],…], disponible, vencido, retencion_dias}`.
+/// `disponible` es falso si no hay puntos; `vencido` es verdadero solo si se purgaron por la retención
+/// (`retencion_dias`). Un backend viejo no manda los dos últimos: `vencido` es falso y `retencionDias` nulo.
 class RecorridoReal {
-  const RecorridoReal({required this.puntos, required this.disponible});
+  const RecorridoReal({required this.puntos, required this.disponible, this.vencido = false, this.retencionDias});
 
   factory RecorridoReal.fromJson(Json j) => RecorridoReal(
     puntos: List.unmodifiable([
       for (final p in j['puntos'] as List) Coordenada(leerDouble((p as List)[0]), leerDouble(p[1])),
     ]),
     disponible: j['disponible'] as bool,
+    vencido: j['vencido'] as bool? ?? false,
+    retencionDias: (j['retencion_dias'] as num?)?.toInt(),
   );
 
   final List<Coordenada> puntos;
   final bool disponible;
+  final bool vencido;
+  final int? retencionDias;
 }
 
 /// Oferta de viaje para un chofer. Llega como `{id, vence_en, viaje}` (`GET /viajes/actual`,

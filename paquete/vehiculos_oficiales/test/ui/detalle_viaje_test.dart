@@ -2,9 +2,11 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
 import 'package:vehiculos_oficiales/src/ui/comunes/comunes.dart';
 import 'package:vehiculos_oficiales/src/ui/solicitante/detalle_viaje.dart';
+import 'package:vehiculos_oficiales/src/ui/solicitante/inicio_solicitante.dart';
 import 'package:vehiculos_oficiales/src/ui/solicitante/mis_viajes.dart';
 
 import '../fixtures/payloads.dart' as p;
@@ -154,15 +156,38 @@ void main() {
     expect(find.text('origen: Origen'), findsOneWidget);
     expect(find.text('destino: Destino'), findsOneWidget);
     expect(enfoqueDelMapa(tester, en: _detalle)!.puntos, containsAll(<Coordenada>[_origen, _destino]));
-    expect(find.text('Este viaje no tiene recorrido registrado'), findsOneWidget);
+    expect(find.text('Este viaje no tiene recorrido registrado.'), findsOneWidget);
   });
 
-  testWidgets('pasada la retención: la nota de los 90 días', (tester) async {
-    final viejo = _finalizado()..['finalizado_en'] = escribirFecha(DateTime.now().subtract(const Duration(days: 120)));
-    await abrirDetalle(tester, viejo, recorrido: p.recorridoNoDisponible);
+  testWidgets('recorrido vencido: la nota con los días de retención que dice el backend', (tester) async {
+    await abrirDetalle(tester, _finalizado(), recorrido: p.recorridoVencido);
 
     expect(lineasDelMapa(tester, en: _detalle), isEmpty);
-    expect(find.text('El recorrido ya no está disponible (se conserva 90 días)'), findsOneWidget);
+    expect(find.text('El recorrido ya no está disponible (se conserva 30 días).'), findsOneWidget);
+  });
+
+  testWidgets('recorrido vencido sin retención_dias: la nota sin paréntesis', (tester) async {
+    await abrirDetalle(tester, _finalizado(), recorrido: '{"puntos":[],"disponible":false,"vencido":true}');
+
+    expect(find.text('El recorrido ya no está disponible.'), findsOneWidget);
+  });
+
+  testWidgets('un viaje viejo sin puntos pero no vencido dice que no hay recorrido registrado', (tester) async {
+    final viejo = _finalizado()..['finalizado_en'] = escribirFecha(DateTime.now().subtract(const Duration(days: 120)));
+    await abrirDetalle(tester, viejo, recorrido: '{"puntos":[],"disponible":false}');
+
+    expect(find.text('Este viaje no tiene recorrido registrado.'), findsOneWidget);
+  });
+
+  testWidgets('un id inválido en la ruta muestra "Viaje no encontrado" sin romper', (tester) async {
+    await montarModulo(tester, e);
+
+    GoRouter.of(tester.element(find.byType(InicioSolicitante))).go('/solicitante/mis-viajes/viaje/abc');
+    await esperar(tester);
+
+    expect(find.text('Viaje no encontrado'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); // se cierra el módulo
   });
 
   testWidgets('un error del recorrido no rompe la pantalla: sin línea ni nota', (tester) async {

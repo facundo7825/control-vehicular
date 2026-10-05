@@ -132,6 +132,18 @@ void main() {
     final vacio = RecorridoReal.fromJson(p.json(p.recorridoNoDisponible));
     expect(vacio.disponible, isFalse);
     expect(vacio.puntos, isEmpty);
+    expect(vacio.vencido, isFalse);
+    expect(r.retencionDias, 90);
+    final vencido = RecorridoReal.fromJson(p.json(p.recorridoVencido));
+    expect(vencido.vencido, isTrue);
+    expect(vencido.retencionDias, 30);
+  });
+
+  test('un recorrido sin vencido ni retención (payload viejo) es no vencido y sin retención', () {
+    final r = RecorridoReal.fromJson({'puntos': <dynamic>[], 'disponible': false});
+
+    expect(r.vencido, isFalse);
+    expect(r.retencionDias, isNull);
   });
 
   test('lee los choferes del mapa y aplica eventos de ubicación y estado', () {
