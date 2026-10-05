@@ -3,34 +3,23 @@
 namespace App\Mapas;
 
 use Closure;
-use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Http\Client\ConnectionException;
-use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Recorridos con OSRM (por defecto, el servidor público de demostración: solo desarrollo/demos).
- *
- * Política de uso del servidor público: User-Agent identificable y como mucho 1 pedido por segundo. Igual que
- * en la búsqueda con Nominatim, un lock serializa los pedidos y, si el anterior fue hace menos de un segundo,
- * se espera lo que falte; si el lock no se consigue en 1 s, esa vez no hay recorrido (sin cortar), para no
- * retener el único worker de `artisan serve` tras un lock colgado. Las indicaciones en castellano las arma {@see InstruccionesOsrm}.
+ * Recorridos con OSRM: un servidor propio en producción (por defecto, el público de demostración, solo para
+ * desarrollo/demos). Los pedidos, con el límite de 1 por segundo del servidor público, los hace {@see ClienteOsrm};
+ * si con el público el lock no se consigue en 1 s, esa vez no hay recorrido (sin cortar). Las indicaciones en
+ * castellano las arma {@see InstruccionesOsrm}.
  */
 class RutasOsrm extends RutasRemotas
 {
-    private const CLAVE_ULTIMO = 'rutas:osrm:ultimo';
-
-    /** @var Closure(int): void */
-    private Closure $dormir;
+    private ClienteOsrm $osrm;
 
     /** @param  (Closure(int): void)|null  $dormir  espera en microsegundos; se inyecta en los tests. */
-    public function __construct(private string $userAgent, private string $url, ?Closure $dormir = null)
+    public function __construct(string $userAgent, string $url, ?Closure $dormir = null)
     {
-        $this->url = rtrim($url, '/');
-        $this->dormir = $dormir ?? function (int $micro): void {
-            usleep($micro);
-        };
+        $this->osrm = new ClienteOsrm($userAgent, $url, $dormir);
     }
 
     protected function nombre(): string
@@ -40,27 +29,12 @@ class RutasOsrm extends RutasRemotas
 
     protected function consultar(float $oLat, float $oLng, float $dLat, float $dLng): array|false|null
     {
-        $url = "{$this->url}/route/v1/driving/$oLng,$oLat;$dLng,$dLat";
-
         try {
-            $r = Cache::lock('rutas:osrm:lock', 10)->block(1, function () use ($url) {
-                if ($this->enCorte()) {
-                    return null;
-                }
-                $falta = 1.0 - (microtime(true) - (float) Cache::get(self::CLAVE_ULTIMO, 0.0));
-                if ($falta > 0) {
-                    ($this->dormir)((int) ceil($falta * 1_000_000));
-                }
-
-                try {
-                    return Http::timeout(self::TIMEOUT_SEG)->withUserAgent($this->userAgent)
-                        ->get($url, ['overview' => 'full', 'geometries' => 'geojson', 'steps' => 'true']);
-                } finally {
-                    Cache::put(self::CLAVE_ULTIMO, microtime(true), 60);
-                }
-            });
-        } catch (LockTimeoutException) {
-            return null; // Mucha demanda: esta vez sin recorrido, pero el servicio no falló.
+            $r = $this->osrm->get(
+                "route/v1/driving/$oLng,$oLat;$dLng,$dLat",
+                ['overview' => 'full', 'geometries' => 'geojson', 'steps' => 'true'],
+                fn () => $this->enCorte(),
+            );
         } catch (ConnectionException $e) {
             // Nunca el mensaje: lleva la URL, con las coordenadas.
             Log::warning('OSRM sin conexión', ['error' => $e::class]);

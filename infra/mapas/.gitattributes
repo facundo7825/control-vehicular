@@ -1,0 +1,2 @@
+# El script corre en Linux/WSL/Git Bash: siempre con fin de línea LF, aunque git convierta a CRLF en Windows.
+*.sh text eol=lf

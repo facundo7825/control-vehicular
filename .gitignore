@@ -1,3 +1,5 @@
 .claude/settings.local.json
 .superpowers/
 tools/
+infra/mapas/datos/
+infra/mapas/.env

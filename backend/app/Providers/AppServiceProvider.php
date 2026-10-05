@@ -5,7 +5,9 @@ namespace App\Providers;
 use App\Identidad\EndpointPoderJudicial;
 use App\Identidad\IdentidadSimulada;
 use App\Identidad\ProveedorIdentidad;
+use App\Mapas\BuscadorCombinado;
 use App\Mapas\BuscadorFalso;
+use App\Mapas\BuscadorGeoref;
 use App\Mapas\BuscadorGoogle;
 use App\Mapas\BuscadorLugares;
 use App\Mapas\BuscadorNominatim;
@@ -15,6 +17,7 @@ use App\Mapas\RutasGoogle;
 use App\Mapas\RutasOsrm;
 use App\Mapas\ServicioMapas;
 use App\Mapas\ServicioMapasFalso;
+use App\Mapas\ServicioMapasOsrm;
 use App\Mapas\ServicioRutas;
 use App\Notificaciones\Notificador;
 use App\Notificaciones\NotificadorFcm;
@@ -48,13 +51,22 @@ class AppServiceProvider extends ServiceProvider
 
         $this->app->bind(ServicioMapas::class, fn () => match (config('vehiculos.mapas.driver')) {
             'google' => new GoogleMaps((string) config('vehiculos.mapas.google_api_key')),
+            'osrm' => new ServicioMapasOsrm((string) config('vehiculos.rutas.user_agent'), (string) config('vehiculos.rutas.osrm_url')),
             default => new ServicioMapasFalso,
         });
 
-        $this->app->bind(BuscadorLugares::class, fn () => match (config('vehiculos.lugares.driver')) {
-            'google' => new BuscadorGoogle((string) config('vehiculos.mapas.google_api_key')),
-            'falso' => new BuscadorFalso,
-            default => new BuscadorNominatim((string) config('vehiculos.lugares.user_agent')),
+        // LUGARES_DRIVER admite una lista ("nominatim,georef"): se consultan en orden y se unen los resultados.
+        $this->app->bind(BuscadorLugares::class, function () {
+            $buscadores = array_map(fn (string $driver) => match ($driver) {
+                'google' => new BuscadorGoogle((string) config('vehiculos.mapas.google_api_key')),
+                'falso' => new BuscadorFalso,
+                'georef' => new BuscadorGeoref((string) config('vehiculos.lugares.georef_url'), config('vehiculos.lugares.provincia')),
+                default => new BuscadorNominatim(
+                    (string) config('vehiculos.lugares.user_agent'), null, (string) config('vehiculos.lugares.nominatim_url'),
+                ),
+            }, BuscadorCombinado::drivers((string) config('vehiculos.lugares.driver')));
+
+            return count($buscadores) === 1 ? $buscadores[0] : new BuscadorCombinado($buscadores);
         });
 
         $this->app->bind(ServicioRutas::class, fn () => match (config('vehiculos.rutas.driver')) {
@@ -76,8 +88,10 @@ class AppServiceProvider extends ServiceProvider
     {
         JsonResource::withoutWrapping();
 
-        // Búsqueda de lugares: 30 por minuto y por usuario, para no agotar el servicio externo.
-        RateLimiter::for('lugares', fn (Request $request) => Limit::perMinute(30)
+        // Búsqueda de lugares: LUGARES_LIMITE_POR_MINUTO (30 por defecto) por usuario, para no agotar el servicio.
+        RateLimiter::for('lugares', fn (Request $request) => Limit::perMinute(
+            ($limite = (int) config('vehiculos.lugares.limite_por_minuto')) > 0 ? $limite : 30,
+        )
             ->by((string) $request->user()?->id ?: $request->ip())
             ->response(fn (Request $request, array $headers) => response()->json(
                 ['message' => 'Demasiadas búsquedas. Probá de nuevo en un minuto.'], 429, $headers,

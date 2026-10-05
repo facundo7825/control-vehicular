@@ -54,6 +54,10 @@ class ApiFalsa extends ApiVehiculos {
   int consultasChoferes = 0;
   final pedidos = <PedidoViaje>[];
   final cancelaciones = <(int, String?)>[];
+  ErrorApi? errorCancelar;
+
+  /// Hace fallar `misViajes()` con cualquier objeto (p. ej. un error que no es de la API).
+  Object? errorMisViajes;
   Viaje? respuestaPedido;
   ErrorApi? errorPedido;
   Eta? etaRespuesta;
@@ -119,7 +123,10 @@ class ApiFalsa extends ApiVehiculos {
   }
 
   @override
-  Future<MisViajes> misViajes() async => mis;
+  Future<MisViajes> misViajes() async {
+    if (errorMisViajes != null) throw errorMisViajes!;
+    return mis;
+  }
 
   @override
   Future<List<ChoferEnMapa>> choferes() async {
@@ -139,6 +146,7 @@ class ApiFalsa extends ApiVehiculos {
   @override
   Future<Viaje> cancelarViaje(int viajeId, {String? motivo}) async {
     cancelaciones.add((viajeId, motivo));
+    if (errorCancelar != null) throw errorCancelar!;
     return Viaje.fromJson(
       p.json(p.viajeOfrecido)
         ..['id'] = viajeId

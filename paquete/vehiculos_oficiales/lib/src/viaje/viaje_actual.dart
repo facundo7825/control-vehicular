@@ -160,9 +160,21 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
     try {
       final v = await ref.read(apiProvider).cancelarViaje(actual.id, motivo: motivo);
       if (ref.mounted) _aplicarViaje(v);
-    } catch (_) {
+    } catch (e) {
       _cancelandoViajeId = null;
+      // Si la pantalla quedó vieja (se perdieron eventos y el viaje ya pasó a `sin_chofer`, o ya no existe),
+      // se trae el estado real para que se corrija; el error igual llega a la pantalla.
+      if (ref.mounted && e is ErrorApi && e is! SinConexion && e is! SesionInvalida) await _refrescarSinFallar();
       rethrow;
+    }
+  }
+
+  /// Un refresco de apoyo: nunca lanza (el error que importa es el de quien lo pidió).
+  Future<void> _refrescarSinFallar() async {
+    try {
+      await refrescar();
+    } catch (error) {
+      debugPrint('vehiculos_oficiales: no se pudo refrescar el viaje tras un error: $error');
     }
   }
 

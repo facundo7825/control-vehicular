@@ -369,3 +369,21 @@ it('OSRM con el lock tomado espera como mucho 1 s y devuelve null sin cortar', f
     expect($o->ruta(-34.6037, -58.3816, -34.602, -58.38))->toBeArray();
     Http::assertSentCount(1);
 });
+
+it('OSRM propio no espera ni usa el lock del servidor público', function () {
+    Http::fake(['osrm.interno.example:5000/*' => Http::response(respuestaOsrm())]);
+    $lock = Cache::lock('rutas:osrm:lock', 10);
+    expect($lock->get())->toBeTrue();
+    $esperas = [];
+    $o = new RutasOsrm('Demo/1.0 (prueba)', 'http://osrm.interno.example:5000/', function (int $micro) use (&$esperas) {
+        $esperas[] = $micro;
+    });
+
+    expect($o->ruta(-34.6037, -58.3816, -34.602, -58.38))->toBeArray();
+    expect($o->ruta(-34.61, -58.39, -34.62, -58.40))->toBeArray();
+
+    expect($esperas)->toBe([]);
+    Http::assertSentCount(2);
+    Http::assertSent(fn (Request $req) => str_starts_with($req->url(), 'http://osrm.interno.example:5000/route/v1/driving/'));
+    $lock->release();
+});

@@ -1,6 +1,8 @@
 <?php
 
+use App\Mapas\BuscadorCombinado;
 use App\Mapas\BuscadorFalso;
+use App\Mapas\BuscadorGeoref;
 use App\Mapas\BuscadorGoogle;
 use App\Mapas\BuscadorLugares;
 use App\Mapas\BuscadorNominatim;
@@ -293,3 +295,104 @@ it('Nominatim con el lock tomado espera como mucho 1 s y devuelve [] sin cortar'
     expect($b->buscar('obelisco', null, null))->toHaveCount(2);
     Http::assertSentCount(1);
 });
+
+it('elige Georef y el combinado por configuración', function () {
+    config(['vehiculos.lugares.driver' => 'georef']);
+    expect(app(BuscadorLugares::class))->toBeInstanceOf(BuscadorGeoref::class);
+
+    config(['vehiculos.lugares.driver' => ' nominatim , georef ']);
+    expect(app(BuscadorLugares::class))->toBeInstanceOf(BuscadorCombinado::class);
+});
+
+it('Nominatim propio pide a la URL configurada sin esperar ni tomar el lock', function () {
+    Http::fake(['nominatim.local:8080/*' => Http::response(respuestaNominatim())]);
+    $esperas = [];
+    $b = new BuscadorNominatim('Demo/1.0 (prueba)', function (int $micro) use (&$esperas) {
+        $esperas[] = $micro;
+    }, 'http://nominatim.local:8080/');
+    $lock = Cache::lock('lugares:nominatim:lock', 15);
+    expect($lock->get())->toBeTrue();
+
+    expect($b->buscar('obelisco', null, null))->toHaveCount(2);
+    expect($b->buscar('plaza de mayo', null, null))->toHaveCount(2);
+
+    expect($esperas)->toBe([]);
+    Http::assertSentCount(2);
+    Http::assertSent(fn (Request $req) => str_starts_with($req->url(), 'http://nominatim.local:8080/search?'));
+    $lock->release();
+});
+
+it('Nominatim propio también corta 60 s ante una falla', function () {
+    Http::fake(['nominatim.local/*' => Http::sequence()->push('error', 500)->push(respuestaNominatim())]);
+    $b = new BuscadorNominatim('Demo/1.0 (prueba)', fn () => null, 'http://nominatim.local');
+
+    expect($b->buscar('obelisco', null, null))->toBe([]);
+    expect($b->buscar('plaza de mayo', null, null))->toBe([]);
+    Http::assertSentCount(1);
+});
+
+it('reconoce la URL pública de Nominatim', function (string $url, bool $publica) {
+    expect(BuscadorNominatim::esPublica($url))->toBe($publica);
+})->with([
+    ['https://nominatim.openstreetmap.org', true],
+    ['https://nominatim.openstreetmap.org/', true],
+    ['http://NOMINATIM.openstreetmap.org/search', true],
+    ['http://nominatim.local:8080', false],
+    ['https://mapas.catamarca.gob.ar/nominatim', false],
+]);
+
+it('Nominatim con la URL vacía usa el público (y no autocompleta)', function () {
+    Http::fake([NOMINATIM => Http::response(respuestaNominatim())]);
+    config(['vehiculos.lugares.driver' => 'nominatim', 'vehiculos.lugares.nominatim_url' => '  ']);
+
+    expect(app(BuscadorLugares::class)->buscar('obelisco', null, null))->toHaveCount(2);
+    Http::assertSent(fn (Request $req) => str_starts_with($req->url(), 'https://nominatim.openstreetmap.org/search?'));
+    expect(BuscadorNominatim::esPublica(''))->toBeTrue();
+    $this->actingAs(Usuario::factory()->create())->getJson('/api/configuracion')
+        ->assertJsonPath('lugares_autocompletar', false);
+});
+
+it('Nominatim avisa una vez si la URL no tiene esquema ni host, sin dejar consultas en el log', function () {
+    Log::spy();
+    Http::fake(['*' => Http::response(respuestaNominatim())]);
+
+    $b = new BuscadorNominatim('Demo/1.0 (prueba)', fn () => null, 'nominatim.local:8080');
+    new BuscadorNominatim('Demo/1.0 (prueba)', fn () => null, 'nominatim.local:8080');
+    $b->buscar('calle secreta', null, null);
+
+    Log::shouldHaveReceived('warning')->withArgs(function (string $msg, array $ctx = []) {
+        return str_contains($msg, 'LUGARES_NOMINATIM_URL') && ! str_contains($msg.json_encode($ctx), 'secreta');
+    })->once();
+    expect(BuscadorNominatim::esPublica('nominatim.local:8080'))->toBeFalse();
+});
+
+it('Nominatim no comparte el cache entre servidores distintos', function () {
+    Http::fake([
+        'uno.local/*' => Http::response(respuestaNominatim()),
+        'dos.local/*' => Http::response([]),
+    ]);
+
+    expect((new BuscadorNominatim('Demo/1.0 (prueba)', fn () => null, 'http://uno.local'))->buscar('obelisco', null, null))->toHaveCount(2);
+    expect((new BuscadorNominatim('Demo/1.0 (prueba)', fn () => null, 'http://dos.local'))->buscar('obelisco', null, null))->toBe([]);
+    Http::assertSentCount(2);
+});
+
+it('el límite de búsquedas por minuto se configura (LUGARES_LIMITE_POR_MINUTO)', function () {
+    config(['vehiculos.lugares.limite_por_minuto' => 5]);
+    $u = Usuario::factory()->create();
+
+    for ($i = 0; $i < 5; $i++) {
+        $this->actingAs($u)->getJson('/api/lugares?q=obelisco')->assertOk();
+    }
+    $this->actingAs($u)->getJson('/api/lugares?q=obelisco')->assertStatus(429);
+});
+
+it('con el límite vacío o inválido se usan 30 por minuto', function (mixed $limite) {
+    config(['vehiculos.lugares.limite_por_minuto' => $limite]);
+    $u = Usuario::factory()->create();
+
+    for ($i = 0; $i < 30; $i++) {
+        $this->actingAs($u)->getJson('/api/lugares?q=obelisco')->assertOk();
+    }
+    $this->actingAs($u)->getJson('/api/lugares?q=obelisco')->assertStatus(429);
+})->with(['', null, '0']);

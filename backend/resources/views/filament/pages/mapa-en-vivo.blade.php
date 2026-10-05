@@ -344,9 +344,12 @@
 
         const iniciarLeaflet = () => {
             const mapa = L.map(contenedor).setView([centroPorDefecto.lat, centroPorDefecto.lng], 12);
-            L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                maxZoom: 19,
-                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>',
+            // El mapa de fondo configurado (MAPAS_TESELAS_*), el mismo de la app. La atribución ya viene escapada.
+            const teselas = @js($this->teselas());
+            L.tileLayer(teselas.url, {
+                tms: teselas.tms,
+                maxZoom: teselas.max_zoom,
+                attribution: @js($this->atribucionTeselas()),
             }).addTo(mapa);
 
             const marcadoresChofer = new Map();

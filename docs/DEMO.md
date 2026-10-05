@@ -6,7 +6,7 @@ Guía para mostrar el sistema funcionando en una sola compu y un celular Android
 - **Compu = solicitante** (la misma app de prueba en Chrome, perfil "Ana Pérez" o "Jorge Juez").
 - **Compu = admin** (panel web) y **base de datos** a la vista.
 
-> Todo esto es solo para desarrollo/demostración: identidad simulada (`IDENTIDAD_DRIVER=simulada`), mapas de distancia simulados para elegir chofer (`MAPAS_DRIVER=falso`), push solo al log y base SQLite local.
+> Todo esto es solo para desarrollo/demostración: identidad simulada (`IDENTIDAD_DRIVER=simulada`), mapas de distancia simulados para elegir chofer (`MAPAS_DRIVER=falso`), push solo al log y base SQLite local. Para producción, los mapas sin Google ni servidores públicos (OSRM, Nominatim y teselas propios) están en [`PRODUCCION-MAPAS.md`](PRODUCCION-MAPAS.md).
 
 ## 0. Una sola vez
 

@@ -176,6 +176,12 @@ void main() {
     });
   });
 
+  test('si GET /configuracion falla: los intervalos por defecto, sin mapa de fondo ni autocompletar', () {
+    expect([configuracionPorDefecto.gpsTurnoSeg, configuracionPorDefecto.gpsViajeSeg], [10, 5]);
+    expect(configuracionPorDefecto.teselas, isNull, reason: 'nunca el OSM público en lugar del configurado');
+    expect(configuracionPorDefecto.lugaresAutocompletar, isFalse);
+  });
+
   test('iniciar: pide permiso, POST /turnos y arranca el GPS', () {
     fakeAsync((async) {
       final c = crear();
