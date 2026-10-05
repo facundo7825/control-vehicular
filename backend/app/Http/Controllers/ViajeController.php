@@ -5,10 +5,12 @@ namespace App\Http\Controllers;
 use App\Enums\EstadoViaje;
 use App\Enums\ResultadoOferta;
 use App\Enums\TipoViaje;
-use App\Http\Resources\ViajeResource;
 use App\Excepciones\AccionNoPermitida;
+use App\Http\Resources\ViajeResource;
 use App\Models\OfertaViaje;
+use App\Models\PuntoRecorrido;
 use App\Models\Viaje;
+use App\Servicios\Parametros;
 use App\Servicios\ServicioViaje;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -18,6 +20,8 @@ class ViajeController extends Controller
     private const RELACIONES = ['chofer', 'vehiculo', 'solicitante'];
 
     private const LIMITE_HISTORIAL = 50;
+
+    private const MAX_PUNTOS_RECORRIDO = 500;
 
     public function __construct(private ServicioViaje $viajes) {}
 
@@ -102,6 +106,42 @@ class ViajeController extends Controller
     /** Detalle de un viaje: lo ve su solicitante, su chofer actual o un admin. */
     public function show(Request $request, Viaje $viaje): ViajeResource
     {
+        $this->autorizarVerViaje($request, $viaje);
+
+        return new ViajeResource($viaje->load(self::RELACIONES));
+    }
+
+    /** Recorrido real del viaje (hasta 500 puntos) para dibujarlo en el detalle. */
+    public function recorrido(Request $request, Viaje $viaje, Parametros $parametros): JsonResponse
+    {
+        $this->autorizarVerViaje($request, $viaje);
+
+        $terminado = $viaje->finalizado_en ?? $viaje->cancelado_en;
+        if ($terminado && $terminado->lt(now()->subDays($parametros->entero('retencion_recorrido_dias')))) {
+            return response()->json(['puntos' => [], 'disponible' => false]);
+        }
+
+        $puntos = PuntoRecorrido::where('viaje_id', $viaje->id)
+            ->orderBy('registrado_en')
+            ->orderBy('id')
+            ->select('lat', 'lng')
+            ->toBase()
+            ->get()
+            ->map(fn ($p) => [(float) $p->lat, (float) $p->lng]);
+
+        $total = $puntos->count();
+        if ($total > self::MAX_PUNTOS_RECORRIDO) {
+            $max = self::MAX_PUNTOS_RECORRIDO;
+            // Índices repartidos de forma pareja: incluye siempre el primero y el último.
+            $puntos = collect(range(0, $max - 1))
+                ->map(fn ($i) => $puntos[intdiv($i * ($total - 1), $max - 1)]);
+        }
+
+        return response()->json(['puntos' => $puntos->values(), 'disponible' => $total > 0]);
+    }
+
+    private function autorizarVerViaje(Request $request, Viaje $viaje): void
+    {
         $usuario = $request->user();
 
         if (! $usuario->esAdmin()
@@ -109,8 +149,6 @@ class ViajeController extends Controller
             && $viaje->chofer_id !== $usuario->id) {
             throw new AccionNoPermitida('Este viaje no es tuyo.');
         }
-
-        return new ViajeResource($viaje->load(self::RELACIONES));
     }
 
     public function avanzar(Request $request, Viaje $viaje): ViajeResource

@@ -34,6 +34,7 @@ Route::middleware(['auth:sanctum', 'activo'])->group(function () {
     Route::get('/viajes', [ViajeController::class, 'index']);
     Route::post('/push/token', PushController::class);
     Route::get('/viajes/{viaje}/eta', EtaController::class);
+    Route::get('/viajes/{viaje}/recorrido', [ViajeController::class, 'recorrido'])->whereNumber('viaje');
     Route::post('/viajes/{viaje}/cancelar', [ViajeController::class, 'cancelar']);
 
     Route::middleware('rol:solicitante,admin')->group(function () {
