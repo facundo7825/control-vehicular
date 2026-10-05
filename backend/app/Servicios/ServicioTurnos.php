@@ -5,6 +5,7 @@ namespace App\Servicios;
 use App\Enums\OrigenTurno;
 use App\Excepciones\AccionNoPermitida;
 use App\Excepciones\ReglaNegocio;
+use App\Models\Alerta;
 use App\Models\Turno;
 use App\Models\UbicacionChofer;
 use App\Models\Usuario;
@@ -36,6 +37,10 @@ class ServicioTurnos
             if (Turno::where('vehiculo_id', $vehiculo->id)->whereNull('fin')->exists()) {
                 throw new ReglaNegocio('El vehículo está en uso por otro chofer.');
             }
+
+            // Con el turno abierto (manual o por fichaje) deja de valer el aviso de "fichó sin vehículo".
+            Alerta::pendientes()->where('tipo', Alerta::ASISTENCIA_SIN_VEHICULO)->where('chofer_id', $chofer->id)
+                ->update(['resuelta_en' => now()]);
 
             return Turno::create([
                 'chofer_id' => $chofer->id,

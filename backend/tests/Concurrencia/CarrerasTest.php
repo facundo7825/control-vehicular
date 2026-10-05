@@ -14,9 +14,11 @@ use App\Enums\EstadoViaje;
 use App\Enums\ModoViaje;
 use App\Enums\ResultadoOferta;
 use App\Enums\TipoViaje;
+use App\Models\EventoAsistencia;
 use App\Models\OfertaViaje;
 use App\Models\Turno;
 use App\Models\Usuario;
+use App\Models\Vehiculo;
 use App\Models\Viaje;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -220,5 +222,34 @@ it('el admin reasigna un viaje a un chofer mientras se le asigna un obligatorio:
             // El perdedor quedó como estaba.
             ->and($aReasignar->fresh()->chofer_id === $chofer->id)->toBe($ganoReasignacion)
             ->and($obligatorio->fresh()->estado)->toBe($ganoAsignacion ? EstadoViaje::Aceptado : EstadoViaje::Buscando);
+    }
+});
+
+it('fichajes de entrada simultáneos de un mismo chofer abren un solo turno', function () {
+    $chofer = Usuario::factory()->chofer()->create(['vehiculo_habitual_id' => Vehiculo::factory()->create()->id]);
+
+    $r = carrera([
+        ['fichar', ['id_externo' => $chofer->id_externo, 'tipo' => 'entrada', 'id_evento' => 'A']],
+        ['fichar', ['id_externo' => $chofer->id_externo, 'tipo' => 'entrada', 'id_evento' => 'B']],
+        ['fichar', ['id_externo' => $chofer->id_externo, 'tipo' => 'entrada', 'id_evento' => 'A']],
+    ]);
+
+    expect(collect($r)->every(fn ($x) => $x['ok']))->toBeTrue(json_encode($r))
+        ->and(Turno::where('chofer_id', $chofer->id)->count())->toBe(1)
+        ->and(EventoAsistencia::count())->toBe(2)
+        ->and(EventoAsistencia::where('resultado', 'abierto')->count())->toBe(1);
+});
+
+it('un fichaje de entrada y un inicio manual simultáneos dejan un solo turno', function () {
+    foreach (range(1, 5) as $_) {
+        $chofer = Usuario::factory()->chofer()->create(['vehiculo_habitual_id' => Vehiculo::factory()->create()->id]);
+
+        $r = carrera([
+            ['fichar', ['id_externo' => $chofer->id_externo, 'tipo' => 'entrada']],
+            ['iniciar_turno', ['chofer' => $chofer->id, 'vehiculo' => Vehiculo::factory()->create()->id]],
+        ]);
+
+        expect(Turno::where('chofer_id', $chofer->id)->whereNull('fin')->count())->toBe(1, json_encode($r))
+            ->and($r[0]['ok'])->toBeTrue(json_encode($r));
     }
 });

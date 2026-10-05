@@ -1,17 +1,26 @@
 <?php
 
+use App\Enums\EstadoChofer;
 use App\Enums\EstadoViaje;
 use App\Enums\OrigenTurno;
 use App\Models\Alerta;
 use App\Models\EventoAsistencia;
+use App\Models\OfertaViaje;
 use App\Models\Turno;
 use App\Models\UbicacionChofer;
 use App\Models\Usuario;
 use App\Models\Vehiculo;
 use App\Models\Viaje;
 use App\Notificaciones\Notificador;
+use App\Servicios\CalculadorEstadoChofer;
+use App\Servicios\Despachador;
+use App\Servicios\DisponibilidadReservas;
 use App\Servicios\MaquinaEstadosViaje;
+use App\Servicios\ServicioAsistencia;
+use App\Servicios\ServicioViaje;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Exceptions;
+use Illuminate\Support\Facades\Queue;
 use Tests\Fakes\NotificadorFalso;
 
 beforeEach(function () {
@@ -294,3 +303,169 @@ it('ignora a un usuario desconocido, deshabilitado o que no es chofer', function
     ['inactivo', 'El usuario está deshabilitado.'],
     ['solicitante', 'El usuario no es chofer.'],
 ]);
+
+describe('ventana del momento', function () {
+    it('rechaza un momento más de 5 minutos en el futuro', function () {
+        choferConHabitual();
+
+        ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'entrada', 'momento' => '2026-10-05T12:06:00Z'])
+            ->assertStatus(422)
+            ->assertJsonPath('errors.momento.0', 'El momento no puede estar más de 5 minutos en el futuro.');
+        ($this->fichar)(['eventos' => [['id_externo' => 'L123', 'tipo' => 'entrada', 'momento' => '2099-01-01T00:00:00']]])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('eventos.0.momento');
+
+        expect(EventoAsistencia::count())->toBe(0)->and(Turno::count())->toBe(0);
+    });
+
+    it('rechaza un momento de más de 7 días atrás (también fuera del rango de la base)', function (string $momento) {
+        choferConHabitual();
+
+        ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'entrada', 'momento' => $momento])
+            ->assertStatus(422)
+            ->assertJsonPath('errors.momento.0', 'El momento no puede tener más de 7 días de antigüedad.');
+
+        expect(EventoAsistencia::count())->toBe(0)->and(Turno::count())->toBe(0);
+    })->with(['2026-09-28T11:59:00Z', '1900-01-01T00:00:00']);
+
+    it('acepta los bordes de la ventana', function () {
+        choferConHabitual();
+
+        ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'entrada', 'momento' => '2026-09-28T12:00:00Z'])
+            ->assertOk()->assertJsonPath('resultado', 'abierto');
+        ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'salida', 'momento' => '2026-10-05T12:05:00Z'])
+            ->assertOk()->assertJsonPath('resultado', 'cerrado');
+    });
+});
+
+it('si no se puede registrar el evento no queda ni el turno ni el push', function () {
+    $chofer = choferConHabitual();
+    EventoAsistencia::creating(fn () => throw new RuntimeException('base caída'));
+
+    ($this->fichar)(['id_evento' => 'E-1', 'id_externo' => 'L123', 'tipo' => 'entrada'])->assertStatus(500);
+
+    expect($chofer->turnoAbierto()->exists())->toBeFalse()
+        ->and(Alerta::count())->toBe(0)
+        ->and($this->push->enviados)->toBe([]);
+});
+
+it('en un lote, un evento que falla queda ignorado y los demás se procesan', function () {
+    choferConHabitual();
+    Usuario::factory()->chofer()->create(['id_externo' => 'L999']);
+    EventoAsistencia::creating(function (EventoAsistencia $e) {
+        if ($e->id_externo === 'L999') {
+            throw new RuntimeException('falla');
+        }
+    });
+
+    ($this->fichar)(['eventos' => [
+        ['id_externo' => 'L999', 'tipo' => 'entrada'],
+        ['id_externo' => 'L123', 'tipo' => 'entrada'],
+    ]])
+        ->assertOk()
+        ->assertJsonPath('resultados.0.resultado', 'ignorado')
+        ->assertJsonPath('resultados.0.motivo', 'error interno al procesar el evento')
+        ->assertJsonPath('resultados.1.resultado', 'abierto');
+
+    expect(Turno::count())->toBe(1)->and(Alerta::count())->toBe(0);
+});
+
+it('limita los eventos a 120 por minuto por IP', function () {
+    for ($i = 0; $i < 120; $i++) {
+        ($this->fichar)(['id_externo' => 'X'.$i, 'tipo' => 'entrada'])->assertOk();
+    }
+
+    ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'entrada'])
+        ->assertStatus(429)
+        ->assertJsonPath('message', 'Demasiados eventos de asistencia. Probá de nuevo en un minuto.');
+});
+
+it('el push de sin_vehiculo y el de cierre llevan los datos y textos acordados', function () {
+    $chofer = choferConHabitual(['vehiculo_habitual_id' => null]);
+
+    ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'entrada', 'momento' => '2026-10-05T08:00:00']);
+    Turno::factory()->create(['chofer_id' => $chofer->id]);
+    ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'salida', 'momento' => '2026-10-05T08:30:00']);
+
+    expect($this->push->enviados[0]['datos'])->toBe(['tipo' => 'turno', 'estado' => 'sin_vehiculo'])
+        ->and($this->push->enviados[1])->toMatchArray([
+            'titulo' => 'Tu turno terminó',
+            'cuerpo' => 'Se registró tu salida.',
+            'datos' => ['tipo' => 'turno', 'estado' => 'cerrado'],
+        ]);
+});
+
+it('al iniciar un turno se resuelven sus alertas de fichaje sin vehículo', function () {
+    $chofer = choferConHabitual(['vehiculo_habitual_id' => null]);
+    $otro = Usuario::factory()->chofer()->create();
+    ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'entrada'])->assertJsonPath('resultado', 'sin_vehiculo');
+    $ajena = Alerta::create(['tipo' => Alerta::ASISTENCIA_SIN_VEHICULO, 'chofer_id' => $otro->id, 'mensaje' => 'x']);
+
+    $this->actingAs($chofer)->postJson('/api/turnos', ['vehiculo_id' => Vehiculo::factory()->create()->id])->assertCreated();
+
+    expect(Alerta::where('chofer_id', $chofer->id)->sole()->resuelta_en)->not->toBeNull()
+        ->and($ajena->fresh()->resuelta_en)->toBeNull();
+});
+
+describe('cierre pendiente', function () {
+    it('un chofer con cierre pendiente y sin viaje no recibe viajes ni reservas nuevas', function () {
+        Queue::fake(); // el vencimiento de la oferta
+        $pendiente = choferEnTurno(-34.601, -58.381);
+        $pendiente->turnoAbierto->update(['cierre_pendiente_en' => now()]);
+        $otro = choferEnTurno(-34.650, -58.450);
+        $estados = app(CalculadorEstadoChofer::class);
+
+        expect($estados->estado($pendiente))->toBe(EstadoChofer::FueraDeTurno)
+            ->and($estados->libres()->pluck('id')->all())->toBe([$otro->id]);
+
+        $viaje = Viaje::factory()->create(['origen_lat' => -34.600, 'origen_lng' => -58.380]);
+        app(Despachador::class)->despachar($viaje);
+        expect(OfertaViaje::sole()->chofer_id)->toBe($otro->id);
+
+        $disponibilidad = app(DisponibilidadReservas::class);
+        $manana = now()->addDay();
+        expect($disponibilidad->estaDisponible($pendiente->id, $manana, 60))->toBeFalse()
+            ->and($disponibilidad->choferesDisponibles($manana, 60)->pluck('chofer.id')->all())->toBe([$otro->id]);
+    });
+
+    it('con un viaje activo sigue en viaje', function () {
+        $chofer = choferEnTurno();
+        $chofer->turnoAbierto->update(['cierre_pendiente_en' => now()]);
+        Viaje::factory()->create(['chofer_id' => $chofer->id, 'estado' => EstadoViaje::EnCurso]);
+
+        expect(app(CalculadorEstadoChofer::class)->estado($chofer))->toBe(EstadoChofer::EnViaje);
+    });
+
+    it('si se le reasigna el viaje a otro chofer, se cierra el turno del anterior', function () {
+        $anterior = choferEnTurno();
+        $nuevo = choferEnTurno();
+        $anterior->update(['id_externo' => 'L123']);
+        $turno = $anterior->turnoAbierto;
+        $viaje = Viaje::factory()->create([
+            'chofer_id' => $anterior->id, 'vehiculo_id' => $turno->vehiculo_id,
+            'estado' => EstadoViaje::EnCamino, 'aceptado_en' => now()->subMinutes(5),
+        ]);
+
+        ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'salida'])->assertJsonPath('resultado', 'cierre_pendiente');
+
+        app(ServicioViaje::class)->reasignarPorAdmin($viaje, $nuevo);
+
+        expect($turno->fresh()->fin)->not->toBeNull()
+            ->and($this->push->titulosPara($anterior))->toContain('Tu turno terminó');
+    });
+
+    it('si el cierre falla, terminar el viaje no da error y se reporta', function () {
+        Exceptions::fake();
+        $chofer = choferConHabitual();
+        $turno = Turno::factory()->create(['chofer_id' => $chofer->id, 'cierre_pendiente_en' => now()]);
+        $viaje = Viaje::factory()->create(['chofer_id' => $chofer->id, 'vehiculo_id' => $turno->vehiculo_id, 'estado' => EstadoViaje::EnCurso]);
+        $this->mock(ServicioAsistencia::class)
+            ->shouldReceive('cerrarPendiente')->andThrow(new RuntimeException('falla al cerrar'));
+
+        $this->actingAs($chofer)->postJson("/api/viajes/{$viaje->id}/estado", ['estado' => 'finalizado'])->assertOk();
+
+        expect($viaje->fresh()->estado)->toBe(EstadoViaje::Finalizado)
+            ->and($turno->fresh()->fin)->toBeNull();
+        Exceptions::assertReported(RuntimeException::class);
+    });
+});

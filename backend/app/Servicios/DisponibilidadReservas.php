@@ -6,6 +6,7 @@ use App\Enums\EstadoViaje;
 use App\Enums\RolUsuario;
 use App\Enums\TipoViaje;
 use App\Mapas\ServicioMapas;
+use App\Models\Turno;
 use App\Models\Usuario;
 use App\Models\Viaje;
 use Illuminate\Support\Carbon;
@@ -45,13 +46,19 @@ class DisponibilidadReservas
 
     /**
      * El chofer está libre para [inicio, inicio + duración] si ninguna de sus reservas tomadas
-     * (aceptadas o ya en marcha) se superpone con esa franja más el colchón. No mira el turno.
+     * (aceptadas o ya en marcha) se superpone con esa franja más el colchón. No exige turno abierto,
+     * pero con un turno en cierre pendiente (fichó la salida durante un viaje) no toma reservas nuevas.
      *
      * Con $bloquear, las reservas se leen con FOR UPDATE: dentro de una transacción de asignación
      * en MySQL/MariaDB (REPEATABLE READ), una lectura común podría devolver una foto anterior al bloqueo.
      */
     public function estaDisponible(int $choferId, Carbon $inicio, int $duracionMin, ?int $excluirViajeId = null, bool $bloquear = false): bool
     {
+        // Fichó la salida durante un viaje (cierre pendiente): no toma reservas nuevas.
+        if (Turno::where('chofer_id', $choferId)->whereNull('fin')->whereNotNull('cierre_pendiente_en')->exists()) {
+            return false;
+        }
+
         $colchon = $this->parametros->entero('colchon_reservas_min');
         $porDefecto = $this->parametros->entero('duracion_reserva_por_defecto_min');
 

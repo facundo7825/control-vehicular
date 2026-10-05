@@ -17,6 +17,11 @@ use Illuminate\Support\Facades\DB;
  * Fichajes del control de asistencia (plan 2026-10-05): la entrada abre el turno del chofer con su vehículo
  * habitual y la salida lo cierra (o lo deja con cierre pendiente si tiene un viaje activo). Cada evento queda
  * registrado en eventos_asistencia con su resultado; los turnos pasan siempre por ServicioTurnos y sus locks.
+ *
+ * Cada evento se procesa en una sola transacción con la fila del usuario bloqueada: los eventos de una
+ * misma persona van de a uno (idempotencia y orden incluidos), y el registro, el turno y la alerta se
+ * guardan juntos o no se guarda nada. Los push salen después del commit: un reintento tras una falla
+ * no los repite, y uno ya registrado devuelve el resultado guardado sin efectos.
  */
 class ServicioAsistencia
 {
@@ -25,31 +30,35 @@ class ServicioAsistencia
     /** @return array{resultado: string, motivo: string} */
     public function procesar(string $idExterno, string $tipo, ?Carbon $momento = null, ?string $idEvento = null): array
     {
-        if ($idEvento !== null && $previo = Evento::where('id_evento', $idEvento)->first()) {
-            return $this->respuesta($previo);
-        }
-
         $momento ??= now();
-        $usuario = Usuario::where('id_externo', $idExterno)->first();
-
-        [$resultado, $motivo] = $this->resolver($usuario, $idExterno, $tipo, $momento);
 
         try {
-            $evento = Evento::create([
-                'id_evento' => $idEvento,
-                'usuario_id' => $usuario?->id,
-                'id_externo' => $idExterno,
-                'tipo' => $tipo,
-                'momento' => $momento,
-                'resultado' => $resultado,
-                'motivo' => $motivo,
-            ]);
+            $evento = DB::transaction(function () use ($idExterno, $tipo, $momento, $idEvento) {
+                // Mismo bloqueo que ServicioTurnos (iniciar/finalizar) y Asignador: primero el usuario.
+                $usuario = Usuario::where('id_externo', $idExterno)->lockForUpdate()->first();
+
+                if ($idEvento !== null && $previo = Evento::where('id_evento', $idEvento)->first()) {
+                    return $previo;
+                }
+
+                [$resultado, $motivo] = $this->resolver($usuario, $idExterno, $tipo, $momento);
+
+                return Evento::create([
+                    'id_evento' => $idEvento,
+                    'usuario_id' => $usuario?->id,
+                    'id_externo' => $idExterno,
+                    'tipo' => $tipo,
+                    'momento' => $momento,
+                    'resultado' => $resultado,
+                    'motivo' => $motivo,
+                ]);
+            }, attempts: 3);
         } catch (UniqueConstraintViolationException) {
-            // El mismo id_evento llegó dos veces a la vez: vale el que se registró primero.
+            // El mismo id_evento de alguien sin usuario llegó dos veces a la vez: vale el primero.
             $evento = Evento::where('id_evento', $idEvento)->firstOrFail();
         }
 
-        return $this->respuesta($evento);
+        return ['resultado' => $evento->resultado, 'motivo' => $evento->motivo];
     }
 
     /**
@@ -91,21 +100,14 @@ class ServicioAsistencia
     /** @return array{0: string, 1: string} */
     private function entrada(Usuario $chofer): array
     {
-        // Una entrada posterior anula el cierre pendiente (con la fila bloqueada, como el cierre).
-        $anulado = DB::transaction(function () use ($chofer) {
-            Usuario::whereKey($chofer->id)->lockForUpdate()->first();
-            $turno = $chofer->turnoAbierto()->first();
-            if ($turno?->cierre_pendiente_en) {
-                $turno->update(['cierre_pendiente_en' => null]);
+        if ($turno = $chofer->turnoAbierto()->first()) {
+            if (! $turno->cierre_pendiente_en) {
+                return [Evento::IGNORADO, 'Ya tenía un turno abierto.'];
             }
+            // Una entrada posterior anula el cierre pendiente.
+            $turno->update(['cierre_pendiente_en' => null]);
 
-            return $turno ? (bool) $turno->wasChanged('cierre_pendiente_en') : null;
-        });
-
-        if ($anulado !== null) {
-            return [Evento::IGNORADO, $anulado
-                ? 'Ya tenía un turno abierto; se anuló el cierre pendiente.'
-                : 'Ya tenía un turno abierto.'];
+            return [Evento::IGNORADO, 'Ya tenía un turno abierto; se anuló el cierre pendiente.'];
         }
 
         if (! $chofer->vehiculo_habitual_id) {
@@ -115,10 +117,6 @@ class ServicioAsistencia
         try {
             $this->turnos->iniciar($chofer, $chofer->vehiculo_habitual_id, OrigenTurno::Asistencia);
         } catch (ReglaNegocio) {
-            // Un inicio manual simultáneo le ganó (los locks de iniciar lo serializan).
-            if ($chofer->turnoAbierto()->exists()) {
-                return [Evento::IGNORADO, 'Ya tenía un turno abierto.'];
-            }
             $vehiculo = Vehiculo::find($chofer->vehiculo_habitual_id);
 
             return $this->sinVehiculo($chofer, $vehiculo?->activo
@@ -126,8 +124,7 @@ class ServicioAsistencia
                 : 'El vehículo habitual no existe o no está activo.');
         }
 
-        $this->push->enviar($chofer, 'Tu turno empezó', 'Abrí la app para compartir tu ubicación',
-            ['tipo' => 'turno', 'estado' => 'abierto']);
+        $this->avisar($chofer, 'Tu turno empezó', 'Abrí la app para compartir tu ubicación', 'abierto');
 
         return [Evento::ABIERTO, 'Turno abierto con el vehículo habitual.'];
     }
@@ -140,8 +137,7 @@ class ServicioAsistencia
             'chofer_id' => $chofer->id,
             'mensaje' => "{$chofer->nombre} fichó la entrada pero no tiene vehículo habitual disponible",
         ]);
-        $this->push->enviar($chofer, 'Fichaste la entrada', 'Abrí la app y elegí el vehículo para empezar el turno',
-            ['tipo' => 'turno', 'estado' => 'sin_vehiculo']);
+        $this->avisar($chofer, 'Fichaste la entrada', 'Abrí la app y elegí el vehículo para empezar el turno', 'sin_vehiculo');
 
         return [Evento::SIN_VEHICULO, $motivo];
     }
@@ -149,7 +145,8 @@ class ServicioAsistencia
     /** @return array{0: string, 1: string} */
     private function salida(Usuario $chofer): array
     {
-        if (! $chofer->turnoAbierto()->exists()) {
+        $turno = $chofer->turnoAbierto()->first();
+        if (! $turno) {
             return [Evento::IGNORADO, 'No tenía un turno abierto.'];
         }
 
@@ -159,36 +156,25 @@ class ServicioAsistencia
 
             return [Evento::CERRADO, 'Turno cerrado.'];
         } catch (ReglaNegocio) {
-            // Tiene un viaje activo (o el turno se cerró entretanto): se marca el cierre pendiente.
+            // Tiene un viaje activo: el turno queda con cierre pendiente.
         }
 
-        $marcado = DB::transaction(function () use ($chofer) {
-            Usuario::whereKey($chofer->id)->lockForUpdate()->first();
-
-            return (bool) $chofer->turnoAbierto()->first()?->update(['cierre_pendiente_en' => now()]);
-        });
-
-        if (! $marcado) {
-            return [Evento::IGNORADO, 'No tenía un turno abierto.'];
-        }
-
-        // Si el viaje terminó entre el intento de cierre y la marca, su aviso ya no la vio: se cierra acá.
-        if ($this->cerrarPendiente($chofer)) {
-            return [Evento::CERRADO, 'Turno cerrado.'];
-        }
+        $turno->update(['cierre_pendiente_en' => now()]);
+        // Si el viaje terminó mientras tanto, su aviso no vio la marca (todavía sin commit): se reintenta
+        // el cierre después del commit, con la fila del chofer bloqueada y datos frescos.
+        DB::afterCommit(fn () => $this->cerrarPendiente($chofer));
 
         return [Evento::CIERRE_PENDIENTE, 'Tiene un viaje activo: el turno se cierra cuando lo termine.'];
     }
 
     private function avisarCierre(Usuario $chofer): void
     {
-        $this->push->enviar($chofer, 'Tu turno terminó', 'Se registró tu salida.',
-            ['tipo' => 'turno', 'estado' => 'cerrado']);
+        $this->avisar($chofer, 'Tu turno terminó', 'Se registró tu salida.', 'cerrado');
     }
 
-    /** @return array{resultado: string, motivo: string} */
-    private function respuesta(Evento $evento): array
+    /** El push sale después del commit: si la transacción se revierte, no se avisa nada. */
+    private function avisar(Usuario $chofer, string $titulo, string $cuerpo, string $estado): void
     {
-        return ['resultado' => $evento->resultado, 'motivo' => $evento->motivo];
+        DB::afterCommit(fn () => $this->push->enviar($chofer, $titulo, $cuerpo, ['tipo' => 'turno', 'estado' => $estado]));
     }
 }
