@@ -10,6 +10,7 @@ use App\Excepciones\ReglaNegocio;
 use App\Jobs\AlertarReservaSinTurno;
 use App\Jobs\RecordarReserva;
 use App\Jobs\VencerOferta;
+use App\Models\Alerta;
 use App\Models\OfertaViaje;
 use App\Models\Parametro;
 use App\Models\Turno;
@@ -17,6 +18,7 @@ use App\Models\Usuario;
 use App\Models\Vehiculo;
 use App\Models\Viaje;
 use App\Notificaciones\Notificador;
+use App\Servicios\Asignador;
 use App\Servicios\CalculadorEstadoChofer;
 use App\Servicios\Despachador;
 use App\Servicios\DisponibilidadReservas;
@@ -556,13 +558,122 @@ describe('ajustes de validación', function () {
         expect($viaje->refresh()->estado)->toBe(EstadoViaje::EnCamino);
     });
 
-    it('el próximo viaje largo de la rotación es solo uno futuro', function () {
+    it('el próximo viaje largo de la rotación incluye uno aceptado cuya salida pasó sin que arrancara', function () {
         $chofer = Usuario::factory()->chofer()->create();
-        largoAsignado($chofer, null, now()->subHour(), 600); // aceptado, ya pasó la salida
-        $futuro = largoAsignado($chofer, null, now()->addDays(2), 600);
+        $atrasado = largoAsignado($chofer, null, now()->subHour(), 600); // aceptado, ya pasó la salida
+        largoAsignado($chofer, null, now()->addDays(2), 600);
+        $otro = Usuario::factory()->chofer()->create();
+        largoAsignado($otro, null, now()->subHour(), 600, ['estado' => EstadoViaje::EnCurso]);
+        $rotacion = app(RotacionViajesLargos::class)->todos();
 
-        $fila = app(RotacionViajesLargos::class)->todos()->firstWhere('chofer.id', $chofer->id);
+        expect($rotacion->firstWhere('chofer.id', $chofer->id)['proximo']->id)->toBe($atrasado->id)
+            // Uno que ya arrancó no es "próximo".
+            ->and($rotacion->firstWhere('chofer.id', $otro->id)['proximo'])->toBeNull();
 
-        expect($fila['proximo']->id)->toBe($futuro->id);
+        $atrasado->update(['estado' => EstadoViaje::Cancelado]);
+        expect(app(RotacionViajesLargos::class)->todos()->firstWhere('chofer.id', $chofer->id)['proximo']->programado_para->isFuture())
+            ->toBeTrue();
+    });
+});
+
+describe('vehículo reservado para un viaje largo que sale pronto', function () {
+    it('no se inicia ni se cambia un turno de otro chofer con ese vehículo', function (int $minutosParaSalir) {
+        $vehiculo = Vehiculo::factory()->create();
+        $delViaje = Usuario::factory()->chofer()->create();
+        $salida = now()->addMinutes($minutosParaSalir);
+        largoAsignado($delViaje, $vehiculo, $salida, 600);
+        $turnos = app(ServicioTurnos::class);
+        $mensaje = 'El vehículo está reservado para un viaje largo que sale a las '
+            .$salida->copy()->setTimezone('America/Argentina/Buenos_Aires')->format('H:i').'.';
+
+        expect(fn () => $turnos->iniciar(Usuario::factory()->chofer()->create(), $vehiculo->id))
+            ->toThrow(ReglaNegocio::class, $mensaje);
+
+        $otro = choferEnTurno();
+        expect(fn () => $turnos->cambiarVehiculo($otro, $vehiculo->id))->toThrow(ReglaNegocio::class, $mensaje);
+
+        // El chofer del viaje sí puede abrir turno con él.
+        expect($turnos->iniciar($delViaje, $vehiculo->id)->vehiculo_id)->toBe($vehiculo->id);
+    })->with([
+        'sale en 30 minutos' => [30],
+        'sale justo al límite del bloqueo' => [45],
+        'ya pasó la salida y no arrancó' => [-10],
+    ]);
+
+    it('fuera del bloqueo o cancelado no impide usar el vehículo', function () {
+        $vehiculo = Vehiculo::factory()->create();
+        largoAsignado(Usuario::factory()->chofer()->create(), $vehiculo, now()->addMinutes(46), 600);
+        largoAsignado(Usuario::factory()->chofer()->create(), $vehiculo, now()->addMinutes(10), 30, ['estado' => EstadoViaje::Cancelado]);
+
+        expect(app(ServicioTurnos::class)->iniciar(Usuario::factory()->chofer()->create(), $vehiculo->id)->vehiculo_id)
+            ->toBe($vehiculo->id);
+    });
+
+    it('la alerta previa avisa al panel si el vehículo del viaje está en el turno de otro chofer', function () {
+        $chofer = choferEnTurno();
+        $chofer->update(['nombre' => 'Juan Chofer']);
+        $otroTurno = Turno::factory()->create([
+            'chofer_id' => Usuario::factory()->chofer()->create(['nombre' => 'Pedro Gómez'])->id,
+            'vehiculo_id' => Vehiculo::factory()->create(['patente' => 'AB123CD'])->id,
+        ]);
+        $viaje = largoAsignado($chofer, $otroTurno->vehiculo, Carbon::parse('2026-10-01 12:15'), 600);
+
+        (new AlertarReservaSinTurno($viaje->id, $chofer->id, $viaje->programado_para->getTimestamp()))->handle($this->push);
+
+        $alerta = Alerta::sole();
+        expect($alerta->tipo)->toBe(Alerta::VEHICULO_VIAJE_LARGO_EN_USO)
+            ->and($alerta->viaje_id)->toBe($viaje->id)
+            ->and($alerta->chofer_id)->toBe($chofer->id)
+            ->and($alerta->mensaje)->toBe('El vehículo AB123CD del viaje largo de Juan Chofer (01/10 09:15) está en el turno de Pedro Gómez.')
+            // El chofer tiene turno: no se le pide que lo inicie.
+            ->and($this->push->enviados)->toBe([]);
+    });
+
+    it('sin turno del chofer y con el vehículo en otro turno, alerta las dos cosas', function () {
+        $chofer = Usuario::factory()->chofer()->create();
+        $otroTurno = Turno::factory()->create();
+        $viaje = largoAsignado($chofer, $otroTurno->vehiculo, Carbon::parse('2026-10-01 12:15'), 600);
+
+        (new AlertarReservaSinTurno($viaje->id, $chofer->id, $viaje->programado_para->getTimestamp()))->handle($this->push);
+
+        expect(Alerta::pluck('tipo')->sort()->values()->all())
+            ->toBe([Alerta::RESERVA_SIN_TURNO, Alerta::VEHICULO_VIAJE_LARGO_EN_USO]);
+    });
+
+    it('no alerta por el vehículo si está en el turno del propio chofer o libre', function () {
+        $chofer = choferEnTurno();
+        $propio = largoAsignado($chofer, $chofer->turnoAbierto->vehiculo, Carbon::parse('2026-10-01 12:15'), 600);
+        $libre = largoAsignado(choferEnTurno(), null, Carbon::parse('2026-10-02 12:15'), 600);
+
+        foreach ([$propio, $libre] as $viaje) {
+            (new AlertarReservaSinTurno($viaje->id, $viaje->chofer_id, $viaje->programado_para->getTimestamp()))->handle($this->push);
+        }
+
+        expect(Alerta::count())->toBe(0);
+    });
+});
+
+describe('un viaje que se pasa de su hora sigue ocupando al chofer', function () {
+    it('un viaje largo en curso pasado su regreso estimado ocupa al chofer hasta ahora', function () {
+        $chofer = Usuario::factory()->chofer()->create();
+        // Salió hace 12 horas con 10 horas estimadas: el regreso estimado fue hace 2 horas.
+        largoAsignado($chofer, null, now()->subHours(12), 600, ['estado' => EstadoViaje::EnCurso]);
+        $d = app(DisponibilidadReservas::class);
+
+        expect($d->estaDisponible($chofer->id, now()->addMinutes(20), 60))->toBeFalse()
+            ->and($d->choferesDisponibles(now()->addMinutes(20), 60)->pluck('chofer.id'))->not->toContain($chofer->id)
+            // Pasado el colchón desde ahora, sí.
+            ->and($d->estaDisponible($chofer->id, now()->addMinutes(31), 60))->toBeTrue();
+
+        $obligatoria = reservaBuscando(['obligatorio' => true, 'programado_para' => now()->addMinutes(20)]);
+        expect(app(Asignador::class)->asignarReserva($obligatoria, $chofer))->toBeFalse()
+            ->and($obligatoria->refresh()->chofer_id)->toBeNull();
+    });
+
+    it('un viaje aceptado que todavía no salió no se extiende', function () {
+        $chofer = Usuario::factory()->chofer()->create();
+        largoAsignado($chofer, null, now()->subHours(12), 600);
+
+        expect(app(DisponibilidadReservas::class)->estaDisponible($chofer->id, now()->addMinutes(20), 60))->toBeTrue();
     });
 });

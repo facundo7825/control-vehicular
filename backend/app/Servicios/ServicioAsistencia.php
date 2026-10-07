@@ -130,11 +130,12 @@ class ServicioAsistencia
 
         try {
             $this->turnos->iniciar($chofer, $chofer->vehiculo_habitual_id, OrigenTurno::Asistencia);
-        } catch (ReglaNegocio) {
+        } catch (ReglaNegocio $e) {
             $vehiculo = Vehiculo::find($chofer->vehiculo_habitual_id);
 
+            // En uso por otro chofer, en un viaje largo o reservado para uno que sale pronto.
             return $this->sinVehiculo($chofer, $vehiculo?->activo
-                ? 'El vehículo habitual está en uso por otro chofer.'
+                ? 'El vehículo habitual no está disponible: '.$e->getMessage()
                 : 'El vehículo habitual no existe o no está activo.');
         }
 

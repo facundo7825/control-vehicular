@@ -2,12 +2,16 @@
 
 namespace App\Filament\Resources\Viajes\Pages;
 
+use App\Enums\EstadoViaje;
+use App\Enums\TipoViaje;
 use App\Excepciones\AccionNoPermitida;
 use App\Excepciones\ReglaNegocio;
 use App\Filament\Resources\Viajes\ViajeResource;
 use App\Models\Usuario;
+use App\Models\Vehiculo;
 use App\Models\Viaje;
 use App\Servicios\ServicioViaje;
+use App\Servicios\ServicioViajesLargos;
 use Filament\Actions\Action;
 use Filament\Facades\Filament;
 use Filament\Forms\Components\Select;
@@ -48,6 +52,32 @@ class ViewViaje extends ViewRecord
                     $this->ejecutar(
                         fn () => app(ServicioViaje::class)->reasignarPorAdmin($record, Usuario::findOrFail($data['chofer_id'])),
                         'Viaje reasignado',
+                    );
+                }),
+            Action::make('cambiarVehiculo')
+                ->label('Cambiar vehículo')
+                ->icon(Heroicon::OutlinedTruck)
+                ->modalHeading('Cambiar el vehículo del viaje largo')
+                ->modalDescription('El chofer sigue siendo el mismo. Se avisa al chofer y al solicitante.')
+                // Mientras el chofer no salió: después, el vehículo ya está en su turno.
+                ->visible(fn (Viaje $record): bool => $record->tipo === TipoViaje::Largo && $record->estado === EstadoViaje::Aceptado)
+                ->schema([
+                    Select::make('vehiculo_id')
+                        ->label('Vehículo')
+                        ->options(fn (Viaje $record): array => array_diff_key(
+                            ViajeResource::vehiculosLibresParaViajeLargo(
+                                $record->programado_para, (int) $record->duracion_estimada_min, $record->chofer_id, $record->id,
+                            ),
+                            [$record->vehiculo_id => true],
+                        ))
+                        ->helperText('Vehículos que no están en otro viaje largo en la franja.')
+                        ->searchable()
+                        ->required(),
+                ])
+                ->action(function (Viaje $record, array $data): void {
+                    $this->ejecutar(
+                        fn () => app(ServicioViajesLargos::class)->reasignar($record, $record->chofer, Vehiculo::findOrFail($data['vehiculo_id'])),
+                        'Vehículo cambiado',
                     );
                 }),
             Action::make('cancelar')

@@ -341,7 +341,17 @@ class ViajeResource extends Resource
         if ($franja === null) {
             return [];
         }
-        [$salida, $regreso] = $franja;
+
+        return self::choferesPorRotacion(...$franja);
+    }
+
+    /**
+     * Choferes con la franja [salida, regreso] libre, en el orden de la rotación, con su último viaje largo.
+     *
+     * @return array<int, string>
+     */
+    public static function choferesPorRotacion(Carbon $salida, Carbon $regreso): array
+    {
         $desde = $salida->toIso8601String();
         $hasta = $regreso->toIso8601String();
 
@@ -356,11 +366,7 @@ class ViajeResource extends Resource
         });
     }
 
-    /**
-     * Vehículos activos que no están en otro viaje largo en la franja; el habitual del chofer elegido, primero.
-     *
-     * @return array<int, string>
-     */
+    /** @return array<int, string> */
     private static function vehiculosParaViajeLargo(Get $get): array
     {
         $franja = self::franjaViajeLargo($get);
@@ -368,26 +374,53 @@ class ViajeResource extends Resource
             return [];
         }
         [$salida, $regreso] = $franja;
-        $desde = $salida->toIso8601String();
-        $minutos = (int) $salida->diffInMinutes($regreso);
 
-        $libres = once(function () use ($desde, $minutos): array {
+        return self::vehiculosLibresParaViajeLargo($salida, (int) $salida->diffInMinutes($regreso), $get('chofer_id'));
+    }
+
+    /**
+     * Vehículos activos que no están en otro viaje largo en la franja; el habitual del chofer, primero. Los que son
+     * el habitual de otro chofer lo dicen: "AB123CD — Toyota Etios (habitual de Pedro)".
+     *
+     * @return array<int, string>
+     */
+    public static function vehiculosLibresParaViajeLargo(Carbon $salida, int $minutos, mixed $choferId, ?int $excluirViajeId = null): array
+    {
+        $desde = $salida->toIso8601String();
+        $choferId = filled($choferId) ? (int) $choferId : null;
+
+        // Como los choferes: las opciones se piden varias veces por request; se calculan una vez por franja.
+        $libres = once(function () use ($desde, $minutos, $excluirViajeId): array {
             $disponibilidad = app(DisponibilidadReservas::class);
 
             return Vehiculo::where('activo', true)
                 ->orderBy('patente')
                 ->get()
-                ->filter(fn (Vehiculo $v) => $disponibilidad->vehiculoDisponible($v->id, Carbon::parse($desde), $minutos))
+                ->filter(fn (Vehiculo $v) => $disponibilidad->vehiculoDisponible($v->id, Carbon::parse($desde), $minutos, $excluirViajeId))
                 ->mapWithKeys(fn (Vehiculo $v) => [$v->id => trim("{$v->patente} — {$v->marca} {$v->modelo}")])
                 ->all();
         });
 
-        $habitual = self::vehiculoHabitual($get('chofer_id'));
-        if ($habitual !== null && isset($libres[$habitual])) {
-            return [$habitual => "{$libres[$habitual]} (habitual)"] + $libres;
+        $habitualDe = once(fn (): array => Usuario::where('rol', RolUsuario::Chofer)
+            ->where('activo', true)
+            ->whereNotNull('vehiculo_habitual_id')
+            ->orderBy('nombre')
+            ->get(['id', 'nombre', 'vehiculo_habitual_id'])
+            ->groupBy('vehiculo_habitual_id')
+            ->all());
+
+        $opciones = [];
+        foreach ($libres as $id => $etiqueta) {
+            $otros = collect($habitualDe[$id] ?? [])->reject(fn (Usuario $u) => $u->id === $choferId)->pluck('nombre');
+            $opciones[$id] = $otros->isEmpty() ? $etiqueta : "$etiqueta (habitual de {$otros->join(', ')})";
         }
 
-        return $libres;
+        $habitual = self::vehiculoHabitual($choferId);
+        if ($habitual !== null && isset($opciones[$habitual])) {
+            return [$habitual => "{$opciones[$habitual]} (habitual)"] + $opciones;
+        }
+
+        return $opciones;
     }
 
     private static function vehiculoHabitual(mixed $choferId): ?int
@@ -584,12 +617,18 @@ class ViajeResource extends Resource
      */
     public static function choferesElegibles(Viaje $viaje): array
     {
-        $elegibles = $viaje->tipo->esAgendado()
-            ? self::choferesConFranjaLibre(
+        $elegibles = match (true) {
+            // Un viaje largo, como en "Nuevo viaje": en el orden de la rotación y con el último viaje largo.
+            $viaje->tipo === TipoViaje::Largo => self::choferesPorRotacion(
+                $viaje->programado_para,
+                $viaje->regreso_estimado ?? $viaje->programado_para->copy()->addMinutes((int) $viaje->duracion_estimada_min),
+            ),
+            $viaje->tipo->esAgendado() => self::choferesConFranjaLibre(
                 $viaje->programado_para,
                 $viaje->duracion_estimada_min ?? app(Parametros::class)->entero('duracion_reserva_por_defecto_min'),
-            )
-            : self::choferesLibres();
+            ),
+            default => self::choferesLibres(),
+        };
 
         if ($viaje->chofer_id !== null) {
             unset($elegibles[$viaje->chofer_id]);

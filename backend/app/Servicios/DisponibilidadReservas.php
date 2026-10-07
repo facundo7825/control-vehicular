@@ -46,21 +46,24 @@ class DisponibilidadReservas
 
     /**
      * El chofer está libre para [inicio, inicio + duración] si ninguna de sus reservas o viajes largos tomados
-     * (aceptados o ya en marcha) se superpone con esa franja más el colchón. No exige turno abierto,
-     * pero con un turno en cierre pendiente (fichó la salida durante un viaje) no toma reservas nuevas.
+     * (aceptados o ya en marcha) se superpone con esa franja más el colchón. Uno que ya salió y se pasó de su
+     * duración estimada lo sigue ocupando hasta ahora. No exige turno abierto; con un turno en cierre pendiente
+     * (fichó la salida durante un viaje) no toma reservas que empiecen antes del fin estimado de su viaje activo
+     * más el colchón, pero sí las posteriores.
      *
      * Con $bloquear, las reservas se leen con FOR UPDATE: dentro de una transacción de asignación
      * en MySQL/MariaDB (REPEATABLE READ), una lectura común podría devolver una foto anterior al bloqueo.
      */
     public function estaDisponible(int $choferId, Carbon $inicio, int $duracionMin, ?int $excluirViajeId = null, bool $bloquear = false): bool
     {
-        // Fichó la salida durante un viaje (cierre pendiente): no toma reservas nuevas.
-        if (Turno::where('chofer_id', $choferId)->whereNull('fin')->whereNotNull('cierre_pendiente_en')->exists()) {
-            return false;
-        }
-
         $colchon = $this->parametros->entero('colchon_reservas_min');
         $porDefecto = $this->parametros->entero('duracion_reserva_por_defecto_min');
+
+        // Fichó la salida durante un viaje (cierre pendiente): no toma nada que empiece antes de que lo termine.
+        if (Turno::where('chofer_id', $choferId)->whereNull('fin')->whereNotNull('cierre_pendiente_en')->exists()
+            && $inicio->lt($this->finEstimadoViajeActivo($choferId, $porDefecto)->addMinutes($colchon))) {
+            return false;
+        }
 
         return Viaje::where('chofer_id', $choferId)
             ->whereIn('tipo', TipoViaje::agendados())
@@ -71,14 +74,43 @@ class DisponibilidadReservas
             ->when($bloquear, fn ($q) => $q->forceIndex('viajes_chofer_id_estado_index')->lockForUpdate())
             ->get()
             ->doesntContain(fn (Viaje $r) => self::seSuperponen(
-                $inicio, $duracionMin, $r->programado_para, $r->duracion_estimada_min ?? $porDefecto, $colchon,
+                $inicio, $duracionMin, $r->programado_para, self::minutosOcupados($r, $porDefecto), $colchon,
             ));
     }
 
     /**
+     * Minutos de la franja de un viaje agendado desde su hora programada: la duración estimada o, si ya salió
+     * (en camino, llegó o en curso) y se pasó de ella, hasta ahora.
+     */
+    private static function minutosOcupados(Viaje $v, int $porDefecto): int
+    {
+        $minutos = $v->duracion_estimada_min ?? $porDefecto;
+
+        if (in_array($v->estado, [EstadoViaje::EnCamino, EstadoViaje::Llego, EstadoViaje::EnCurso], true)
+            && $v->programado_para->copy()->addMinutes($minutos)->lt(now())) {
+            $minutos = (int) ceil($v->programado_para->diffInSeconds(now()) / 60);
+        }
+
+        return $minutos;
+    }
+
+    /**
+     * Cuándo se estima que el chofer termina lo que tiene activo ahora (nunca antes de ahora): desde la hora
+     * programada (o desde que lo aceptó, un viaje inmediato), la duración estimada o la de por defecto.
+     */
+    private function finEstimadoViajeActivo(int $choferId, int $porDefecto): Carbon
+    {
+        return Viaje::activosDeChofer($choferId)->get()
+            ->map(fn (Viaje $v) => ($v->programado_para ?? $v->aceptado_en ?? now())->copy()
+                ->addMinutes($v->duracion_estimada_min ?? $porDefecto))
+            ->push(now())
+            ->max();
+    }
+
+    /**
      * El vehículo está libre para [inicio, inicio + duración] si no está en otro viaje largo tomado (aceptado o
-     * en marcha) que se superponga con esa franja más el colchón. Las reservas toman el vehículo del turno al
-     * salir, así que no cuentan.
+     * en marcha, hasta ahora si se pasó de su regreso estimado) que se superponga con esa franja más el colchón.
+     * Las reservas toman el vehículo del turno al salir, así que no cuentan.
      *
      * Con $bloquear, igual que estaDisponible: lectura con FOR UPDATE, solo sobre las filas de ese vehículo.
      */
@@ -94,7 +126,7 @@ class DisponibilidadReservas
             ->when($bloquear, fn ($q) => $q->forceIndex('viajes_vehiculo_id_estado_index')->lockForUpdate())
             ->get()
             ->doesntContain(fn (Viaje $v) => self::seSuperponen(
-                $inicio, $duracionMin, $v->programado_para, $v->duracion_estimada_min ?? $porDefecto, $colchon,
+                $inicio, $duracionMin, $v->programado_para, self::minutosOcupados($v, $porDefecto), $colchon,
             ));
     }
 

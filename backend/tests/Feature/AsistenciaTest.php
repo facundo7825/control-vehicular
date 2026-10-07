@@ -3,6 +3,7 @@
 use App\Enums\EstadoChofer;
 use App\Enums\EstadoViaje;
 use App\Enums\OrigenTurno;
+use App\Enums\TipoViaje;
 use App\Jobs\AvisarTurno;
 use App\Models\Alerta;
 use App\Models\EventoAsistencia;
@@ -18,6 +19,7 @@ use App\Servicios\CalculadorEstadoChofer;
 use App\Servicios\Despachador;
 use App\Servicios\DisponibilidadReservas;
 use App\Servicios\MaquinaEstadosViaje;
+use App\Servicios\Parametros;
 use App\Servicios\ServicioAsistencia;
 use App\Servicios\ServicioTurnos;
 use App\Servicios\ServicioViaje;
@@ -115,6 +117,12 @@ it('sin vehículo habitual disponible responde sin_vehiculo, crea la alerta y av
         'sin habitual' => $chofer->update(['vehiculo_habitual_id' => null]),
         'inactivo' => $chofer->vehiculoHabitual->update(['activo' => false]),
         'en uso' => Turno::factory()->create(['vehiculo_id' => $chofer->vehiculo_habitual_id]),
+        // Otro chofer sale en 30 minutos en un viaje largo con ese vehículo.
+        'reservado para un viaje largo' => Viaje::factory()->create([
+            'tipo' => TipoViaje::Largo, 'estado' => EstadoViaje::Aceptado,
+            'chofer_id' => Usuario::factory()->chofer()->create()->id, 'vehiculo_id' => $chofer->vehiculo_habitual_id,
+            'programado_para' => now()->addMinutes(30), 'duracion_estimada_min' => 600,
+        ]),
     };
 
     ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'entrada'])
@@ -132,7 +140,20 @@ it('sin vehículo habitual disponible responde sin_vehiculo, crea la alerta y av
             'titulo' => 'Fichaste la entrada',
             'cuerpo' => 'Abrí la app y elegí el vehículo para empezar el turno',
         ]);
-})->with(['sin habitual', 'inactivo', 'en uso']);
+})->with(['sin habitual', 'inactivo', 'en uso', 'reservado para un viaje largo']);
+
+it('el motivo de sin_vehiculo dice que el habitual está reservado para un viaje largo', function () {
+    $chofer = choferConHabitual();
+    Viaje::factory()->create([
+        'tipo' => TipoViaje::Largo, 'estado' => EstadoViaje::Aceptado,
+        'chofer_id' => Usuario::factory()->chofer()->create()->id, 'vehiculo_id' => $chofer->vehiculo_habitual_id,
+        'programado_para' => now()->addMinutes(30), 'duracion_estimada_min' => 600,
+    ]);
+
+    ($this->fichar)(['id_externo' => 'L123', 'tipo' => 'entrada'])
+        ->assertJsonPath('resultado', 'sin_vehiculo')
+        ->assertJsonPath('motivo', 'El vehículo habitual no está disponible: El vehículo está reservado para un viaje largo que sale a las 09:30.');
+});
 
 it('ignora la entrada si ya tiene un turno abierto', function () {
     $chofer = choferConHabitual();
@@ -403,7 +424,7 @@ it('al iniciar un turno se resuelven sus alertas de fichaje sin vehículo', func
 });
 
 describe('cierre pendiente', function () {
-    it('un chofer con cierre pendiente y sin viaje no recibe viajes ni reservas nuevas', function () {
+    it('un chofer con cierre pendiente y sin viaje no recibe viajes inmediatos, pero sí reservas a futuro', function () {
         Queue::fake(); // el vencimiento de la oferta
         $pendiente = choferEnTurno(-34.601, -58.381);
         $pendiente->turnoAbierto->update(['cierre_pendiente_en' => now()]);
@@ -419,8 +440,40 @@ describe('cierre pendiente', function () {
 
         $disponibilidad = app(DisponibilidadReservas::class);
         $manana = now()->addDay();
-        expect($disponibilidad->estaDisponible($pendiente->id, $manana, 60))->toBeFalse()
-            ->and($disponibilidad->choferesDisponibles($manana, 60)->pluck('chofer.id')->all())->toBe([$otro->id]);
+        // El cierre pendiente solo frena lo inmediato: la agenda a futuro sigue libre.
+        expect($disponibilidad->estaDisponible($pendiente->id, $manana, 60))->toBeTrue()
+            ->and($disponibilidad->choferesDisponibles($manana, 60)->pluck('chofer.id')->all())->toBe([$pendiente->id, $otro->id]);
+    });
+
+    it('con cierre pendiente no toma reservas que empiezan antes del fin estimado de su viaje activo', function () {
+        $chofer = choferEnTurno();
+        $chofer->turnoAbierto->update(['cierre_pendiente_en' => now()]);
+        // Viaje inmediato en curso, sin duración estimada: se toma la duración por defecto (60) desde que aceptó.
+        Viaje::factory()->create([
+            'chofer_id' => $chofer->id, 'estado' => EstadoViaje::EnCurso, 'aceptado_en' => now()->subMinutes(20),
+        ]);
+        $d = app(DisponibilidadReservas::class);
+
+        // Fin estimado: dentro de 40 minutos; con el colchón de 30, recién desde dentro de 70.
+        expect($d->estaDisponible($chofer->id, now()->addMinutes(60), 60))->toBeFalse()
+            ->and($d->estaDisponible($chofer->id, now()->addMinutes(71), 60))->toBeTrue()
+            ->and($d->estaDisponible($chofer->id, now()->addDay(), 60))->toBeTrue();
+
+        // Sin cierre pendiente, el viaje inmediato no ocupa la agenda (como antes).
+        $chofer->turnoAbierto->update(['cierre_pendiente_en' => null]);
+        expect($d->estaDisponible($chofer->id, now()->addMinutes(60), 60))->toBeTrue();
+    });
+
+    it('con cierre pendiente y un viaje activo que se pasó de su hora, bloquea hasta ahora más el colchón', function () {
+        $chofer = choferEnTurno();
+        $chofer->turnoAbierto->update(['cierre_pendiente_en' => now()]);
+        Viaje::factory()->create([
+            'chofer_id' => $chofer->id, 'estado' => EstadoViaje::EnCurso, 'aceptado_en' => now()->subHours(3),
+        ]);
+        $d = app(DisponibilidadReservas::class);
+
+        expect($d->estaDisponible($chofer->id, now()->addMinutes(25), 60))->toBeFalse()
+            ->and($d->estaDisponible($chofer->id, now()->addMinutes(31), 60))->toBeTrue();
     });
 
     it('con un viaje activo sigue en viaje', function () {
@@ -594,7 +647,7 @@ describe('avisos de cierre pendiente', function () {
         Usuario::factory()->chofer()->create(['id_externo' => 'L999', 'vehiculo_habitual_id' => Vehiculo::factory()->create()->id]);
         $turno = Turno::factory()->create(['chofer_id' => $chofer->id]);
         Viaje::factory()->create(['chofer_id' => $chofer->id, 'vehiculo_id' => $turno->vehiculo_id, 'estado' => EstadoViaje::EnCurso]);
-        $turnos = Mockery::mock(ServicioTurnos::class, [app(AvisoEstadoChofer::class)])->makePartial();
+        $turnos = Mockery::mock(ServicioTurnos::class, [app(AvisoEstadoChofer::class), app(Parametros::class)])->makePartial();
         $turnos->shouldReceive('finalizarPendiente')->andThrow(new RuntimeException('falla al cerrar'));
         $this->app->instance(ServicioTurnos::class, $turnos);
 

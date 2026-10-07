@@ -177,6 +177,24 @@ describe('nuevo viaje largo', function () {
                 && str_contains($campo->getOptions()[$habitual->id], 'habitual'));
     });
 
+    it('marca los vehículos que son el habitual de otro chofer', function () {
+        $suyo = Vehiculo::factory()->create(['patente' => 'AA111AA', 'marca' => 'Ford', 'modelo' => 'Ka']);
+        $dePedro = Vehiculo::factory()->create(['patente' => 'AB123CD', 'marca' => 'Toyota', 'modelo' => 'Etios']);
+        $libre = Vehiculo::factory()->create(['patente' => 'CC333CC', 'marca' => 'Fiat', 'modelo' => 'Cronos']);
+        $chofer = Usuario::factory()->chofer()->create(['nombre' => 'Ana', 'vehiculo_habitual_id' => $suyo->id]);
+        Usuario::factory()->chofer()->create(['nombre' => 'Pedro', 'vehiculo_habitual_id' => $dePedro->id]);
+        // Un chofer inactivo no cuenta.
+        Usuario::factory()->chofer()->create(['nombre' => 'Inactivo', 'activo' => false, 'vehiculo_habitual_id' => $libre->id]);
+
+        Livewire::test(CreateViaje::class)
+            ->fillForm(formularioLargo(Usuario::factory()->create(), ['chofer_id' => $chofer->id]))
+            ->assertFormFieldExists('vehiculo_id', fn (Select $campo) => $campo->getOptions() === [
+                $suyo->id => 'AA111AA — Ford Ka (habitual)',
+                $dePedro->id => 'AB123CD — Toyota Etios (habitual de Pedro)',
+                $libre->id => 'CC333CC — Fiat Cronos',
+            ]);
+    });
+
     it('recalcula el chofer sugerido al cambiar la franja', function () {
         $ana = Usuario::factory()->chofer()->create(['nombre' => 'Ana']);
         $beto = Usuario::factory()->chofer()->create(['nombre' => 'Beto']);
@@ -223,6 +241,60 @@ describe('rotación de viajes largos', function () {
 
         expect(Livewire::test(RotacionViajesLargos::class)->instance()->filas()->pluck('recientes', 'chofer.nombre')->all())
             ->toBe(['Ana' => 0, 'Carla' => 1, 'Beto' => 2]);
+    });
+});
+
+describe('reasignar y cambiar el vehículo de un viaje largo', function () {
+    it('"Reasignar" ofrece los choferes libres en el orden de la rotación, con su último viaje largo', function () {
+        $actual = Usuario::factory()->chofer()->create(['nombre' => 'Actual']);
+        $viaje = largoDelPanel($actual, Carbon::parse('2026-10-03 09:00:00'), 840);
+        $beto = Usuario::factory()->chofer()->create(['nombre' => 'Beto']);
+        largoFinalizado($beto, '2026-09-12 12:00:00', 'Tinogasta');
+        $carla = Usuario::factory()->chofer()->create(['nombre' => 'Carla']);
+        largoFinalizado($carla, '2026-08-01 12:00:00', 'Belén');
+        $ana = Usuario::factory()->chofer()->create(['nombre' => 'Ana']);
+        $ocupado = Usuario::factory()->chofer()->create(['nombre' => 'Dario']);
+        largoDelPanel($ocupado, Carbon::parse('2026-10-03 12:00:00'), 60);
+
+        expect(ViajeResource::choferesElegibles($viaje))->toBe([
+            $ana->id => 'Ana — Último viaje largo: Nunca',
+            $carla->id => 'Carla — Último viaje largo: 01/08 (Belén)',
+            $beto->id => 'Beto — Último viaje largo: 12/09 (Tinogasta)',
+        ]);
+    });
+
+    it('"Cambiar vehículo" cambia el vehículo de un viaje largo aceptado, con los vehículos libres en su franja', function () {
+        $chofer = Usuario::factory()->chofer()->create();
+        $viaje = largoDelPanel($chofer, Carbon::parse('2026-10-03 09:00:00'), 840);
+        $anterior = $viaje->vehiculo_id;
+        $nuevo = Vehiculo::factory()->create(['patente' => 'ZZ999ZZ']);
+        $ocupado = largoDelPanel(Usuario::factory()->chofer()->create(), Carbon::parse('2026-10-03 12:00:00'), 60)->vehiculo;
+
+        Livewire::test(ViewViaje::class, ['record' => $viaje->id])
+            ->assertActionVisible('cambiarVehiculo')
+            ->mountAction('cambiarVehiculo')
+            ->assertFormFieldExists('vehiculo_id', fn (Select $campo) => isset($campo->getOptions()[$nuevo->id])
+                && ! isset($campo->getOptions()[$anterior])
+                && ! isset($campo->getOptions()[$ocupado->id]))
+            ->setActionData(['vehiculo_id' => $nuevo->id])
+            ->callMountedAction()
+            ->assertHasNoFormErrors()
+            ->assertNotified('Vehículo cambiado');
+
+        expect($viaje->refresh()->vehiculo_id)->toBe($nuevo->id)
+            ->and($viaje->chofer_id)->toBe($chofer->id)
+            ->and($viaje->estado)->toBe(EstadoViaje::Aceptado);
+    });
+
+    it('"Cambiar vehículo" no aparece una vez que el chofer salió ni en otros viajes', function () {
+        $enCamino = largoDelPanel(Usuario::factory()->chofer()->create(), now()->subMinutes(10), 600, ['estado' => EstadoViaje::EnCamino]);
+        $reserva = Viaje::factory()->create([
+            'tipo' => TipoViaje::Reserva, 'estado' => EstadoViaje::Aceptado,
+            'chofer_id' => Usuario::factory()->chofer()->create()->id, 'programado_para' => now()->addDay(),
+        ]);
+
+        Livewire::test(ViewViaje::class, ['record' => $enCamino->id])->assertActionHidden('cambiarVehiculo');
+        Livewire::test(ViewViaje::class, ['record' => $reserva->id])->assertActionHidden('cambiarVehiculo');
     });
 });
 

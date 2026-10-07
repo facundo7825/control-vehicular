@@ -63,9 +63,9 @@ class RotacionViajesLargos
             ->get(['id', 'chofer_id', 'programado_para', 'destino_direccion'])
             ->groupBy('chofer_id');
 
+        // Aceptados, incluido uno cuya salida ya pasó sin que arrancara: sigue pendiente hasta que salga o se cancele.
         $proximos = Viaje::where('tipo', TipoViaje::Largo)
             ->where('estado', EstadoViaje::Aceptado)
-            ->where('programado_para', '>=', now())
             ->whereIn('chofer_id', $ids)
             ->orderBy('programado_para')
             ->get()
