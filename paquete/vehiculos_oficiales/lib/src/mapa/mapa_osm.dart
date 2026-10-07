@@ -1,12 +1,77 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter_map_cache/flutter_map_cache.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../entorno.dart';
 import '../modelos/comunes.dart';
+import '../modelos/configuracion.dart';
 import '../ui/comunes/comunes.dart';
+import 'cache_teselas.dart';
+import 'corredor_teselas.dart';
 import 'mapa.dart';
 import 'mapa_fondo.dart';
+
+/// Solo para tests: el cliente HTTP de las teselas con caché responde con esto en lugar de la red.
+final adaptadorTeselasProvider = Provider<HttpClientAdapter?>((ref) => null);
+
+/// Las teselas de [MapaOsm] con caché en disco ([almacenTeselasProvider]): las que ya se vieron (o se bajaron
+/// para un viaje largo, ver [descargadorTeselasProvider]) se muestran sin señal. Una tesela guardada se usa sin
+/// preguntar al servidor; [almacenTeselasProvider] las recorta por tamaño y edad. Nulo sin disco (web): el
+/// proveedor de flutter_map de siempre, directo a la red.
+final teselasConCacheProvider = Provider<CachedTileProvider?>((ref) {
+  final almacen = ref.watch(almacenTeselasProvider);
+  if (almacen == null) return null;
+  final cliente = Dio(
+    BaseOptions(connectTimeout: const Duration(seconds: 15), receiveTimeout: const Duration(seconds: 30)),
+  );
+  final adaptador = ref.watch(adaptadorTeselasProvider);
+  if (adaptador != null) cliente.httpClientAdapter = adaptador;
+  ref.onDispose(cliente.close);
+  return CachedTileProvider(
+    store: almacen,
+    dio: cliente,
+    // El mismo que pondría TileLayer; así lo llevan también las descargas anticipadas.
+    headers: {'User-Agent': 'flutter_map (${MapaOsm.agenteUsuario})'},
+  );
+});
+
+/// Baja al caché de [MapaOsm] las teselas del servidor configurado (las de un viaje largo, antes de quedarse
+/// sin señal). Nulo si no hay a dónde bajarlas: el mapa es el de Google, no hay disco (web) o el mapa de fondo
+/// todavía no se conoce. También con el OSM público (un backend sin `MAPAS_TESELAS_*`): su política de uso
+/// prohíbe bajar teselas por adelantado.
+final descargadorTeselasProvider = Provider.autoDispose<DescargadorTeselas?>((ref) {
+  if (ref.watch(entornoProvider).config.googleMapsApiKey.isNotEmpty) return null;
+  final fondo = ref.watch(mapaFondoProvider);
+  final teselas = ref.watch(teselasConCacheProvider);
+  if (fondo == null || teselas == null || fondo.url.contains('tile.openstreetmap.org')) return null;
+  return _DescargadorOsm(teselas, fondo);
+});
+
+class _DescargadorOsm implements DescargadorTeselas {
+  _DescargadorOsm(this._teselas, MapaFondo fondo)
+    : zoomMaximo = fondo.maxZoom,
+      // Solo para armar las direcciones como las arma el mapa (TMS, subdominios): no se dibuja.
+      _capa = TileLayer(urlTemplate: fondo.url, tms: fondo.tms, maxNativeZoom: fondo.maxZoom);
+
+  final CachedTileProvider _teselas;
+  final TileLayer _capa;
+
+  @override
+  final int zoomMaximo;
+
+  @override
+  Future<void> descargar(Tesela tesela) async {
+    final url = _teselas.getTileUrl(TileCoordinates(tesela.x, tesela.y, tesela.z), _capa);
+    // Por el mismo cliente que el mapa: la respuesta queda en su caché (o sale de ahí sin pedirla).
+    await _teselas.dio.get<List<int>>(
+      url,
+      options: Options(responseType: ResponseType.bytes, headers: _teselas.headers),
+    );
+  }
+}
 
 /// Mapa con flutter_map, sin clave. Se usa cuando la app no configuró una clave de Google Maps. El mapa de
 /// fondo (servidor de teselas, TMS, zoom máximo y créditos) llega del backend en `GET /configuracion`
@@ -17,7 +82,8 @@ class MapaOsm extends ConsumerStatefulWidget {
 
   final DatosMapa datos;
 
-  /// De dónde salen las teselas. Nulo = de la red; los tests pasan uno que no la usa.
+  /// De dónde salen las teselas. Nulo = de la red, con el caché en disco de [teselasConCacheProvider]; los
+  /// tests pasan uno que no la usa.
   final TileProvider? teselas;
 
   /// Identifica a la app ante los servidores de teselas, como pide la política de uso de OpenStreetMap.
@@ -106,7 +172,7 @@ class _MapaOsmState extends ConsumerState<MapaOsm> {
             // Más cerca que eso se agrandan las teselas del último nivel (el mapa no queda en blanco).
             maxNativeZoom: fondo.maxZoom,
             userAgentPackageName: MapaOsm.agenteUsuario,
-            tileProvider: widget.teselas,
+            tileProvider: widget.teselas ?? ref.watch(teselasConCacheProvider),
           ),
         // Antes que los marcadores: quedan debajo.
         PolylineLayer(

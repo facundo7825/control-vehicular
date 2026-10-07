@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vehiculos_oficiales/src/chofer/turno.dart';
+import 'package:vehiculos_oficiales/src/mapa/mapa_osm.dart';
 import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real.dart';
 import 'package:vehiculos_oficiales/src/ui/chofer/agenda.dart';
 import 'package:vehiculos_oficiales/src/ui/chofer/viaje_chofer.dart';
@@ -197,6 +198,26 @@ void main() {
     await esperar(tester);
 
     expect(find.byType(ViajeChofer), findsOneWidget);
+  });
+
+  testWidgets('"Voy en camino" en un viaje largo baja el mapa del recorrido para verlo sin señal', (tester) async {
+    final agenda = p.json(c.agenda)..['reservas'] = [largoConfirmado()];
+    e = entornoChofer(agenda: jsonEncode(agenda));
+    e.http
+      ..responder('POST', 'viajes/7/estado', 200, jsonEncode(largoConfirmado()..['estado'] = 'en_camino'))
+      ..responder('GET', 'ruta', 200, p.ruta);
+    final descargador = DescargadorFalso();
+
+    await montarChofer(tester, e, tiempoReal: tr, extra: [descargadorTeselasProvider.overrideWithValue(descargador)]);
+    await tester.tap(find.byTooltip('Agenda'));
+    await esperar(tester);
+    expect(descargador.pedidas, isEmpty, reason: 'antes de salir no baja nada');
+
+    await tester.tap(find.text('Voy en camino'));
+    await esperar(tester);
+
+    expect(find.byType(ViajeChofer), findsOneWidget);
+    expect(descargador.pedidas.map((t) => t.z).toSet(), {10, 11, 12, 13, 14});
   });
 
   testWidgets('"Voy en camino" en una reserva no refresca el turno', (tester) async {

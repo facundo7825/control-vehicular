@@ -6,6 +6,7 @@ import 'package:vehiculos_oficiales/src/avisos/notificaciones_locales.dart';
 import 'package:vehiculos_oficiales/src/avisos/reproductor_sonidos.dart';
 import 'package:vehiculos_oficiales/src/chofer/almacen_cola.dart';
 import 'package:vehiculos_oficiales/src/entorno.dart';
+import 'package:vehiculos_oficiales/src/mapa/cache_teselas.dart';
 import 'package:vehiculos_oficiales/src/sesion/almacen_token.dart';
 import 'package:vehiculos_oficiales/vehiculos_oficiales.dart';
 
@@ -73,6 +74,8 @@ class EntornoPrueba {
     adaptadorHttpProvider.overrideWithValue(http),
     almacenTokenProvider.overrideWithValue(almacen),
     almacenColaProvider.overrideWithValue(almacenCola),
+    // Sin disco para las teselas (ni path_provider): el mapa de prueba no las usa.
+    almacenTeselasProvider.overrideWithValue(null),
     reproductorSonidosProvider.overrideWithValue(sonidos),
     notificacionesLocalesProvider.overrideWithValue(notificaciones),
     ...extra,
