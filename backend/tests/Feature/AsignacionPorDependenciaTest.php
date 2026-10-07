@@ -185,14 +185,14 @@ describe('despacho', function () {
             ->and(OfertaViaje::count())->toBe(0);
     });
 
-    it('pedir a un chofer específico no cambia y no registra criterio', function () {
+    it('pedir a un chofer específico no cambia y registra que lo eligió el solicitante', function () {
         $otro = choferEnTurno(-34.601, -58.381);
         $asignado = choferEnTurno(-34.700, -58.480);
         $viaje = viajeDe(solicitanteCon($asignado));
 
         app(Despachador::class)->pedirA($viaje, $otro);
 
-        expect(OfertaViaje::sole())->chofer_id->toBe($otro->id)->criterio->toBeNull();
+        expect(OfertaViaje::sole())->chofer_id->toBe($otro->id)->criterio->toBe(CriterioOferta::ElegidoPorSolicitante);
     });
 });
 
@@ -234,14 +234,14 @@ describe('reservas', function () {
         expect(OfertaViaje::sole())->chofer_id->toBe($depLiviano->id)->criterio->toBe(CriterioOferta::Dependencia);
     });
 
-    it('al resto lo sigue eligiendo por menos reservas en el día, sin criterio de cercanía', function () {
+    it('al resto lo sigue eligiendo por menos reservas en el día, con criterio disponibilidad', function () {
         $cargado = Usuario::factory()->chofer()->create();
         reservaAceptada($cargado, Carbon::parse('2026-10-02 19:00'));
         $liviano = Usuario::factory()->chofer()->create();
 
         pedirReserva(solicitanteCon());
 
-        expect(OfertaViaje::sole())->chofer_id->toBe($liviano->id)->criterio->toBeNull();
+        expect(OfertaViaje::sole())->chofer_id->toBe($liviano->id)->criterio->toBe(CriterioOferta::Disponibilidad);
     });
 
     it('si el chofer asignado está ocupado en esa franja pasa a la dependencia', function () {
@@ -275,6 +275,6 @@ describe('reservas', function () {
 
         pedirReserva(solicitanteCon($asignado), ['modo' => 'especifico', 'chofer_id' => $elegido->id]);
 
-        expect(OfertaViaje::sole())->chofer_id->toBe($elegido->id)->criterio->toBeNull();
+        expect(OfertaViaje::sole())->chofer_id->toBe($elegido->id)->criterio->toBe(CriterioOferta::ElegidoPorSolicitante);
     });
 });

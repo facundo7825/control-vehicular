@@ -122,7 +122,7 @@ class ServicioReservas
      * Con cualquiera disponible van primero el chofer asignado al solicitante y los de su dependencia;
      * dentro de cada grupo, el orden de choferesDisponibles (menos reservas en el día).
      *
-     * @return Collection<int, array{chofer: Usuario, criterio: ?CriterioOferta}>
+     * @return Collection<int, array{chofer: Usuario, criterio: CriterioOferta}>
      */
     private function candidatos(Usuario $solicitante, ModoViaje $modo, ?int $choferId, Carbon $inicio, int $duracion): Collection
     {
@@ -133,7 +133,7 @@ class ServicioReservas
                 throw new ReglaNegocio('El chofer elegido no está disponible en ese horario.');
             }
 
-            return collect([['chofer' => $chofer, 'criterio' => null]]);
+            return collect([['chofer' => $chofer, 'criterio' => CriterioOferta::ElegidoPorSolicitante]]);
         }
 
         $choferes = $this->disponibilidad->choferesDisponibles($inicio, $duracion)->pluck('chofer');
@@ -141,6 +141,6 @@ class ServicioReservas
             throw new ReglaNegocio('No hay choferes disponibles en ese horario.');
         }
 
-        return $this->asignador->agruparPorCriterio($solicitante->loadMissing('dependencia'), $choferes, resto: null);
+        return $this->asignador->agruparPorCriterio($solicitante->loadMissing('dependencia'), $choferes, resto: CriterioOferta::Disponibilidad);
     }
 }

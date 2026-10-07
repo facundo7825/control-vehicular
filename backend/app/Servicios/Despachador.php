@@ -66,7 +66,7 @@ class Despachador
     {
         $listo = $viaje->obligatorio
             ? $this->asignador->asignar($viaje, $chofer)
-            : $this->ofrecer($viaje, $chofer);
+            : $this->ofrecer($viaje, $chofer, CriterioOferta::ElegidoPorSolicitante);
 
         if (! $listo) {
             $this->maquina->intentar($viaje, EstadoViaje::SinChofer, desde: self::SIN_ASIGNAR);

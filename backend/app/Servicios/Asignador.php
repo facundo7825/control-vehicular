@@ -46,23 +46,23 @@ class Asignador
      * dependencia, solo si está activa, y de ella solo los choferes activos.
      *
      * @param  Collection<int, Usuario>  $choferes
-     * @param  ?CriterioOferta  $resto  criterio de los que no son del solicitante (null si no hay uno que explique su orden)
-     * @return Collection<int, array{chofer: Usuario, criterio: ?CriterioOferta}>
+     * @param  CriterioOferta  $resto  criterio de los que no son del solicitante (lo que decidió su orden)
+     * @return Collection<int, array{chofer: Usuario, criterio: CriterioOferta}>
      */
-    public function agruparPorCriterio(?Usuario $solicitante, Collection $choferes, ?CriterioOferta $resto): Collection
+    public function agruparPorCriterio(?Usuario $solicitante, Collection $choferes, CriterioOferta $resto): Collection
     {
         $dependencia = $solicitante?->dependencia;
         $deLaDependencia = $dependencia?->activa
             ? $dependencia->choferes()->pluck('usuarios.id')->flip()
             : collect();
 
-        $criterio = fn (Usuario $c): ?CriterioOferta => match (true) {
+        $criterio = fn (Usuario $c): CriterioOferta => match (true) {
             ! $c->esChofer() || ! $c->activo => $resto,
             $c->id === (int) $solicitante?->chofer_asignado_id => CriterioOferta::ChoferAsignado,
             $deLaDependencia->has($c->id) => CriterioOferta::Dependencia,
             default => $resto,
         };
-        $grupo = fn (?CriterioOferta $c): int => match ($c) {
+        $grupo = fn (CriterioOferta $c): int => match ($c) {
             CriterioOferta::ChoferAsignado => 0,
             CriterioOferta::Dependencia => 1,
             default => 2,

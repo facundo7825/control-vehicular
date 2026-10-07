@@ -10,6 +10,8 @@ enum CriterioOferta: string implements HasLabel
     case ChoferAsignado = 'chofer_asignado';
     case Dependencia = 'dependencia';
     case Cercania = 'cercania';
+    case ElegidoPorSolicitante = 'elegido_por_solicitante';
+    case Disponibilidad = 'disponibilidad';
 
     public function getLabel(): string
     {
@@ -17,6 +19,8 @@ enum CriterioOferta: string implements HasLabel
             self::ChoferAsignado => 'Chofer asignado',
             self::Dependencia => 'Su dependencia',
             self::Cercania => 'Cercanía',
+            self::ElegidoPorSolicitante => 'Elegido por el solicitante',
+            self::Disponibilidad => 'Disponibilidad',
         };
     }
 }

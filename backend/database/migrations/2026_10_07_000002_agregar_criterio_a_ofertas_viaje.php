@@ -5,8 +5,9 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
 /**
- * Con qué criterio se ofreció el viaje (chofer asignado, dependencia o cercanía). Va aparte de `motivo`,
- * que guarda por qué canceló el chofer. Nulo en las ofertas a un chofer elegido por el solicitante.
+ * Con qué criterio se ofreció el viaje (chofer asignado, dependencia, cercanía, elegido por el solicitante o
+ * disponibilidad). Va aparte de `motivo`, que guarda por qué canceló el chofer. Nulo en las ofertas anteriores
+ * y en los registros de cancelación del chofer.
  */
 return new class extends Migration
 {

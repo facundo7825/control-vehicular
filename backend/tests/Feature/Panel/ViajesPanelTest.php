@@ -179,7 +179,8 @@ it('rechaza al chofer elegido si dejó de estar libre antes de confirmar', funct
 it('las ofertas del viaje muestran con qué criterio se ofreció', function () {
     $viaje = Viaje::factory()->create(['estado' => EstadoViaje::Ofrecido]);
     $ofertas = collect([
-        CriterioOferta::ChoferAsignado, CriterioOferta::Dependencia, CriterioOferta::Cercania, null,
+        CriterioOferta::ChoferAsignado, CriterioOferta::Dependencia, CriterioOferta::Cercania,
+        CriterioOferta::ElegidoPorSolicitante, CriterioOferta::Disponibilidad, null,
     ])->map(fn ($criterio) => OfertaViaje::create([
         'viaje_id' => $viaje->id, 'chofer_id' => Usuario::factory()->chofer()->create()->id,
         'resultado' => ResultadoOferta::Rechazada, 'criterio' => $criterio,
@@ -191,5 +192,7 @@ it('las ofertas del viaje muestran con qué criterio se ofreció', function () {
         ->assertTableColumnStateSet('criterio', CriterioOferta::ChoferAsignado, $ofertas[0])
         ->assertSee('Chofer asignado')
         ->assertSee('Su dependencia')
-        ->assertSee('Cercanía');
+        ->assertSee('Cercanía')
+        ->assertSee('Elegido por el solicitante')
+        ->assertSee('Disponibilidad');
 });
