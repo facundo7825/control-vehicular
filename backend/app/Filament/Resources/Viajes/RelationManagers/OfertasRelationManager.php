@@ -25,6 +25,7 @@ class OfertasRelationManager extends RelationManager
         return $table
             ->columns([
                 TextColumn::make('chofer.nombre')->label('Chofer'),
+                TextColumn::make('criterio')->placeholder('—'),
                 TextColumn::make('resultado')->badge(),
                 TextColumn::make('ofrecido_en')->label('Ofrecida')->dateTime('d/m H:i:s', $zona),
                 TextColumn::make('vence_en')->label('Vence')->dateTime('d/m H:i:s', $zona),
