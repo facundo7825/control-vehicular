@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:vehiculos_oficiales/src/entorno.dart';
 import 'package:vehiculos_oficiales/src/mapa/mapa.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
 import 'package:vehiculos_oficiales/src/solicitante/borrador_pedido.dart';
@@ -19,12 +20,16 @@ const _tribunales = LugarEncontrado(
 void main() {
   late ProviderContainer c;
   late UbicadorFalso ubicador;
+  late ApiFalsa api;
   BorradorPedidoNotifier notifier() => c.read(borradorPedidoProvider.notifier);
   BorradorPedido borrador() => c.read(borradorPedidoProvider);
 
   setUp(() {
     ubicador = UbicadorFalso(_aqui);
-    c = ProviderContainer.test(overrides: [ubicadorProvider.overrideWithValue(ubicador)]);
+    api = ApiFalsa();
+    c = ProviderContainer.test(
+      overrides: [ubicadorProvider.overrideWithValue(ubicador), apiProvider.overrideWithValue(api)],
+    );
   });
 
   test('sin ubicación, el primer toque marca el origen y el segundo el destino', () async {
@@ -265,7 +270,8 @@ void main() {
         j['origen'] = {'lat': _aqui.lat + 0.01, 'lng': _aqui.lng, 'direccion': null}; // ~1 km
         notifier().desdeViaje(Viaje.fromJson(j));
         expect(borrador().origenEsMiUbicacion, isFalse);
-        expect(borrador().descripcion(PuntoPedido.origen), contains(','));
+        await pumpEventQueue(); // sin dirección encontrada: nunca las coordenadas
+        expect(borrador().descripcion(PuntoPedido.origen), 'Ubicación marcada en el mapa');
       },
     );
 
@@ -337,6 +343,168 @@ void main() {
         ..elegirLugar(LugarEncontrado(nombre: 'X', direccion: 'a' * 300, coordenada: const Coordenada(1, 1)));
 
       expect(borrador().direccionDestino.length, 255);
+    });
+  });
+
+  group('dirección de cada punto (geocodificación inversa)', () {
+    const tocado = Coordenada(-26.8083, -65.2176);
+
+    test('el origen en mi ubicación dice "Tu ubicación actual" con su dirección debajo, y la manda', () async {
+      api
+        ..direcciones[_aqui] = 'Sarmiento 520'
+        ..demorarDireccion[_aqui] = Completer();
+
+      await notifier().ubicar();
+      expect(borrador().descripcion(PuntoPedido.origen), 'Tu ubicación actual');
+      expect(borrador().detalleOrigen, 'Buscando la dirección…');
+
+      api.demorarDireccion[_aqui]!.complete();
+      await pumpEventQueue();
+
+      expect(api.consultasDireccion, [_aqui]);
+      expect(borrador().descripcion(PuntoPedido.origen), 'Tu ubicación actual');
+      expect(borrador().detalleOrigen, 'Sarmiento 520');
+      expect(borrador().direccionOrigen, ''); // el campo para escribir queda libre
+      notifier().fijar(PuntoPedido.destino, const Coordenada(2, 2));
+      expect(borrador().pedido().toJson()['origen_direccion'], 'Sarmiento 520');
+    });
+
+    test('lo escrito como dirección de origen gana a la encontrada', () async {
+      api.direcciones[_aqui] = 'Sarmiento 520';
+      await notifier().ubicar();
+      await pumpEventQueue();
+
+      notifier()
+        ..direccion(PuntoPedido.origen, 'Puerta 2')
+        ..fijar(PuntoPedido.destino, const Coordenada(2, 2));
+
+      expect(borrador().descripcion(PuntoPedido.origen), 'Puerta 2');
+      expect(borrador().pedido().toJson()['origen_direccion'], 'Puerta 2');
+    });
+
+    test('un destino tocado en el mapa toma su dirección y la manda', () async {
+      api
+        ..direcciones[tocado] = 'San Martín 100'
+        ..demorarDireccion[tocado] = Completer();
+      await notifier().ubicar();
+
+      notifier().marcar(tocado);
+      expect(borrador().descripcion(PuntoPedido.destino), 'Buscando la dirección…');
+      api.demorarDireccion[tocado]!.complete();
+      await pumpEventQueue();
+
+      expect(borrador().direccionDestino, 'San Martín 100');
+      expect(borrador().descripcion(PuntoPedido.destino), 'San Martín 100');
+      expect(borrador().pedido().toJson()['destino_direccion'], 'San Martín 100');
+    });
+
+    test('un origen tocado en el mapa también toma su dirección', () async {
+      api.direcciones[tocado] = 'San Martín 100';
+      ubicador.posicion = null;
+      await notifier().ubicar();
+
+      notifier().marcar(tocado);
+      await pumpEventQueue();
+
+      expect(borrador().descripcion(PuntoPedido.origen), 'San Martín 100');
+    });
+
+    test('una respuesta vieja no pisa la de un punto más nuevo', () async {
+      const otro = Coordenada(-26.81, -65.21);
+      api
+        ..direcciones[tocado] = 'San Martín 100'
+        ..direcciones[otro] = 'Laprida 50'
+        ..demorarDireccion[tocado] = Completer()
+        ..demorarDireccion[otro] = Completer();
+      await notifier().ubicar();
+
+      notifier()
+        ..marcar(tocado)
+        ..marcar(otro);
+      api.demorarDireccion[otro]!.complete();
+      await pumpEventQueue();
+      api.demorarDireccion[tocado]!.complete();
+      await pumpEventQueue();
+
+      expect(borrador().destino, otro);
+      expect(borrador().direccionDestino, 'Laprida 50');
+    });
+
+    test('la dirección de la ubicación que llega tarde no se aplica a un origen elegido a mano', () async {
+      api
+        ..direcciones[_aqui] = 'Sarmiento 520'
+        ..demorarDireccion[_aqui] = Completer();
+      await notifier().ubicar();
+
+      notifier()
+        ..marcarAhora(PuntoPedido.origen)
+        ..marcar(tocado);
+      api.demorarDireccion[_aqui]!.complete();
+      await pumpEventQueue();
+
+      expect(borrador().origen, tocado);
+      expect(borrador().detalleOrigen, isNull);
+      expect(borrador().lugarOrigen!.direccion, isNull);
+    });
+
+    test('si no hay dirección (falla o sin conexión) se sigue sin ella: ni coordenadas ni dirección', () async {
+      await notifier().ubicar();
+      notifier().marcar(tocado);
+      await pumpEventQueue();
+
+      expect(borrador().detalleOrigen, isNull);
+      expect(borrador().descripcion(PuntoPedido.origen), 'Tu ubicación actual');
+      expect(borrador().descripcion(PuntoPedido.destino), 'Ubicación marcada en el mapa');
+      final cuerpo = borrador().pedido().toJson();
+      expect(cuerpo.containsKey('origen_direccion'), isFalse);
+      expect(cuerpo.containsKey('destino_direccion'), isFalse);
+    });
+
+    test('lo que se escribe mientras se busca la dirección del destino no se pisa', () async {
+      api
+        ..direcciones[tocado] = 'San Martín 100'
+        ..demorarDireccion[tocado] = Completer();
+      await notifier().ubicar();
+
+      notifier()
+        ..marcar(tocado)
+        ..direccion(PuntoPedido.destino, 'Puerta 2');
+      api.demorarDireccion[tocado]!.complete();
+      await pumpEventQueue();
+
+      expect(borrador().direccionDestino, 'Puerta 2');
+    });
+
+    test('un toque nuevo reemplaza la dirección de la sugerencia elegida antes', () async {
+      await notifier().ubicar();
+      notifier().elegirLugar(_tribunales);
+
+      notifier().marcar(tocado);
+      await pumpEventQueue();
+
+      expect(borrador().direccionDestino, '');
+      expect(borrador().pedido().toJson().containsKey('destino_direccion'), isFalse);
+    });
+
+    test('una dirección larga se corta en el límite del backend (255)', () async {
+      api.direcciones[tocado] = 'a' * 300;
+      await notifier().ubicar();
+      notifier().marcar(tocado);
+      await pumpEventQueue();
+
+      expect(borrador().direccionDestino.length, 255);
+    });
+
+    test('después de pedir, la misma ubicación no se vuelve a consultar', () async {
+      api.direcciones[_aqui] = 'Sarmiento 520';
+      await notifier().ubicar();
+      await pumpEventQueue();
+
+      notifier().limpiar();
+      await pumpEventQueue();
+
+      expect(api.consultasDireccion, [_aqui]);
+      expect(borrador().detalleOrigen, 'Sarmiento 520');
     });
   });
 

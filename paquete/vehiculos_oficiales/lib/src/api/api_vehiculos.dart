@@ -76,6 +76,19 @@ class ApiVehiculos {
     ).map(LugarEncontrado.fromJson).toList(),
   );
 
+  /// Dirección legible de [punto] (`GET lugares/inverso`), p. ej. "Sarmiento 520, San Fernando del Valle
+  /// de Catamarca". Nula si el proveedor no la tiene o si algo falla (sin red, 422, 429, respuesta rara):
+  /// es solo para mostrar y el servidor la completa al crear el viaje, así que nunca lanza.
+  Future<String?> direccionDe(Coordenada punto) async {
+    try {
+      final j = leerMapa(await cliente.get('lugares/inverso', query: {'lat': punto.lat, 'lng': punto.lng}));
+      final direccion = (j['direccion'] as String?)?.trim();
+      return direccion == null || direccion.isEmpty ? null : direccion;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Recorrido en auto de [origen] a [destino], con indicaciones en español. Nulo si el proveedor no pudo
   /// armarlo (el backend responde `null`).
   Future<Ruta?> obtenerRuta(Coordenada origen, Coordenada destino) => _leer(() async {

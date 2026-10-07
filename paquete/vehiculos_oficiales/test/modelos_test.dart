@@ -52,7 +52,7 @@ void main() {
     expect(v.programadoPara, DateTime.utc(2026, 10, 2, 13));
     expect(v.duracionEstimadaMin, 19);
     expect(v.origen.direccion, isNull);
-    expect(v.origen.descripcion, '-26.82410, -65.22260');
+    expect(v.origen.descripcion, 'Ubicación marcada en el mapa'); // nunca coordenadas a la vista
   });
 
   test('lee viajes/actual del solicitante y del chofer', () {

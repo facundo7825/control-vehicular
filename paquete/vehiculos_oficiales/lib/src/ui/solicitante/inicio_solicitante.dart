@@ -285,7 +285,7 @@ class _PanelPedidoState extends ConsumerState<_PanelPedido> {
                   ListTile(
                     leading: const Icon(Icons.trip_origin),
                     title: const Text('Origen'),
-                    subtitle: Text(b.descripcion(PuntoPedido.origen) ?? sinOrigen),
+                    subtitle: textoConDetalle(b.descripcion(PuntoPedido.origen) ?? sinOrigen, b.detalleOrigen),
                     selected: buscandoOrigen,
                     onTap: () => _marcar(PuntoPedido.origen),
                     trailing: b.origenEsMiUbicacion && !buscandoOrigen
@@ -314,12 +314,7 @@ class _PanelPedidoState extends ConsumerState<_PanelPedido> {
                   ListTile(
                     leading: const Icon(Icons.place),
                     title: const Text('Destino'),
-                    subtitle: ruta == null
-                        ? Text(destino)
-                        : Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [Text(destino), Text(resumenRuta(ruta))],
-                          ),
+                    subtitle: textoConDetalle(destino, ruta == null ? null : resumenRuta(ruta)),
                     selected: !buscandoOrigen,
                     onTap: () => _marcar(PuntoPedido.destino),
                   ),
