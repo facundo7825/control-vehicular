@@ -2,7 +2,9 @@
 
 namespace App\Servicios;
 
+use App\Enums\EstadoViaje;
 use App\Enums\OrigenTurno;
+use App\Enums\TipoViaje;
 use App\Excepciones\AccionNoPermitida;
 use App\Excepciones\ReglaNegocio;
 use App\Models\Alerta;
@@ -37,6 +39,7 @@ class ServicioTurnos
             if (Turno::where('vehiculo_id', $vehiculo->id)->whereNull('fin')->exists()) {
                 throw new ReglaNegocio('El vehículo está en uso por otro chofer.');
             }
+            $this->rechazarSiEstaEnViajeLargo($vehiculo->id, $chofer->id);
 
             // Con el turno abierto (manual o por fichaje) deja de valer el aviso de "fichó sin vehículo".
             Alerta::pendientes()->where('tipo', Alerta::ASISTENCIA_SIN_VEHICULO)->where('chofer_id', $chofer->id)
@@ -82,6 +85,7 @@ class ServicioTurnos
             if (Turno::where('vehiculo_id', $vehiculo->id)->whereNull('fin')->exists()) {
                 throw new ReglaNegocio('El vehículo está en uso por otro chofer.');
             }
+            $this->rechazarSiEstaEnViajeLargo($vehiculo->id, $chofer->id);
 
             $turno->update(['vehiculo_id' => $vehiculo->id]);
 
@@ -144,5 +148,21 @@ class ServicioTurnos
             ->whereNotIn('id', Turno::whereNull('fin')->select('vehiculo_id'))
             ->orderBy('patente')
             ->get();
+    }
+
+    /**
+     * Un vehículo que salió en un viaje largo (en camino, llegó o en curso) no se usa en otro turno hasta que
+     * vuelve. El chofer de ese viaje sí puede (re)abrir turno con él.
+     */
+    private function rechazarSiEstaEnViajeLargo(int $vehiculoId, int $choferId): void
+    {
+        $enViajeLargo = Viaje::where('vehiculo_id', $vehiculoId)
+            ->where('tipo', TipoViaje::Largo)
+            ->whereIn('estado', [EstadoViaje::EnCamino, EstadoViaje::Llego, EstadoViaje::EnCurso])
+            ->where('chofer_id', '!=', $choferId)
+            ->exists();
+        if ($enViajeLargo) {
+            throw new ReglaNegocio('El vehículo está en un viaje largo.');
+        }
     }
 }

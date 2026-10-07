@@ -12,7 +12,9 @@ use App\Excepciones\AccionNoPermitida;
 use App\Excepciones\ReglaNegocio;
 use App\Models\CargoPrioritario;
 use App\Models\OfertaViaje;
+use App\Models\Turno;
 use App\Models\Usuario;
+use App\Models\Vehiculo;
 use App\Models\Viaje;
 use App\Support\HoraLocal;
 use Illuminate\Support\Facades\DB;
@@ -148,16 +150,45 @@ class ServicioViaje
                 throw new ReglaNegocio("Podés salir hacia $esta a partir de las ".HoraLocal::formatear($desde, 'H:i').'.');
             }
 
-            $vehiculoTurno = $chofer->turnoAbierto()->value('vehiculo_id')
+            $turno = $chofer->turnoAbierto()->first()
                 ?? throw new ReglaNegocio("Iniciá tu turno para comenzar $la.");
-            $vehiculoId = $largo ? $viaje->vehiculo_id : $vehiculoTurno;
 
             if (Viaje::activosDeChofer($chofer->id)->whereKeyNot($viaje->id)->exists()) {
                 throw new ReglaNegocio("Terminá tu viaje actual antes de comenzar $la.");
             }
 
+            $vehiculoId = $turno->vehiculo_id;
+            if ($largo) {
+                $vehiculoId = $viaje->vehiculo_id;
+                $this->usarVehiculoDelViajeLargo($turno, $vehiculoId);
+            }
+
             $this->maquina->transicionar($viaje, EstadoViaje::EnCamino, ['vehiculo_id' => $vehiculoId]);
         }, attempts: 3);
+    }
+
+    /**
+     * Al salir en un viaje largo, el turno del chofer pasa al vehículo del viaje (así el vehículo no queda en dos
+     * lugares). Mismas reglas y orden de bloqueo que ServicioTurnos::cambiarVehiculo: el chofer ya está bloqueado,
+     * después el vehículo.
+     */
+    private function usarVehiculoDelViajeLargo(Turno $turno, int $vehiculoId): void
+    {
+        if ((int) $turno->vehiculo_id === $vehiculoId) {
+            return;
+        }
+
+        $vehiculo = Vehiculo::whereKey($vehiculoId)->lockForUpdate()->first();
+        if (! $vehiculo?->activo) {
+            throw new ReglaNegocio('El vehículo del viaje no está activo. Avisale al encargado.');
+        }
+
+        $otro = Turno::where('vehiculo_id', $vehiculoId)->whereNull('fin')->whereKeyNot($turno->id)->with('chofer')->first();
+        if ($otro) {
+            throw new ReglaNegocio("El vehículo del viaje está en uso por {$otro->chofer->nombre}. Avisale al encargado.");
+        }
+
+        $turno->update(['vehiculo_id' => $vehiculoId]);
     }
 
     public function cancelarPorSolicitante(Viaje $viaje, Usuario $solicitante, ?string $motivo): Viaje
@@ -248,9 +279,8 @@ class ServicioViaje
             if ($soloSinChofer) {
                 throw new ReglaNegocio('El viaje ya tiene chofer o terminó; no se puede asignar.');
             }
-            $vehiculo = $viaje->vehiculo ?? throw new ReglaNegocio('El viaje largo no tiene vehículo asignado.');
 
-            return $this->largos->reasignar($viaje, $chofer, $vehiculo);
+            return $this->largos->reasignar($viaje, $chofer);
         }
 
         $esReserva = DB::transaction(function () use ($viaje, $chofer, $soloSinChofer) {

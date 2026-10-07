@@ -22,6 +22,7 @@ use App\Servicios\Despachador;
 use App\Servicios\DisponibilidadReservas;
 use App\Servicios\HorarioLaboral;
 use App\Servicios\RotacionViajesLargos;
+use App\Servicios\ServicioTurnos;
 use App\Servicios\ServicioViaje;
 use App\Servicios\ServicioViajesLargos;
 use Illuminate\Support\Carbon;
@@ -452,5 +453,116 @@ describe('fuera de horario', function () {
         expect($h->fueraDeHorario($viaje))->toBeFalse()
             ->and($h->duracionRealMin($viaje))->toBe(690)
             ->and($h->fueraDeHorario(Viaje::factory()->make(['iniciado_en' => now()->subHours(20)])))->toBeFalse();
+    });
+});
+
+describe('el vehículo del viaje largo no está en dos lugares', function () {
+    it('al salir, el turno del chofer pasa al vehículo del viaje', function () {
+        $chofer = choferEnTurno();
+        $vehiculo = Vehiculo::factory()->create();
+        $viaje = largoAsignado($chofer, $vehiculo, now()->addMinutes(30), 600);
+
+        app(ServicioViaje::class)->avanzar($viaje, $chofer, EstadoViaje::EnCamino);
+
+        expect($viaje->estado)->toBe(EstadoViaje::EnCamino)
+            ->and($chofer->turnoAbierto()->value('vehiculo_id'))->toBe($vehiculo->id);
+    });
+
+    it('no sale si el vehículo del viaje está en el turno de otro chofer', function () {
+        $chofer = choferEnTurno();
+        $otro = Turno::factory()->create(['chofer_id' => Usuario::factory()->chofer()->create(['nombre' => 'Pedro Gómez'])->id]);
+        $viaje = largoAsignado($chofer, $otro->vehiculo, now()->addMinutes(30), 600);
+        $vehiculoTurno = $chofer->turnoAbierto()->value('vehiculo_id');
+
+        expect(fn () => app(ServicioViaje::class)->avanzar($viaje, $chofer, EstadoViaje::EnCamino))
+            ->toThrow(ReglaNegocio::class, 'El vehículo del viaje está en uso por Pedro Gómez. Avisale al encargado.');
+
+        expect($viaje->refresh()->estado)->toBe(EstadoViaje::Aceptado)
+            ->and($chofer->turnoAbierto()->value('vehiculo_id'))->toBe($vehiculoTurno);
+    });
+
+    it('no se inicia ni se cambia un turno con un vehículo que salió en un viaje largo', function () {
+        $vehiculo = Vehiculo::factory()->create();
+        $delViaje = Usuario::factory()->chofer()->create();
+        largoAsignado($delViaje, $vehiculo, now()->subHour(), 600, ['estado' => EstadoViaje::EnCurso]);
+        $turnos = app(ServicioTurnos::class);
+
+        expect(fn () => $turnos->iniciar(Usuario::factory()->chofer()->create(), $vehiculo->id))
+            ->toThrow(ReglaNegocio::class, 'El vehículo está en un viaje largo.');
+
+        $otro = choferEnTurno();
+        expect(fn () => $turnos->cambiarVehiculo($otro, $vehiculo->id))
+            ->toThrow(ReglaNegocio::class, 'El vehículo está en un viaje largo.');
+
+        // El chofer del viaje sí puede abrir turno con él.
+        expect($turnos->iniciar($delViaje, $vehiculo->id)->vehiculo_id)->toBe($vehiculo->id);
+    });
+
+    it('un viaje largo todavía aceptado no impide usar el vehículo en un turno', function () {
+        $vehiculo = Vehiculo::factory()->create();
+        largoAsignado(Usuario::factory()->chofer()->create(), $vehiculo, now()->addDay(), 600);
+
+        expect(app(ServicioTurnos::class)->iniciar(Usuario::factory()->chofer()->create(), $vehiculo->id)->vehiculo_id)
+            ->toBe($vehiculo->id);
+    });
+});
+
+describe('ajustes de validación', function () {
+    it('el solicitante tiene que tener rol de solicitante', function () {
+        expect(fn () => largos()->crear(datosLargo(['solicitante_id' => Usuario::factory()->chofer()->create()->id]), $this->admin))
+            ->toThrow(ReglaNegocio::class, 'El solicitante elegido no existe o no está activo.');
+
+        expect(Viaje::count())->toBe(0);
+    });
+
+    it('"Reasignar" conserva el vehículo leído con la fila bloqueada, no el de la copia del llamador', function () {
+        $viaje = largos()->crear(datosLargo(), $this->admin);
+        $copia = Viaje::with('vehiculo')->find($viaje->id);
+        $nuevoVehiculo = Vehiculo::factory()->create();
+        largos()->reasignar($viaje, $viaje->chofer, $nuevoVehiculo); // otro admin cambió el vehículo
+
+        app(ServicioViaje::class)->reasignarPorAdmin($copia, Usuario::factory()->chofer()->create());
+
+        expect($copia->refresh()->vehiculo_id)->toBe($nuevoVehiculo->id);
+    });
+
+    it('rechaza un viaje que sale pronto si el chofer está en otro viaje', function () {
+        $chofer = choferEnTurno();
+        Viaje::factory()->create(['chofer_id' => $chofer->id, 'estado' => EstadoViaje::EnCurso]);
+
+        expect(fn () => largos()->crear(datosLargo([
+            'chofer_id' => $chofer->id,
+            'programado_para' => '2026-10-01 09:30', // 12:30 UTC, en 30 minutos
+            'regreso_estimado' => '2026-10-01 18:00',
+        ]), $this->admin))->toThrow(ReglaNegocio::class, 'El viaje sale pronto y el chofer elegido está en otro viaje.');
+
+        expect(Viaje::where('tipo', TipoViaje::Largo)->count())->toBe(0);
+    });
+
+    it('"Asignar chofer" no aplica a un viaje largo', function () {
+        $viaje = largos()->crear(datosLargo(), $this->admin);
+
+        expect(fn () => app(ServicioViaje::class)->asignarPorAdmin($viaje, Usuario::factory()->chofer()->create()))
+            ->toThrow(ReglaNegocio::class, 'El viaje ya tiene chofer o terminó; no se puede asignar.');
+    });
+
+    it('el chofer no cancela un viaje largo en camino', function () {
+        $chofer = Usuario::factory()->chofer()->create();
+        $viaje = largoAsignado($chofer, null, now()->subMinutes(10), 600, ['estado' => EstadoViaje::EnCamino]);
+
+        expect(fn () => app(ServicioViaje::class)->cancelarPorChofer($viaje, $chofer, 'No llego'))
+            ->toThrow(AccionNoPermitida::class);
+
+        expect($viaje->refresh()->estado)->toBe(EstadoViaje::EnCamino);
+    });
+
+    it('el próximo viaje largo de la rotación es solo uno futuro', function () {
+        $chofer = Usuario::factory()->chofer()->create();
+        largoAsignado($chofer, null, now()->subHour(), 600); // aceptado, ya pasó la salida
+        $futuro = largoAsignado($chofer, null, now()->addDays(2), 600);
+
+        $fila = app(RotacionViajesLargos::class)->todos()->firstWhere('chofer.id', $chofer->id);
+
+        expect($fila['proximo']->id)->toBe($futuro->id);
     });
 });

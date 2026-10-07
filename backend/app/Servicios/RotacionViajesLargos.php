@@ -65,6 +65,7 @@ class RotacionViajesLargos
 
         $proximos = Viaje::where('tipo', TipoViaje::Largo)
             ->where('estado', EstadoViaje::Aceptado)
+            ->where('programado_para', '>=', now())
             ->whereIn('chofer_id', $ids)
             ->orderBy('programado_para')
             ->get()

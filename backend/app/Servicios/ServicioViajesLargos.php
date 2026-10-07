@@ -4,6 +4,7 @@ namespace App\Servicios;
 
 use App\Enums\EstadoViaje;
 use App\Enums\ModoViaje;
+use App\Enums\RolUsuario;
 use App\Enums\TipoViaje;
 use App\Excepciones\AccionNoPermitida;
 use App\Excepciones\ReglaNegocio;
@@ -45,7 +46,7 @@ class ServicioViajesLargos
 
         [$salida, $regreso] = $this->franja($datos['programado_para'] ?? null, $datos['regreso_estimado'] ?? null);
 
-        $solicitante = Usuario::where('activo', true)->find($datos['solicitante_id'] ?? null)
+        $solicitante = Usuario::where('rol', RolUsuario::Solicitante)->where('activo', true)->find($datos['solicitante_id'] ?? null)
             ?? throw new ReglaNegocio('El solicitante elegido no existe o no está activo.');
 
         // Antes de la transacción: la consulta de las direcciones que faltan no retiene ningún lock.
@@ -87,8 +88,11 @@ class ServicioViajesLargos
         return $viaje->load(['chofer', 'vehiculo', 'solicitante']);
     }
 
-    /** Cambia el chofer y/o el vehículo de un viaje largo mientras el chofer no haya salido. */
-    public function reasignar(Viaje $viaje, Usuario $chofer, Vehiculo $vehiculo): Viaje
+    /**
+     * Cambia el chofer y/o el vehículo de un viaje largo mientras el chofer no haya salido. Sin vehículo, conserva
+     * el que tiene (leído de la fila bloqueada).
+     */
+    public function reasignar(Viaje $viaje, Usuario $chofer, ?Vehiculo $vehiculo = null): Viaje
     {
         $cambioChofer = DB::transaction(function () use ($viaje, $chofer, $vehiculo) {
             $viaje->setRawAttributes(Viaje::whereKey($viaje->id)->lockForUpdate()->firstOrFail()->getAttributes(), true);
@@ -99,12 +103,13 @@ class ServicioViajesLargos
             if ($viaje->estado !== EstadoViaje::Aceptado) {
                 throw new ReglaNegocio('El viaje largo ya comenzó o terminó; no se puede reasignar.');
             }
-            if ($viaje->chofer_id === $chofer->id && $viaje->vehiculo_id === $vehiculo->id) {
+            $vehiculoId = $vehiculo?->id ?? $viaje->vehiculo_id;
+            if ($viaje->chofer_id === $chofer->id && $viaje->vehiculo_id === $vehiculoId) {
                 throw new ReglaNegocio('El viaje ya está asignado a ese chofer con ese vehículo.');
             }
 
             $anterior = $viaje->chofer_id;
-            [$c, $v] = $this->bloquearYValidar($viaje, $chofer->id, $vehiculo->id);
+            [$c, $v] = $this->bloquearYValidar($viaje, $chofer->id, (int) $vehiculoId);
 
             $this->maquina->reasignar($viaje, $c->id, $v->id);
 
