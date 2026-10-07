@@ -47,6 +47,8 @@ class DependenciaResource extends Resource
                 TextInput::make('nombre')
                     ->required()
                     ->maxLength(255)
+                    // Se valida el nombre como se va a guardar: "Fuero  Penal" choca con "Fuero Penal".
+                    ->mutateStateForValidationUsing(fn (?string $state) => $state === null ? null : Dependencia::normalizar($state))
                     ->unique(),
                 Toggle::make('activa')
                     ->helperText('Una dependencia inactiva no da prioridad a sus choferes ni se ofrece al cargar usuarios.')

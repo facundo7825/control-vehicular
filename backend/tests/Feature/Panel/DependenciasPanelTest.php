@@ -31,6 +31,28 @@ it('no acepta un nombre repetido', function () {
         ->assertHasFormErrors(['nombre' => 'unique']);
 });
 
+it('no acepta un nombre repetido que solo difiere en espacios', function (string $nombre) {
+    Dependencia::create(['nombre' => 'Fuero Penal']);
+
+    Livewire::test(CreateDependencia::class)
+        ->fillForm(['nombre' => $nombre])
+        ->call('create')
+        ->assertHasFormErrors(['nombre' => 'unique']);
+
+    expect(Dependencia::count())->toBe(1);
+})->with(['doble espacio' => ['Fuero  Penal'], 'espacios al borde' => ['  Fuero Penal ']]);
+
+it('al editar, el nombre propio con espacios de más no choca consigo mismo', function () {
+    $dependencia = Dependencia::create(['nombre' => 'Fuero Penal']);
+
+    Livewire::test(EditDependencia::class, ['record' => $dependencia->getRouteKey()])
+        ->fillForm(['nombre' => 'Fuero   Penal '])
+        ->call('save')
+        ->assertHasNoFormErrors();
+
+    expect($dependencia->fresh()->nombre)->toBe('Fuero Penal');
+});
+
 it('solo ofrece choferes activos', function () {
     $chofer = Usuario::factory()->chofer()->create();
     $inactivo = Usuario::factory()->chofer()->create(['activo' => false]);
