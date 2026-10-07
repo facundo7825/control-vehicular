@@ -3,6 +3,7 @@
 use App\Http\Controllers\AgendaController;
 use App\Http\Controllers\AsistenciaController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\ChoferViajesController;
 use App\Http\Controllers\ConfiguracionController;
 use App\Http\Controllers\EtaController;
 use App\Http\Controllers\LugaresController;
@@ -54,5 +55,6 @@ Route::middleware(['auth:sanctum', 'activo'])->group(function () {
         Route::post('/ofertas/{oferta}/rechazar', [OfertaController::class, 'rechazar']);
         Route::post('/viajes/{viaje}/estado', [ViajeController::class, 'avanzar']);
         Route::get('/agenda', AgendaController::class);
+        Route::get('/chofer/viajes', ChoferViajesController::class);
     });
 });
