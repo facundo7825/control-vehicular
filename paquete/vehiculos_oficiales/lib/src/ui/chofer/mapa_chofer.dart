@@ -16,6 +16,7 @@ import '../comunes/comunes.dart';
 import '../modulo_app.dart';
 import 'agenda.dart';
 import 'inicio_chofer.dart';
+import 'mis_viajes_chofer.dart';
 
 /// Spec 7, chofer 2 y 6: su posición, su estado, el vehículo del turno, la próxima reserva
 /// confirmada, el acceso a la agenda y "Finalizar turno".
@@ -72,6 +73,7 @@ class _MapaChoferState extends ConsumerState<MapaChofer> {
         leading: const BotonCerrarModulo(),
         actions: [
           IconButton(icon: const Icon(Icons.event), tooltip: 'Agenda', onPressed: () => context.push(Rutas.agenda)),
+          const BotonMisViajesChofer(),
         ],
       ),
       body: Column(

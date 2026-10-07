@@ -84,6 +84,7 @@ void main() {
     expect(find.text('Toyota Corolla (AB123CD) · Blanco'), findsOneWidget);
     expect(find.text('Plaza Independencia'), findsOneWidget);
     expect(find.text('Tribunales'), findsOneWidget);
+    expect(find.text('Solicitante'), findsNothing); // eso es del detalle del chofer
 
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();

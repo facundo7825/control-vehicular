@@ -3,15 +3,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../mapa/mapa.dart';
 import '../../modelos/modelos.dart';
-import '../../solicitante/mis_viajes.dart';
+import '../../viaje/detalle_viaje_provider.dart';
 import '../comunes/comunes.dart';
 
-/// Detalle de un viaje del historial del solicitante: el recorrido real en el mapa, chofer, vehículo,
-/// horarios, duración, km y, si se canceló, quién y por qué.
+/// Quién abre el detalle: cambia a quién se muestra (el chofer o el solicitante) y los textos.
+enum QuienMira { solicitante, chofer }
+
+/// Detalle de un viaje del historial: el recorrido real en el mapa, el chofer (o, para el chofer, el
+/// solicitante), vehículo, horarios, duración, km y, si se canceló, quién y por qué.
 class DetalleViaje extends ConsumerWidget {
-  const DetalleViaje({super.key, required this.viajeId});
+  const DetalleViaje({super.key, required this.viajeId, this.quienMira = QuienMira.solicitante});
 
   final int viajeId;
+  final QuienMira quienMira;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -20,7 +24,7 @@ class DetalleViaje extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Detalle del viaje')),
       body: switch (detalle) {
-        AsyncData(:final value) => _Contenido(viaje: value),
+        AsyncData(:final value) => _Contenido(viaje: value, quienMira: quienMira),
         AsyncError(:final error) => Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -39,10 +43,18 @@ class DetalleViaje extends ConsumerWidget {
   }
 }
 
+/// La fecha que identifica al viaje, la misma en la lista de "Mis viajes" y en el detalle: para el
+/// solicitante manda la hora programada de una reserva; para el chofer, cuándo terminó o se canceló.
+DateTime? fechaDelViaje(Viaje v, QuienMira quienMira) => switch (quienMira) {
+  QuienMira.solicitante => v.programadoPara ?? v.finalizadoEn ?? v.canceladoEn ?? v.aceptadoEn ?? v.pedidoEn,
+  QuienMira.chofer => v.finalizadoEn ?? v.canceladoEn ?? v.programadoPara ?? v.aceptadoEn ?? v.pedidoEn,
+};
+
 class _Contenido extends ConsumerWidget {
-  const _Contenido({required this.viaje});
+  const _Contenido({required this.viaje, required this.quienMira});
 
   final Viaje viaje;
+  final QuienMira quienMira;
 
   /// La nota debajo del mapa cuando no hay recorrido para dibujar; nula si lo hay o si falló al pedirlo.
   String? _notaRecorrido(RecorridoReal? recorrido) {
@@ -61,16 +73,15 @@ class _Contenido extends ConsumerWidget {
     final nota = _notaRecorrido(recorrido);
     final mapa = ref.watch(constructorMapaProvider);
     final texto = Theme.of(context).textTheme;
+    final esChofer = quienMira == QuienMira.chofer;
     final chofer = viaje.chofer;
     final vehiculo = viaje.vehiculo;
-    // El mismo orden que la fila de "Mis viajes", así el viaje muestra la misma fecha en los dos lados.
-    final cuando =
-        viaje.programadoPara ?? viaje.finalizadoEn ?? viaje.canceladoEn ?? viaje.aceptadoEn ?? viaje.pedidoEn;
+    final cuando = fechaDelViaje(viaje, quienMira);
     final inicio = viaje.iniciadoEn;
     final fin = viaje.finalizadoEn;
     final metros = viaje.metrosRecorridos;
     final quienCancelo = switch (viaje.canceladoPor) {
-      CanceladoPor.solicitante => 'Lo cancelaste vos',
+      CanceladoPor.solicitante => esChofer ? 'Lo canceló el solicitante' : 'Lo cancelaste vos',
       CanceladoPor.admin => 'Lo canceló la administración',
       null => null,
     };
@@ -123,14 +134,19 @@ class _Contenido extends ConsumerWidget {
                 const SizedBox(height: 16),
                 _Fila('Origen', viaje.origen.descripcion),
                 _Fila('Destino', viaje.destino.descripcion),
-                if (chofer != null) ...[
+                if (esChofer) ...[
+                  const SizedBox(height: 16),
+                  _Fila('Solicitante', viaje.solicitante.nombre),
+                  if (vehiculo != null) _Fila('Vehículo', [vehiculo.descripcion, ?vehiculo.color].join(' · ')),
+                ] else if (chofer != null) ...[
                   const SizedBox(height: 16),
                   Text(chofer.nombre, style: texto.titleMedium),
                   if (vehiculo != null) Text([vehiculo.descripcion, ?vehiculo.color].join(' · ')),
                 ],
                 const SizedBox(height: 16),
                 if (viaje.pedidoEn case final t?) _Fila('Pedido', formatearFechaHora(t)),
-                if (viaje.aceptadoEn case final t?) _Fila('Chofer asignado', formatearFechaHora(t)),
+                if (viaje.aceptadoEn case final t?)
+                  _Fila(esChofer ? 'Aceptado' : 'Chofer asignado', formatearFechaHora(t)),
                 if (viaje.llegoEn case final t?) _Fila('Llegó', formatearFechaHora(t)),
                 if (inicio != null) _Fila('Inicio', formatearFechaHora(inicio)),
                 if (fin != null) _Fila('Fin', formatearFechaHora(fin)),

@@ -10,6 +10,7 @@ import '../push/push_modulo.dart';
 import '../sesion/sesion.dart';
 import 'chofer/agenda.dart';
 import 'chofer/inicio_chofer.dart';
+import 'chofer/mis_viajes_chofer.dart';
 import 'chofer/pantalla_oferta.dart';
 import 'chofer/viaje_asignado.dart';
 import 'chofer/viaje_chofer.dart';
@@ -35,6 +36,19 @@ abstract final class Rutas {
   static const ofertaChofer = '/chofer/oferta';
   static const viajeAsignado = '/chofer/asignado';
   static const agenda = '/chofer/agenda';
+  static const misViajesChofer = '/chofer/mis-viajes';
+  static String detalleViajeChofer(int id) => '$misViajesChofer/viaje/$id';
+}
+
+/// La ruta `viaje/:id` del historial: el detalle, o "Viaje no encontrado" si el id no es un número.
+Widget _detalleDeRuta(GoRouterState estado, QuienMira quienMira) {
+  final id = int.tryParse(estado.pathParameters['id'] ?? '');
+  return id == null
+      ? Scaffold(
+          appBar: AppBar(title: const Text('Detalle del viaje')),
+          body: const Center(child: Text('Viaje no encontrado')),
+        )
+      : DetalleViaje(viajeId: id, quienMira: quienMira);
 }
 
 /// Raíz del módulo: su propio `ProviderScope` y su propio router (no toca los de la app principal).
@@ -119,18 +133,7 @@ class _RaizModuloState extends ConsumerState<_RaizModulo> {
                   path: 'mis-viajes',
                   builder: (_, _) => const MisViajesPantalla(),
                   routes: [
-                    GoRoute(
-                      path: 'viaje/:id',
-                      builder: (_, estado) {
-                        final id = int.tryParse(estado.pathParameters['id'] ?? '');
-                        return id == null
-                            ? Scaffold(
-                                appBar: AppBar(title: const Text('Detalle del viaje')),
-                                body: const Center(child: Text('Viaje no encontrado')),
-                              )
-                            : DetalleViaje(viajeId: id);
-                      },
-                    ),
+                    GoRoute(path: 'viaje/:id', builder: (_, estado) => _detalleDeRuta(estado, QuienMira.solicitante)),
                   ],
                 ),
               ],
@@ -143,6 +146,13 @@ class _RaizModuloState extends ConsumerState<_RaizModulo> {
                 GoRoute(path: 'oferta', builder: (_, _) => const PantallaOferta()),
                 GoRoute(path: 'asignado', builder: (_, _) => const ViajeAsignado()),
                 GoRoute(path: 'agenda', builder: (_, _) => const AgendaPantalla()),
+                GoRoute(
+                  path: 'mis-viajes',
+                  builder: (_, _) => const MisViajesChofer(),
+                  routes: [
+                    GoRoute(path: 'viaje/:id', builder: (_, estado) => _detalleDeRuta(estado, QuienMira.chofer)),
+                  ],
+                ),
               ],
             ),
           ],

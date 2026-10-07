@@ -146,6 +146,10 @@ class ApiVehiculos {
 
   Future<Agenda> agenda() => _leer(() async => Agenda.fromJson(await cliente.getMapa('agenda')));
 
+  /// "Mis viajes" del chofer: el resumen de hoy y sus viajes finalizados y cancelados. 403 si no es chofer.
+  Future<ViajesChofer> viajesChofer() =>
+      _leer(() async => ViajesChofer.fromJson(await cliente.getMapa('chofer/viajes')));
+
   /// Firma de un canal privado (`private-...`) para el socket [socketId]. Devuelve `auth`.
   Future<String> autorizarCanal({required String socketId, required String canal}) => _leer(() async {
     final j = leerMapa(

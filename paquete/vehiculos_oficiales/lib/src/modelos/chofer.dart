@@ -54,6 +54,36 @@ class Agenda {
   final List<Oferta> solicitudes;
 }
 
+/// `hoy` de `GET /chofer/viajes`: viajes finalizados y metros recorridos en el día local, y desde cuándo
+/// está abierto el turno (nulo sin turno).
+class ResumenDia {
+  const ResumenDia({required this.viajes, required this.metros, this.enTurnoDesde});
+
+  factory ResumenDia.fromJson(Json j) => ResumenDia(
+    viajes: j['viajes'] as int,
+    metros: j['metros'] as int,
+    enTurnoDesde: leerFechaOpcional(j['en_turno_desde']),
+  );
+
+  final int viajes;
+  final int metros;
+  final DateTime? enTurnoDesde;
+}
+
+/// `GET /chofer/viajes`: el resumen de hoy y los viajes pasados del chofer (finalizados y cancelados), los
+/// más recientes primero.
+class ViajesChofer {
+  const ViajesChofer({required this.hoy, required this.viajes});
+
+  factory ViajesChofer.fromJson(Json j) => ViajesChofer(
+    hoy: ResumenDia.fromJson(leerMapa(j['hoy'])),
+    viajes: leerLista(j['viajes']).map(Viaje.fromJson).toList(),
+  );
+
+  final ResumenDia hoy;
+  final List<Viaje> viajes;
+}
+
 /// Un punto del GPS del turno, tal como se manda en `POST /ubicacion`.
 class PuntoGps {
   const PuntoGps({required this.posicion, this.rumbo, this.velocidad, required this.registradoEn});

@@ -178,4 +178,29 @@ void main() {
     await expectLater(api.turnoActual(), throwsA(isA<ErrorServidor>()));
     await expectLater(api.agenda(), throwsA(isA<ErrorServidor>()));
   });
+
+  test('viajes del chofer con el resumen de hoy; sin turno, en_turno_desde es nulo; como solicitante es 403', () async {
+    http.responder('GET', 'chofer/viajes', 200, c.viajesChofer);
+    http.responder('GET', 'chofer/viajes', 200, c.viajesChoferVacio);
+    http.responder('GET', 'chofer/viajes', 403, p.sinPermiso);
+
+    final mis = await api.viajesChofer();
+    expect(http.pedidos.single.uri.path, '/api/chofer/viajes');
+    expect(mis.hoy.viajes, 2);
+    expect(mis.hoy.metros, 5300);
+    expect(mis.hoy.enTurnoDesde, DateTime.utc(2026, 10, 7, 11, 30));
+    expect(mis.viajes.single.solicitante.nombre, 'Ana Pérez');
+    expect(mis.viajes.single.estado, EstadoViaje.finalizado);
+
+    final vacio = await api.viajesChofer();
+    expect(vacio.hoy.enTurnoDesde, isNull);
+    expect(vacio.viajes, isEmpty);
+    await expectLater(api.viajesChofer(), throwsA(isA<AccesoDenegado>()));
+  });
+
+  test('viajes del chofer que no se pueden leer son ErrorServidor', () async {
+    http.responder('GET', 'chofer/viajes', 200, '{"hoy":null,"viajes":[]}');
+
+    await expectLater(api.viajesChofer(), throwsA(isA<ErrorServidor>()));
+  });
 }
