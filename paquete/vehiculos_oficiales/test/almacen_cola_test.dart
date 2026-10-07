@@ -53,50 +53,66 @@ void main() {
   }
 
   test('sin archivo devuelve una lista vacía', () async {
-    expect(await almacen.leer(1), isEmpty);
+    expect(await almacen.leer(2, 1), isEmpty);
   });
 
   test('guarda y lee los puntos del turno sin perder datos (ida y vuelta por JSON)', () async {
-    await almacen.guardar(7, puntos);
+    await almacen.guardar(2, 7, puntos);
 
     expect(archivo().existsSync(), isTrue);
-    mismosPuntos(await almacen.leer(7), puntos);
+    mismosPuntos(await almacen.leer(2, 7), puntos);
     // Otra instancia (la app reiniciada) lee lo mismo.
-    mismosPuntos(await AlmacenColaArchivo(() async => dir).leer(7), puntos);
+    mismosPuntos(await AlmacenColaArchivo(() async => dir).leer(2, 7), puntos);
   });
 
   test('guardar reemplaza lo anterior', () async {
-    await almacen.guardar(7, puntos);
-    await almacen.guardar(7, puntos.sublist(2));
+    await almacen.guardar(2, 7, puntos);
+    await almacen.guardar(2, 7, puntos.sublist(2));
 
-    mismosPuntos(await almacen.leer(7), puntos.sublist(2));
+    mismosPuntos(await almacen.leer(2, 7), puntos.sublist(2));
   });
 
   test('lo guardado de otro turno no se devuelve', () async {
-    await almacen.guardar(7, puntos);
+    await almacen.guardar(2, 7, puntos);
 
-    expect(await almacen.leer(8), isEmpty);
+    expect(await almacen.leer(2, 8), isEmpty);
+  });
+
+  test('lo guardado por otro chofer no se devuelve (tampoco con leerCualquiera)', () async {
+    await almacen.guardar(2, 7, puntos);
+
+    expect(await almacen.leer(3, 7), isEmpty);
+    expect(await almacen.leerCualquiera(3), isNull);
+    expect((await almacen.leerCualquiera(2))!.turnoId, 7);
+  });
+
+  test('un archivo de antes, sin chofer, se ignora', () async {
+    File('${dir.path}/${AlmacenColaArchivo.subdirectorio}/${AlmacenColaArchivo.nombreArchivo}')
+      ..createSync(recursive: true)
+      ..writeAsStringSync('{"turno_id":7,"puntos":[{"lat":-26.8,"lng":-65.2,"registrado_en_us":0}]}');
+
+    expect(await almacen.leer(2, 7), isEmpty);
   });
 
   test('borrar elimina el archivo y no falla si no existe', () async {
-    await almacen.guardar(7, puntos);
+    await almacen.guardar(2, 7, puntos);
     await almacen.borrar();
 
     expect(archivo().existsSync(), isFalse);
-    expect(await almacen.leer(7), isEmpty);
+    expect(await almacen.leer(2, 7), isEmpty);
     await almacen.borrar();
   });
 
   test('un archivo corrupto se lee como una lista vacía, sin lanzar', () async {
     for (final contenido in ['{no es json', '[]', '{"turno_id": 7, "puntos": [{"lat": "x"}]}', '']) {
       archivo().writeAsStringSync(contenido);
-      expect(await almacen.leer(7), isEmpty, reason: contenido);
+      expect(await almacen.leer(2, 7), isEmpty, reason: contenido);
     }
   });
 
   test('las operaciones se aplican en el orden en que se piden', () async {
     // Sin esperar entre llamadas: un borrado pedido después de un guardado no puede quedar antes.
-    final guardado = almacen.guardar(7, puntos);
+    final guardado = almacen.guardar(2, 7, puntos);
     final borrado = almacen.borrar();
     await Future.wait([guardado, borrado]);
 
@@ -106,14 +122,14 @@ void main() {
   test('guarda en un subdirectorio propio del paquete, creándolo si falta', () async {
     expect(Directory('${dir.path}/${AlmacenColaArchivo.subdirectorio}').existsSync(), isFalse);
 
-    await almacen.guardar(7, puntos);
+    await almacen.guardar(2, 7, puntos);
 
     expect(File('${dir.path}/vehiculos_oficiales/cola_ubicaciones.json').existsSync(), isTrue);
     expect(File('${dir.path}/cola_ubicaciones.json').existsSync(), isFalse);
   });
 
   test('borrar también elimina el temporal que dejó una escritura cortada', () async {
-    await almacen.guardar(7, puntos);
+    await almacen.guardar(2, 7, puntos);
     final temporal = File('${archivo().path}.tmp')..writeAsStringSync('{"turno_id": 7, "pun');
 
     await almacen.borrar();
@@ -138,9 +154,9 @@ void main() {
       puntos[2],
     ];
 
-    await almacen.guardar(7, raros);
+    await almacen.guardar(2, 7, raros);
 
-    final leidos = await almacen.leer(7);
+    final leidos = await almacen.leer(2, 7);
     expect(leidos, hasLength(2));
     expect(leidos[0].rumbo, isNull);
     expect(leidos[0].velocidad, isNull);
@@ -153,9 +169,9 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 50));
       return dir;
     });
-    final guardado = anterior.guardar(7, puntos);
+    final guardado = anterior.guardar(2, 7, puntos);
 
-    mismosPuntos(await AlmacenColaArchivo(() async => dir).leer(7), puntos);
+    mismosPuntos(await AlmacenColaArchivo(() async => dir).leer(2, 7), puntos);
     await guardado;
   });
 }

@@ -134,10 +134,16 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
   bool _enviandoSinTurno = false;
   bool _otraVezSinTurno = false;
 
+  /// Reintento de los puntos sin turno mientras queden (cada [intervaloSondeo]).
+  Timer? _reintentoSinTurno;
+
+  /// El chofer: lo guardado en el teléfono es suyo (lo de otro chofer no se manda con esta sesión).
+  late int _yo;
+
   /// Nunca lanza.
   Future<void> _leerSinTurno() async {
     try {
-      _puntosSinTurno.cargar(await ref.read(almacenSinTurnoProvider).leer(0));
+      _puntosSinTurno.cargar(await ref.read(almacenSinTurnoProvider).leer(_yo, 0));
     } catch (e) {
       debugPrint('vehiculos_oficiales: no se pudieron leer las ubicaciones sin turno (${e.runtimeType}).');
     }
@@ -155,6 +161,8 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
       _retomarAlVolver = false;
       _sondeo?.cancel();
       _sondeo = null;
+      _reintentoSinTurno?.cancel();
+      _reintentoSinTurno = null;
       final r = _rastreador;
       _rastreador = null;
       r
@@ -162,6 +170,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
         ..detener();
     });
     final yo = ref.read(usuarioProvider).id;
+    _yo = yo;
     ref.listen(
       viajeActualProvider.select((s) => viajeActivo(s.value?.viaje, yo)),
       (_, activo) => _rastreador?.enViaje(activo),
@@ -436,7 +445,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
       alQuedarSinTurno: () => unawaited(_alQuedarSinTurno()),
       // Después de un 401 la cola ya se borró (SesionNotifier): no se vuelve a escribir.
       guardar: (puntos) async {
-        if (!aviso.avisado) await almacen.guardar(turno.id, puntos);
+        if (!aviso.avisado) await almacen.guardar(_yo, turno.id, puntos);
       },
     )..iniciar(enViaje: viajeActivo(ref.read(viajeActualProvider).value?.viaje, ref.read(usuarioProvider).id));
   }
@@ -444,10 +453,16 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
   /// El turno se cerró (lo finalizó el chofer, un fichaje, un administrador, o el backend dice que no hay): se
   /// corta el rastreo, pero lo que quedó sin mandar no se tira: puede ser del recorrido de un viaje, que el
   /// servidor acepta aunque ya no haya turno. Pasa a los puntos sin turno ([_enviarSinTurno]).
+  ///
+  /// El archivo de los puntos sin turno se escribe antes de borrar la cola del turno: si la app se cierra en el
+  /// medio, quedan en uno o en el otro (repetidos no importa: el servidor no duplica la misma hora).
   void _cerrarRastreo() {
     final pendientes = _rastreador?.cola.puntos ?? const <PuntoGps>[];
-    _detenerRastreo();
-    if (pendientes.isNotEmpty) unawaited(_agregarSinTurno(pendientes));
+    _detenerRastreo(borrarCola: false);
+    unawaited(() async {
+      if (pendientes.isNotEmpty) await _agregarSinTurno(pendientes);
+      await _borrarCola();
+    }());
   }
 
   /// Agrega [puntos] a los de turnos cerrados, los guarda y empieza a mandarlos.
@@ -479,6 +494,18 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
     } finally {
       _enviandoSinTurno = false;
     }
+    _armarReintentoSinTurno();
+  }
+
+  /// Mientras queden puntos sin turno se reintenta cada [intervaloSondeo] (además de reconectar, volver a
+  /// primer plano y salir las acciones).
+  void _armarReintentoSinTurno() {
+    if (ref.mounted && _puntosSinTurno.largo > 0) {
+      _reintentoSinTurno ??= Timer.periodic(intervaloSondeo, (_) => unawaited(_enviarSinTurno()));
+    } else {
+      _reintentoSinTurno?.cancel();
+      _reintentoSinTurno = null;
+    }
   }
 
   /// Nunca lanza.
@@ -486,7 +513,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
     final almacen = ref.read(almacenSinTurnoProvider);
     final puntos = _puntosSinTurno.puntos;
     try {
-      await (puntos.isEmpty ? almacen.borrar() : almacen.guardar(0, puntos));
+      await (puntos.isEmpty ? almacen.borrar() : almacen.guardar(_yo, 0, puntos));
     } catch (e) {
       debugPrint('vehiculos_oficiales: no se pudieron guardar las ubicaciones sin turno (${e.runtimeType}).');
     }
@@ -497,7 +524,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
   Future<void> _rescatarCola(int? turnoAbierto) async {
     final almacen = ref.read(almacenColaProvider);
     try {
-      final guardado = await almacen.leerCualquiera();
+      final guardado = await almacen.leerCualquiera(_yo);
       if (!ref.mounted || guardado == null || guardado.turnoId == turnoAbierto) return;
       if (guardado.puntos.isNotEmpty) await _agregarSinTurno(guardado.puntos);
       await almacen.borrar();
@@ -507,14 +534,14 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
   }
 
   /// Corta el rastreo y borra la cola guardada del turno (lo pendiente lo rescata [_cerrarRastreo]).
-  void _detenerRastreo() {
+  void _detenerRastreo({bool borrarCola = true}) {
     _generacion++;
     _retomarAlVolver = false;
     _rastreador?.detener();
     _rastreador = null;
     ref.read(posicionPropiaProvider.notifier).limpiar();
     ref.read(ubicacionesAtrasadasProvider.notifier).fijar(false);
-    unawaited(_borrarCola());
+    if (borrarCola) unawaited(_borrarCola());
   }
 
   /// Lo guardado para [turnoId]. Si no hay nada (o es de otro turno, o no se puede leer) se borra el
@@ -522,7 +549,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
   Future<List<PuntoGps>> _leerCola(int turnoId) async {
     final almacen = ref.read(almacenColaProvider);
     try {
-      final puntos = await almacen.leer(turnoId);
+      final puntos = await almacen.leer(_yo, turnoId);
       if (puntos.isEmpty) await almacen.borrar();
       return puntos;
     } catch (e) {

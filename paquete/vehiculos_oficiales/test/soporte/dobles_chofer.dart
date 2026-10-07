@@ -178,6 +178,9 @@ class ApiChofer extends ApiFalsa {
 class AlmacenColaMemoria implements AlmacenCola {
   /// Turno de lo guardado; nulo si no hay nada guardado (el archivo no existe).
   int? turnoId;
+
+  /// Chofer de lo guardado: por defecto el de prueba ([chofer], id 2).
+  int usuarioId = 2;
   List<PuntoGps> puntos = [];
 
   /// Cada `guardar`, con los puntos que recibió.
@@ -190,21 +193,22 @@ class AlmacenColaMemoria implements AlmacenCola {
   bool get guardado => turnoId != null;
 
   @override
-  Future<List<PuntoGps>> leer(int turnoId) async {
+  Future<List<PuntoGps>> leer(int usuarioId, int turnoId) async {
     if (error != null) throw error!;
-    return turnoId == this.turnoId ? List.of(puntos) : [];
+    return usuarioId == this.usuarioId && turnoId == this.turnoId ? List.of(puntos) : [];
   }
 
   @override
-  Future<({int turnoId, List<PuntoGps> puntos})?> leerCualquiera() async {
+  Future<({int turnoId, List<PuntoGps> puntos})?> leerCualquiera(int usuarioId) async {
     if (error != null) throw error!;
     final id = turnoId;
-    return id == null ? null : (turnoId: id, puntos: List.of(puntos));
+    return id == null || usuarioId != this.usuarioId ? null : (turnoId: id, puntos: List.of(puntos));
   }
 
   @override
-  Future<void> guardar(int turnoId, List<PuntoGps> puntos) async {
+  Future<void> guardar(int usuarioId, int turnoId, List<PuntoGps> puntos) async {
     if (error != null) throw error!;
+    this.usuarioId = usuarioId;
     this.turnoId = turnoId;
     this.puntos = List.of(puntos);
     escrituras.add(List.of(puntos));

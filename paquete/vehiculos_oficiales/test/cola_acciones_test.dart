@@ -451,6 +451,47 @@ void main() {
       });
     });
 
+    test('lo pendiente de otro chofer en el mismo teléfono no se manda con la sesión de este', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        colaGps
+          ..usuarioId = 99
+          ..turnoId = 5
+          ..puntos = [punto(0)];
+        sinTurno
+          ..usuarioId = 99
+          ..turnoId = 0
+          ..puntos = [punto(10)];
+        crear(conTurno: true);
+        async.flushMicrotasks();
+        gps.emitir(punto(100));
+        async.elapse(const Duration(seconds: 10));
+
+        expect(api.lotes.map(segundos), [
+          [100],
+        ]);
+        expect(colaGps.usuarioId, chofer.id, reason: 'lo de otro chofer se descarta al guardar lo propio');
+      });
+    });
+
+    test('lo que queda sin turno se reintenta solo cada 30 s', () {
+      fakeAsync((async) {
+        sinTurno
+          ..turnoId = 0
+          ..puntos = [punto(0)];
+        api.errorUbicacion = const SinConexion();
+        crear(conTurno: true);
+        async.flushMicrotasks();
+        expect(sinTurno.guardado, isTrue);
+
+        api.errorUbicacion = null;
+        async.elapse(TurnoNotifier.intervaloSondeo);
+
+        expect(sinTurno.guardado, isFalse);
+        expect(segundos(api.lotes.last), [0]);
+      });
+    });
+
     test('los lotes que el servidor no ubica en ningún viaje (sin turno) se descartan, los demás salen', () {
       fakeAsync((async) {
         sinTurno
@@ -552,6 +593,38 @@ void main() {
         expect(pendientes(c), isEmpty);
         expect(api.llamadas.where((l) => l == 'turnoActual').length, consultasTurno + 1);
         expect(c.read(viajeActualProvider).requireValue.viaje!.obligatorio, isTrue);
+      });
+    });
+
+    test('un "Finalizar" sin señal y la app cerrada: al abrir sin señal se ve el viaje finalizado hasta que sale', () {
+      fakeAsync((async) {
+        api.actual = ViajeActual(viaje: viaje(estado: 'en_curso', conChofer: true));
+        final antes = crear();
+        async.flushMicrotasks();
+        api.errorAvance = const SinConexion();
+        viajeActual(antes).avanzar(EstadoViaje.finalizado);
+        async.flushMicrotasks();
+        expect(estado(antes), EstadoViaje.finalizado);
+        // Lo guardado es lo que dijo el servidor, no lo local.
+        expect(Viaje.fromJson(viajeGuardado.datos!['dato'] as Map<String, dynamic>).estado, EstadoViaje.enCurso);
+        antes.dispose();
+        async.flushMicrotasks();
+
+        api.fallarConsultas = const SinConexion();
+        final c = crear();
+        async.flushMicrotasks();
+
+        expect(estado(c), EstadoViaje.finalizado);
+        expect(pendientes(c).single.estado, EstadoViaje.finalizado);
+
+        // Sale el "Finalizar": ya no hace falta la copia.
+        api
+          ..errorAvance = null
+          ..fallarConsultas = null
+          ..actual = ViajeActual.vacio;
+        async.elapse(ColaAccionesNotifier.intervaloReintento);
+        expect(pendientes(c), isEmpty);
+        expect(viajeGuardado.datos, isNull);
       });
     });
 

@@ -92,14 +92,9 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
     if (guardado != null) {
       await ref.read(colaAccionesProvider.future);
       if (!ref.mounted) return const SeguimientoViaje();
-      // El viaje activo del chofer queda guardado para abrir sin señal; uno terminado (o sin viaje), se borra.
-      final yo = _usuario.id;
+      _almacenGuardado = guardado;
       listenSelf((_, s) {
-        if (s case AsyncData(:final value)) {
-          final v = value.viaje;
-          final activo = v != null && !v.estado.terminado && v.chofer?.id == yo;
-          unawaited(guardarPara(guardado, yo, activo ? v.toJson() : null));
-        }
+        if (s is AsyncData) _actualizarGuardado();
       });
     }
     SeguimientoViaje inicial;
@@ -110,7 +105,8 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
       // vuelva la señal; el respaldo y la reconexión traen el estado real.
       final viaje = guardado == null ? null : await leerGuardado(guardado, _usuario.id, Viaje.fromJson);
       if (viaje == null) rethrow;
-      _bases[viaje.id] = viaje;
+      if (_pendientes().any((a) => a.viajeId == viaje.id)) _bases[viaje.id] = viaje;
+      _guardadoId = viaje.id;
       inicial = SeguimientoViaje(viaje: _superponer(viaje, _pendientes()));
     }
     // Descartado mientras consultaba: el onDispose ya corrió y no cancelaría un canal abierto ahora.
@@ -260,6 +256,36 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
       _bases.remove(v.id);
     }
     _aplicarViaje(v);
+    _actualizarGuardado(); // también si el viaje ya no está en pantalla (se descartó)
+  }
+
+  AlmacenJson? _almacenGuardado;
+
+  /// Viaje de la copia guardada (para no borrarla mientras tenga acciones sin enviar).
+  int? _guardadoId;
+
+  /// Chofer: la copia para abrir sin señal es lo último que dijo el **servidor** (las acciones pendientes se
+  /// vuelven a aplicar encima al abrir) del viaje activo propio, o del que todavía tiene acciones sin enviar
+  /// (un "Finalizar" local, aunque ya se haya descartado de la pantalla). Si no hay ninguno, se borra.
+  void _actualizarGuardado() {
+    final almacen = _almacenGuardado;
+    if (almacen == null || !ref.mounted) return;
+    final v = state.value?.viaje;
+    final pendientes = _pendientes();
+    // [_bases] ya lo tiene desde que se aplica una acción local, antes de que entre a la cola.
+    bool conPendientes(int id) => _bases.containsKey(id) || pendientes.any((a) => a.viajeId == id);
+    final Viaje? copia;
+    if (v != null && _esSuyo(v) && conPendientes(v.id)) {
+      copia = _bases[v.id] ?? v;
+    } else if (v != null && _esSuyo(v) && !v.estado.terminado) {
+      copia = v;
+    } else if (_guardadoId case final id? when conPendientes(id)) {
+      return; // se conserva la que había
+    } else {
+      copia = null;
+    }
+    _guardadoId = copia?.id;
+    unawaited(guardarPara(almacen, _usuario.id, copia?.toJson()));
   }
 
   /// El servidor rechazó una acción de [viajeId] (cancelado o reasignado mientras tanto, una hora que no
@@ -275,6 +301,7 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
       _fijar(actual.conViaje(base));
     }
     await _refrescarSinFallar();
+    _actualizarGuardado();
   }
 
   /// Chofer: acepta la oferta pendiente (spec 5.1). Con la respuesta queda el viaje y se va la oferta. Si

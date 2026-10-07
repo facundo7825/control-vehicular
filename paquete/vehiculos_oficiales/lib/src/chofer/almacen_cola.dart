@@ -9,18 +9,19 @@ import 'package:path_provider/path_provider.dart';
 import '../modelos/modelos.dart';
 
 /// Dónde sobreviven los puntos del GPS pendientes de envío si el sistema cierra la app a mitad de un
-/// turno (decisión 3 del plan de robustez; spec 6, 9 y 10). Guarda la cola de **un** turno por vez.
+/// turno (decisión 3 del plan de robustez; spec 6, 9 y 10). Guarda la cola de **un** turno de **un** chofer
+/// por vez: lo de otro chofer en el mismo teléfono nunca se lee (no se manda con otra sesión).
 abstract interface class AlmacenCola {
-  /// Los puntos guardados para [turnoId], en el orden en que se guardaron. Vacía si no hay nada, si lo
-  /// guardado es de otro turno o si no se puede leer.
-  Future<List<PuntoGps>> leer(int turnoId);
+  /// Los puntos guardados por [usuarioId] para [turnoId], en el orden en que se guardaron. Vacía si no hay
+  /// nada, si lo guardado es de otro turno o de otro chofer, o si no se puede leer.
+  Future<List<PuntoGps>> leer(int usuarioId, int turnoId);
 
-  /// Lo guardado, de cualquier turno (nulo si no hay nada o no se puede leer): al abrir sin ese turno, los
-  /// puntos todavía pueden ser del recorrido de un viaje y se mandan igual.
-  Future<({int turnoId, List<PuntoGps> puntos})?> leerCualquiera();
+  /// Lo guardado por [usuarioId], de cualquier turno (nulo si no hay nada, si es de otro chofer o si no se
+  /// puede leer): al abrir sin ese turno, los puntos todavía pueden ser del recorrido de un viaje.
+  Future<({int turnoId, List<PuntoGps> puntos})?> leerCualquiera(int usuarioId);
 
-  /// Reemplaza lo guardado por [puntos] del turno [turnoId].
-  Future<void> guardar(int turnoId, List<PuntoGps> puntos);
+  /// Reemplaza lo guardado por [puntos] del turno [turnoId] de [usuarioId].
+  Future<void> guardar(int usuarioId, int turnoId, List<PuntoGps> puntos);
 
   Future<void> borrar();
 }
@@ -55,17 +56,19 @@ class AlmacenColaArchivo implements AlmacenCola {
   static Future<void> _anterior = Future.value();
 
   @override
-  Future<List<PuntoGps>> leer(int turnoId) async {
-    final guardado = await leerCualquiera();
+  Future<List<PuntoGps>> leer(int usuarioId, int turnoId) async {
+    final guardado = await leerCualquiera(usuarioId);
     return guardado != null && guardado.turnoId == turnoId ? guardado.puntos : <PuntoGps>[];
   }
 
+  /// Un archivo sin `usuario_id` (de una versión anterior) no se sabe de quién es: se ignora.
   @override
-  Future<({int turnoId, List<PuntoGps> puntos})?> leerCualquiera() => _enOrden(() async {
+  Future<({int turnoId, List<PuntoGps> puntos})?> leerCualquiera(int usuarioId) => _enOrden(() async {
     final archivo = await _archivo();
     if (!await archivo.exists()) return null;
     try {
       final j = leerMapa(jsonDecode(await archivo.readAsString()));
+      if (j['usuario_id'] != usuarioId) return null;
       return (turnoId: j['turno_id'] as int, puntos: [for (final p in j['puntos'] as List) ?_deDisco(leerMapa(p))]);
     } catch (e) {
       // JSON cortado o con otra forma: se sigue sin lo guardado.
@@ -75,8 +78,9 @@ class AlmacenColaArchivo implements AlmacenCola {
   });
 
   @override
-  Future<void> guardar(int turnoId, List<PuntoGps> puntos) {
+  Future<void> guardar(int usuarioId, int turnoId, List<PuntoGps> puntos) {
     final contenido = jsonEncode({
+      'usuario_id': usuarioId,
       'turno_id': turnoId,
       'puntos': [for (final p in puntos) _aDisco(p)],
     });
@@ -137,13 +141,13 @@ class AlmacenColaNula implements AlmacenCola {
   const AlmacenColaNula();
 
   @override
-  Future<List<PuntoGps>> leer(int turnoId) async => [];
+  Future<List<PuntoGps>> leer(int usuarioId, int turnoId) async => [];
 
   @override
-  Future<({int turnoId, List<PuntoGps> puntos})?> leerCualquiera() async => null;
+  Future<({int turnoId, List<PuntoGps> puntos})?> leerCualquiera(int usuarioId) async => null;
 
   @override
-  Future<void> guardar(int turnoId, List<PuntoGps> puntos) async {}
+  Future<void> guardar(int usuarioId, int turnoId, List<PuntoGps> puntos) async {}
 
   @override
   Future<void> borrar() async {}
