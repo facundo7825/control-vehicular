@@ -183,7 +183,10 @@ class ServicioViaje
             throw new ReglaNegocio('El vehículo del viaje no está activo. Avisale al encargado.');
         }
 
-        $otro = Turno::where('vehiculo_id', $vehiculoId)->whereNull('fin')->whereKeyNot($turno->id)->with('chofer')->first();
+        // Lectura actual (con lock): el snapshot de la transacción puede ser anterior a un turno que otro chofer
+        // abrió con este vehículo mientras esperábamos su lock (ver DisponibilidadReservas::estaDisponible).
+        $otro = Turno::where('vehiculo_id', $vehiculoId)->whereNull('fin')->whereKeyNot($turno->id)
+            ->lockForUpdate()->with('chofer')->first();
         if ($otro) {
             throw new ReglaNegocio("El vehículo del viaje está en uso por {$otro->chofer->nombre}. Avisale al encargado.");
         }
