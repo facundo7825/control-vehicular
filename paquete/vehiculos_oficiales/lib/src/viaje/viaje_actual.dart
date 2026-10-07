@@ -8,6 +8,7 @@ import '../api/errores_api.dart';
 import '../api/reloj_servidor.dart';
 import '../avisos/notificaciones_locales.dart';
 import '../chofer/cola_acciones.dart';
+import '../chofer/estado_guardado.dart';
 import '../entorno.dart';
 import '../modelos/modelos.dart';
 import '../sesion/sesion.dart';
@@ -87,9 +88,31 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
     });
 
     // Las acciones que quedaron sin enviar (la app se cerró sin señal) se aplican sobre la primera consulta.
-    if (_usuario.esChofer) await ref.read(colaAccionesProvider.future);
-    if (!ref.mounted) return const SeguimientoViaje();
-    final inicial = await _consultar(null);
+    final AlmacenJson? guardado = _usuario.esChofer ? ref.read(almacenViajeGuardadoProvider) : null;
+    if (guardado != null) {
+      await ref.read(colaAccionesProvider.future);
+      if (!ref.mounted) return const SeguimientoViaje();
+      // El viaje activo del chofer queda guardado para abrir sin señal; uno terminado (o sin viaje), se borra.
+      final yo = _usuario.id;
+      listenSelf((_, s) {
+        if (s case AsyncData(:final value)) {
+          final v = value.viaje;
+          final activo = v != null && !v.estado.terminado && v.chofer?.id == yo;
+          unawaited(guardarPara(guardado, yo, activo ? v.toJson() : null));
+        }
+      });
+    }
+    SeguimientoViaje inicial;
+    try {
+      inicial = await _consultar(null);
+    } on SinConexion {
+      // Chofer sin señal al abrir: sigue con el viaje guardado (y sus acciones sin enviar encima) hasta que
+      // vuelva la señal; el respaldo y la reconexión traen el estado real.
+      final viaje = guardado == null ? null : await leerGuardado(guardado, _usuario.id, Viaje.fromJson);
+      if (viaje == null) rethrow;
+      _bases[viaje.id] = viaje;
+      inicial = SeguimientoViaje(viaje: _superponer(viaje, _pendientes()));
+    }
     // Descartado mientras consultaba: el onDispose ya corrió y no cancelaría un canal abierto ahora.
     if (!ref.mounted) return inicial;
     _seguir(inicial.viaje);

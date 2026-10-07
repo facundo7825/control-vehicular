@@ -65,6 +65,9 @@ abstract interface class AlmacenAcciones {
 
   /// Reemplaza lo guardado por [acciones] de [usuarioId].
   Future<void> guardar(int usuarioId, List<AccionViaje> acciones);
+
+  /// Al cerrarse la sesión (401), junto con la cola de ubicaciones.
+  Future<void> borrar();
 }
 
 /// Un archivo JSON junto a la cola de ubicaciones (ver [AlmacenColaArchivo]: mismo directorio de caché, fuera
@@ -108,6 +111,14 @@ class AlmacenAccionesArchivo implements AlmacenAcciones {
     });
   }
 
+  @override
+  Future<void> borrar() => _enOrden(() async {
+    final archivo = await _archivo();
+    for (final f in [archivo, File('${archivo.path}.tmp')]) {
+      if (await f.exists()) await f.delete();
+    }
+  });
+
   Future<File> _archivo() async =>
       File('${(await _directorio()).path}/${AlmacenColaArchivo.subdirectorio}/$nombreArchivo');
 
@@ -127,6 +138,9 @@ class AlmacenAccionesNulo implements AlmacenAcciones {
 
   @override
   Future<void> guardar(int usuarioId, List<AccionViaje> acciones) async {}
+
+  @override
+  Future<void> borrar() async {}
 }
 
 final almacenAccionesProvider = Provider<AlmacenAcciones>(
@@ -156,6 +170,17 @@ class AvisoAccionNotifier extends Notifier<AvisoAccion?> {
   void avisar(String mensaje) => state = AvisoAccion((state?.numero ?? 0) + 1, mensaje);
 }
 
+final accionesSinSalirProvider = NotifierProvider<AccionesSinSalirNotifier, bool>(AccionesSinSalirNotifier.new);
+
+/// El último intento de mandar una acción falló por la red (o el servidor caído): el aviso "Sin señal: N
+/// acciones…" se muestra desde entonces (o con el socket caído), no mientras sale normalmente con señal.
+class AccionesSinSalirNotifier extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void fijar(bool fallo) => state = fallo;
+}
+
 final colaAccionesProvider = AsyncNotifierProvider<ColaAccionesNotifier, List<AccionViaje>>(ColaAccionesNotifier.new);
 
 /// Las acciones del chofer sin enviar, en orden (decisión 3 del plan sin señal). Se guardan en disco y se
@@ -164,7 +189,12 @@ final colaAccionesProvider = AsyncNotifierProvider<ColaAccionesNotifier, List<Ac
 ///
 /// Sin red, un 5xx o un 401 cortan el envío: la acción queda y se reintenta. Un rechazo del servidor (409 de
 /// un viaje cancelado o reasignado mientras tanto, 422, 403, 404) no va a pasar nunca: se descartan las
-/// pendientes de ese viaje, el viaje actual vuelve al estado real y se avisa el mensaje del servidor.
+/// pendientes de ese viaje, el viaje actual vuelve al estado real y se avisa el mensaje del servidor. Las de
+/// otros viajes siguen en orden.
+///
+/// Límite de 24 h: el servidor no acepta un `momento` de más de 24 h atrás (422), así que una acción que
+/// estuvo más de un día sin poder salir se descarta así, con el aviso. Tampoco uno de más de 2 min en el
+/// futuro: por eso `momento` sale del reloj del servidor estimado (`RelojServidor`), no del teléfono.
 ///
 /// El viaje actual aplica cada acción al instante (ver `ViajeActualNotifier.avanzar`) y recibe acá la
 /// respuesta de cada una. La cola de GPS no se manda mientras haya acciones (ver `EmisorUbicacion.retener`).
@@ -275,6 +305,7 @@ class ColaAccionesNotifier extends AsyncNotifier<List<AccionViaje>> {
         switch (e) {
           // Sin red, el servidor caído o la sesión vencida: se reintenta más tarde.
           case SinConexion() || ErrorServidor() || ServicioNoDisponible() || SesionInvalida():
+            ref.read(accionesSinSalirProvider.notifier).fijar(true);
             return;
           case Conflicto() || ErrorNegocio() || AccesoDenegado() || NoEncontrado():
             await _descartar(accion.viajeId, e);
@@ -282,6 +313,7 @@ class ColaAccionesNotifier extends AsyncNotifier<List<AccionViaje>> {
         }
       }
       if (!ref.mounted) return;
+      ref.read(accionesSinSalirProvider.notifier).fijar(false);
       if (_esperando.contains(accion.id)) _respuestas[accion.id] = viaje;
       await _fijar([
         for (final a in _pendientes)
@@ -318,6 +350,7 @@ class ColaAccionesNotifier extends AsyncNotifier<List<AccionViaje>> {
   Future<void> _fijar(List<AccionViaje> acciones) async {
     state = AsyncData(List.unmodifiable(acciones));
     _ajustarReintento(acciones);
+    if (acciones.isEmpty) ref.read(accionesSinSalirProvider.notifier).fijar(false);
     try {
       await ref.read(almacenAccionesProvider).guardar(_usuarioId, acciones);
     } catch (e) {

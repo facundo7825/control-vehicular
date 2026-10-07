@@ -6,6 +6,7 @@ import 'package:vehiculos_oficiales/src/avisos/notificaciones_locales.dart';
 import 'package:vehiculos_oficiales/src/avisos/reproductor_sonidos.dart';
 import 'package:vehiculos_oficiales/src/chofer/almacen_cola.dart';
 import 'package:vehiculos_oficiales/src/chofer/cola_acciones.dart';
+import 'package:vehiculos_oficiales/src/chofer/estado_guardado.dart';
 import 'package:vehiculos_oficiales/src/entorno.dart';
 import 'package:vehiculos_oficiales/src/mapa/cache_teselas.dart';
 import 'package:vehiculos_oficiales/src/sesion/almacen_token.dart';
@@ -53,6 +54,9 @@ class EntornoPrueba {
   AlmacenToken almacen = AlmacenTokenMemoria();
   AlmacenCola almacenCola = AlmacenColaMemoria();
   AlmacenAcciones almacenAcciones = AlmacenAccionesMemoria();
+  AlmacenCola almacenSinTurno = AlmacenColaMemoria();
+  AlmacenJson turnoGuardado = AlmacenJsonMemoria();
+  AlmacenJson viajeGuardado = AlmacenJsonMemoria();
   int sesionesInvalidas = 0;
 
   /// Nunca los plugins de audio y notificaciones.
@@ -77,6 +81,9 @@ class EntornoPrueba {
     almacenTokenProvider.overrideWithValue(almacen),
     almacenColaProvider.overrideWithValue(almacenCola),
     almacenAccionesProvider.overrideWithValue(almacenAcciones),
+    almacenSinTurnoProvider.overrideWithValue(almacenSinTurno),
+    almacenTurnoGuardadoProvider.overrideWithValue(turnoGuardado),
+    almacenViajeGuardadoProvider.overrideWithValue(viajeGuardado),
     // Sin disco para las teselas (ni path_provider): el mapa de prueba no las usa.
     almacenTeselasProvider.overrideWithValue(null),
     reproductorSonidosProvider.overrideWithValue(sonidos),

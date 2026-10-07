@@ -37,6 +37,16 @@ class Turno {
 
   /// Lo abrió un fichaje de entrada (no el chofer desde la app).
   bool get porFichaje => origen == 'asistencia';
+
+  /// Lo que lee [Turno.fromJson] (para guardarlo en el teléfono y abrir sin señal).
+  Json toJson() => {
+    'id': id,
+    'vehiculo': vehiculo?.toJson(),
+    'inicio': escribirFecha(inicio),
+    'fin': fin == null ? null : escribirFecha(fin!),
+    'origen': origen,
+    'cierre_pendiente_en': cierrePendienteEn == null ? null : escribirFecha(cierrePendienteEn!),
+  };
 }
 
 /// `GET /agenda`: reservas confirmadas del chofer y solicitudes de reserva por responder.

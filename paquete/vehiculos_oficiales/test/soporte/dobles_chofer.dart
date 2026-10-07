@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:vehiculos_oficiales/src/api/errores_api.dart';
 import 'package:vehiculos_oficiales/src/chofer/almacen_cola.dart';
 import 'package:vehiculos_oficiales/src/chofer/cola_acciones.dart';
+import 'package:vehiculos_oficiales/src/chofer/estado_guardado.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
 
 import '../fixtures/payloads.dart' as p;
@@ -39,6 +41,9 @@ class ApiChofer extends ApiFalsa {
 
   /// Errores de los próximos envíos de ubicación, en orden; sin errores pendientes responde 204.
   final erroresUbicacion = <ErrorApi>[];
+
+  /// Error de todos los envíos de ubicación (después de [erroresUbicacion]), p. ej. sin señal.
+  ErrorApi? errorUbicacion;
 
   /// Si no es nulo, `enviarUbicacion` espera a que el test lo complete.
   Completer<void>? demoraUbicacion;
@@ -123,6 +128,7 @@ class ApiChofer extends ApiFalsa {
     lotes.add(List.of(puntos));
     if (demoraUbicacion != null) await demoraUbicacion!.future;
     if (erroresUbicacion.isNotEmpty) throw erroresUbicacion.removeAt(0);
+    if (errorUbicacion != null) throw errorUbicacion!;
   }
 
   @override
@@ -190,6 +196,13 @@ class AlmacenColaMemoria implements AlmacenCola {
   }
 
   @override
+  Future<({int turnoId, List<PuntoGps> puntos})?> leerCualquiera() async {
+    if (error != null) throw error!;
+    final id = turnoId;
+    return id == null ? null : (turnoId: id, puntos: List.of(puntos));
+  }
+
+  @override
   Future<void> guardar(int turnoId, List<PuntoGps> puntos) async {
     if (error != null) throw error!;
     this.turnoId = turnoId;
@@ -228,4 +241,25 @@ class AlmacenAccionesMemoria implements AlmacenAcciones {
     this.usuarioId = usuarioId;
     this.acciones = List.of(acciones);
   }
+
+  @override
+  Future<void> borrar() async {
+    if (error != null) throw error!;
+    usuarioId = null;
+    acciones = [];
+  }
+}
+
+/// [AlmacenJson] en memoria (sobrevive a un contenedor descartado).
+class AlmacenJsonMemoria implements AlmacenJson {
+  Json? datos;
+
+  @override
+  Future<Json?> leer() async => datos == null ? null : jsonDecode(jsonEncode(datos)) as Json;
+
+  @override
+  Future<void> guardar(Json datos) async => this.datos = jsonDecode(jsonEncode(datos)) as Json;
+
+  @override
+  Future<void> borrar() async => datos = null;
 }

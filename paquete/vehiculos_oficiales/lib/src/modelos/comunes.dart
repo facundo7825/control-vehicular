@@ -30,6 +30,8 @@ class Lugar {
   String get descripcion => direccion ?? sinDireccion;
 
   static const sinDireccion = 'Ubicación marcada en el mapa';
+
+  Json toJson() => {'lat': coordenada.lat, 'lng': coordenada.lng, 'direccion': direccion};
 }
 
 /// `{patente, marca, modelo, color}`; `id` solo viene en `GET /vehiculos/disponibles`.
@@ -51,6 +53,8 @@ class Vehiculo {
   final String? color;
 
   String get descripcion => '$marca $modelo ($patente)';
+
+  Json toJson() => {'id': id, 'patente': patente, 'marca': marca, 'modelo': modelo, 'color': color};
 }
 
 /// Chofer o solicitante dentro de un viaje: `{id, nombre, telefono}`.
@@ -63,4 +67,6 @@ class Persona {
   final int id;
   final String nombre;
   final String? telefono;
+
+  Json toJson() => {'id': id, 'nombre': nombre, 'telefono': telefono};
 }

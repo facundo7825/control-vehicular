@@ -67,7 +67,10 @@ class BannerAccionesPendientes extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final n = ref.watch(colaAccionesProvider.select((s) => s.value?.length ?? 0));
-    if (n == 0) return const SizedBox.shrink();
+    // Con señal las acciones salen enseguida: el aviso aparece solo si un envío falló o sin socket.
+    final sinSenal =
+        ref.watch(accionesSinSalirProvider) || ref.watch(estadoConexionProvider) != EstadoConexion.conectado;
+    if (n == 0 || !sinSenal) return const SizedBox.shrink();
     return MaterialBanner(
       leading: const Icon(Icons.cloud_upload_outlined),
       content: Text(textoAccionesPendientes(n)),

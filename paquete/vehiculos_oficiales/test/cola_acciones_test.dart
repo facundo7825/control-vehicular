@@ -27,6 +27,10 @@ void main() {
   late TiempoRealFalso tr;
   late UbicadorFalso gps;
   late AlmacenAccionesMemoria almacen;
+  late AlmacenColaMemoria colaGps;
+  late AlmacenColaMemoria sinTurno;
+  late AlmacenJsonMemoria turnoGuardado;
+  late AlmacenJsonMemoria viajeGuardado;
   late List<String> avisos;
 
   setUp(() {
@@ -34,13 +38,23 @@ void main() {
     tr = TiempoRealFalso();
     gps = UbicadorFalso();
     almacen = AlmacenAccionesMemoria();
+    colaGps = AlmacenColaMemoria();
+    sinTurno = AlmacenColaMemoria();
+    turnoGuardado = AlmacenJsonMemoria();
+    viajeGuardado = AlmacenJsonMemoria();
     avisos = [];
     binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
   });
 
   /// Con [conTurno] también corre el turno (y su GPS).
   ProviderContainer crear({bool conTurno = false}) {
-    final c = (EntornoPrueba()..almacenAcciones = almacen).contenedor([
+    final entorno = EntornoPrueba()
+      ..almacenAcciones = almacen
+      ..almacenCola = colaGps
+      ..almacenSinTurno = sinTurno
+      ..turnoGuardado = turnoGuardado
+      ..viajeGuardado = viajeGuardado;
+    final c = entorno.contenedor([
       apiProvider.overrideWithValue(api),
       tiempoRealProvider.overrideWithValue(tr),
       usuarioProvider.overrideWithValue(chofer),
@@ -331,6 +345,246 @@ void main() {
       expect(error, isA<SinConexion>().having((e) => e.mensaje, 'mensaje', 'Esperando señal para enviar el viaje.'));
       expect(api.llamadas, isNot(contains('finalizar')));
       expect(c.read(turnoProvider).value, isNotNull);
+    });
+  });
+
+  group('el recorrido sin señal no se pierde', () {
+    /// [n] puntos cada 5 s (en viaje entran todos a la cola).
+    void recorrer(int n) {
+      for (var i = 0; i < n; i++) {
+        gps.emitir(punto(i * 5));
+      }
+    }
+
+    Set<int> segundosEnviadosDesde(int lote) => {for (final l in api.lotes.skip(lote)) ...segundos(l)};
+
+    test('con el turno abierto, cuando salen las acciones se manda todo el atraso (más de un lote)', () {
+      fakeAsync((async) {
+        api
+          ..turno = turnoDePrueba()
+          ..actual = ViajeActual(viaje: viaje(estado: 'en_curso', conChofer: true));
+        final c = crear(conTurno: true);
+        async.flushMicrotasks();
+        api
+          ..errorAvance = const SinConexion()
+          ..errorUbicacion = const SinConexion();
+        recorrer(600);
+        viajeActual(c).avanzar(EstadoViaje.finalizado);
+        async.flushMicrotasks();
+
+        api
+          ..errorAvance = null
+          ..errorUbicacion = null;
+        final desde = api.lotes.length;
+        api.llamadas.clear();
+        reconectar();
+        async.flushMicrotasks();
+
+        expect(api.llamadas, ['avanzar:1:finalizado', 'ubicacion:500', 'ubicacion:100']);
+        expect(segundosEnviadosDesde(desde), hasLength(600));
+        expect(c.read(ubicacionesAtrasadasProvider), isFalse);
+      });
+    });
+
+    test('con un "Finalizar" pendiente y más de 500 puntos, si el turno se cierra al reconectar, se manda todo', () {
+      fakeAsync((async) {
+        api
+          ..turno = turnoDePrueba()
+          ..actual = ViajeActual(viaje: viaje(estado: 'en_curso', conChofer: true));
+        final c = crear(conTurno: true);
+        async.flushMicrotasks();
+        api
+          ..errorAvance = const SinConexion()
+          ..errorUbicacion = const SinConexion();
+        recorrer(600);
+        async.elapse(const Duration(seconds: 5)); // el GPS se guarda en disco
+        viajeActual(c).avanzar(EstadoViaje.finalizado);
+        async.flushMicrotasks();
+
+        // Vuelve la señal y, a la vez, el fichaje de salida cerró el turno (push `turno`).
+        api
+          ..errorAvance = null
+          ..errorUbicacion = null
+          ..turno = null;
+        final desde = api.lotes.length;
+        api.llamadas.clear();
+        c.read(turnoProvider.notifier).refrescar();
+        reconectar();
+        async.flushMicrotasks();
+
+        expect(c.read(turnoProvider).value, isNull);
+        expect(api.llamadas.where((l) => l.startsWith('avanzar') || l.startsWith('ubicacion')), [
+          'avanzar:1:finalizado',
+          'ubicacion:500',
+          'ubicacion:100',
+        ]);
+        expect(segundosEnviadosDesde(desde), hasLength(600));
+        expect(colaGps.guardado, isFalse);
+        expect(sinTurno.guardado, isFalse);
+      });
+    });
+
+    test('sin señal al cerrarse el turno los puntos quedan guardados y salen al abrir de nuevo, aun sin turno', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        final antes = crear(conTurno: true);
+        async.flushMicrotasks();
+        api.errorUbicacion = const SinConexion();
+        gps
+          ..emitir(punto(0))
+          ..emitir(punto(10));
+        api.turno = null;
+        antes.read(turnoProvider.notifier).refrescar();
+        async.flushMicrotasks();
+        expect(antes.read(turnoProvider).value, isNull);
+        expect(segundos(sinTurno.puntos), [0, 10]);
+        antes.dispose();
+        async.flushMicrotasks();
+
+        api.errorUbicacion = null;
+        final desde = api.lotes.length;
+        crear(conTurno: true);
+        async.flushMicrotasks();
+
+        expect(segundosEnviadosDesde(desde), {0, 10});
+        expect(sinTurno.guardado, isFalse);
+      });
+    });
+
+    test('los lotes que el servidor no ubica en ningún viaje (sin turno) se descartan, los demás salen', () {
+      fakeAsync((async) {
+        sinTurno
+          ..turnoId = 0
+          ..puntos = [for (var i = 0; i < 700; i++) punto(i)];
+        api.erroresUbicacion.add(const ErrorNegocio('Iniciá un turno para compartir tu ubicación.'));
+        crear(conTurno: true);
+        async.flushMicrotasks();
+
+        expect(api.lotes.map((l) => l.length), [500, 200]);
+        expect(sinTurno.guardado, isFalse);
+      });
+    });
+  });
+
+  test('un rechazo de un viaje no frena las acciones del siguiente, que salen en orden', () {
+    fakeAsync((async) {
+      api.actual = ViajeActual(viaje: viaje(estado: 'en_curso', conChofer: true));
+      final c = crear();
+      async.flushMicrotasks();
+      api.errorAvance = const SinConexion();
+      viajeActual(c).avanzar(EstadoViaje.finalizado);
+      async.flushMicrotasks();
+      viajeActual(c).salirHaciaReserva(viaje(id: 7, estado: 'aceptado', conChofer: true, tipo: 'reserva'));
+      async.flushMicrotasks();
+      viajeActual(c).avanzar(EstadoViaje.llego);
+      async.flushMicrotasks();
+      expect(pendientes(c).map((a) => (a.viajeId, a.estado)), [
+        (1, EstadoViaje.finalizado),
+        (7, EstadoViaje.enCamino),
+        (7, EstadoViaje.llego),
+      ]);
+
+      api
+        ..errorAvance = null
+        ..erroresAvance.add(const Conflicto('El viaje fue cancelado mientras estabas sin señal.'))
+        ..detalles[1] = viaje(estado: 'cancelado', conChofer: true)
+        ..actual = ViajeActual(
+          viaje: viaje(id: 7, estado: 'llego', conChofer: true, tipo: 'reserva'),
+        )
+        ..avances.clear();
+      reconectar();
+      async.flushMicrotasks();
+
+      expect(api.avances, [(1, EstadoViaje.finalizado), (7, EstadoViaje.enCamino), (7, EstadoViaje.llego)]);
+      expect(avisos, ['El viaje fue cancelado mientras estabas sin señal.']);
+      expect(pendientes(c), isEmpty);
+      final actual = c.read(viajeActualProvider).requireValue.viaje!;
+      expect((actual.id, actual.estado), (7, EstadoViaje.llego));
+    });
+  });
+
+  group('abrir sin señal', () {
+    test('con el turno y el viaje guardados: el viaje se puede seguir, el GPS rastrea y las acciones esperan', () {
+      fakeAsync((async) {
+        api
+          ..turno = turnoDePrueba()
+          ..actual = ViajeActual(viaje: viaje(estado: 'en_camino', conChofer: true));
+        final antes = crear(conTurno: true);
+        async.flushMicrotasks();
+        antes.dispose();
+        async.flushMicrotasks();
+        gps = UbicadorFalso();
+
+        // Se cierra la app y se vuelve a abrir en la ruta, sin señal.
+        tr = TiempoRealFalso(estado: EstadoConexion.desconectado);
+        api
+          ..errorTurnoActual = const SinConexion()
+          ..fallarConsultas = const SinConexion()
+          ..errorAvance = const SinConexion()
+          ..errorUbicacion = const SinConexion();
+        final c = crear(conTurno: true);
+        async.flushMicrotasks();
+
+        expect(c.read(turnoProvider).value!.id, 1);
+        expect(gps.siguiendo, isTrue);
+        expect(estado(c), EstadoViaje.enCamino);
+        viajeActual(c).avanzar(EstadoViaje.llego);
+        async.flushMicrotasks();
+        viajeActual(c).avanzar(EstadoViaje.enCurso);
+        async.flushMicrotasks();
+        expect(estado(c), EstadoViaje.enCurso);
+        expect(pendientes(c), hasLength(2));
+        async.elapse(const Duration(seconds: 10)); // el respaldo no la pisa
+        expect(estado(c), EstadoViaje.enCurso);
+
+        // Vuelve la señal: salen las acciones y el estado del servidor reemplaza la copia.
+        final consultasTurno = api.llamadas.where((l) => l == 'turnoActual').length;
+        api
+          ..errorTurnoActual = null
+          ..fallarConsultas = null
+          ..errorAvance = null
+          ..errorUbicacion = null
+          ..respuestaAvance = viaje(estado: 'en_curso', conChofer: true, obligatorio: true)
+          ..actual = ViajeActual(viaje: viaje(estado: 'en_curso', conChofer: true, obligatorio: true));
+        tr.cambiar(EstadoConexion.conectado);
+        async.flushMicrotasks();
+
+        expect(pendientes(c), isEmpty);
+        expect(api.llamadas.where((l) => l == 'turnoActual').length, consultasTurno + 1);
+        expect(c.read(viajeActualProvider).requireValue.viaje!.obligatorio, isTrue);
+      });
+    });
+
+    test('sin nada guardado, el error de conexión se muestra como siempre', () {
+      fakeAsync((async) {
+        api
+          ..errorTurnoActual = const SinConexion()
+          ..fallarConsultas = const SinConexion();
+        final c = crear(conTurno: true);
+        async.flushMicrotasks();
+
+        expect(c.read(turnoProvider).error, isA<SinConexion>());
+        expect(c.read(viajeActualProvider).error, isA<SinConexion>());
+      });
+    });
+
+    test('al terminar el viaje y al cerrar el turno se borra lo guardado', () {
+      fakeAsync((async) {
+        api
+          ..turno = turnoDePrueba()
+          ..actual = ViajeActual(viaje: viaje(estado: 'en_curso', conChofer: true));
+        final c = crear(conTurno: true);
+        async.flushMicrotasks();
+        expect(turnoGuardado.datos, isNotNull);
+        expect(viajeGuardado.datos, isNotNull);
+
+        viajeActual(c).avanzar(EstadoViaje.finalizado);
+        async.flushMicrotasks();
+        expect(viajeGuardado.datos, isNull);
+        c.read(turnoProvider.notifier).finalizar();
+        async.flushMicrotasks();
+        expect(turnoGuardado.datos, isNull);
+      });
     });
   });
 

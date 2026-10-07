@@ -59,6 +59,25 @@ class EmisorUbicacion {
     return resultado;
   }
 
+  /// Para los puntos de un turno que ya se cerró: manda lotes hasta vaciar la cola. El servidor acepta los que
+  /// caen en un viaje del chofer aunque no haya turno; un lote que responde [ResultadoEnvio.sinTurno] no tiene
+  /// ninguno y se descarta. Devuelve [ResultadoEnvio.enviado] (o `sinCambios`) con la cola vacía; si no,
+  /// el resultado que cortó (sin red, retenido): lo que queda sigue en la cola.
+  Future<ResultadoEnvio> vaciarSinTurno() async {
+    var resultado = ResultadoEnvio.sinCambios;
+    while (cola.largo > 0) {
+      final lote = cola.primeros(this.lote);
+      resultado = await enviar();
+      if (resultado == ResultadoEnvio.sinTurno) {
+        cola.quitar(lote);
+        resultado = ResultadoEnvio.enviado;
+        continue;
+      }
+      if (resultado != ResultadoEnvio.enviado) return resultado;
+    }
+    return resultado;
+  }
+
   Future<ResultadoEnvio> _enviarLote() async {
     final puntos = cola.primeros(lote);
     try {

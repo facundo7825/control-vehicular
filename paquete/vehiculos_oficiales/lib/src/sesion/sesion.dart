@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/errores_api.dart';
 import '../chofer/almacen_cola.dart';
+import '../chofer/cola_acciones.dart';
+import '../chofer/estado_guardado.dart';
 import '../entorno.dart';
 import '../modelos/modelos.dart';
 import 'almacen_token.dart';
@@ -124,11 +126,22 @@ class SesionNotifier extends Notifier<EstadoSesion> {
 
   /// Spec 10: al cerrarse la sesión (401) no quedan en el dispositivo ubicaciones del turno sin enviar.
   /// Nunca lanza.
+  /// También las acciones del viaje sin enviar, los puntos de turnos cerrados y la copia del turno y del viaje
+  /// guardada para abrir sin señal.
   Future<void> _borrarCola() async {
-    try {
-      await ref.read(almacenColaProvider).borrar();
-    } catch (e) {
-      debugPrint('vehiculos_oficiales: no se pudo borrar la cola de ubicaciones guardada (${e.runtimeType}).');
+    final borrados = <(String, Future<void> Function())>[
+      ('la cola de ubicaciones', ref.read(almacenColaProvider).borrar),
+      ('las ubicaciones sin turno', ref.read(almacenSinTurnoProvider).borrar),
+      ('la cola de acciones', ref.read(almacenAccionesProvider).borrar),
+      ('el turno guardado', ref.read(almacenTurnoGuardadoProvider).borrar),
+      ('el viaje guardado', ref.read(almacenViajeGuardadoProvider).borrar),
+    ];
+    for (final (que, borrar) in borrados) {
+      try {
+        await borrar();
+      } catch (e) {
+        debugPrint('vehiculos_oficiales: no se pudo borrar $que (${e.runtimeType}).');
+      }
     }
   }
 

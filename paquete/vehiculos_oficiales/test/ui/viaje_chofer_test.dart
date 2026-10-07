@@ -229,6 +229,20 @@ void main() {
       expect(enviados.reversed, ['llego', 'en_curso']);
     });
 
+    testWidgets('con señal no aparece el aviso mientras el paso sale', (tester) async {
+      await abrir(tester, viajeJson(estado: 'en_camino'));
+      final respuesta = e.http.demorar('POST', 'viajes/1/estado');
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Llegué'));
+      await esperar(tester);
+      expect(find.widgetWithText(FilledButton, 'Iniciar viaje'), findsOneWidget);
+      expect(find.textContaining('se enviará'), findsNothing);
+
+      respuesta.complete((200, viajeJson(estado: 'llego')));
+      await esperar(tester);
+      expect(find.textContaining('se enviará'), findsNothing);
+    });
+
     testWidgets('si al reconectar el servidor la rechaza, vuelve al estado real y se avisa', (tester) async {
       await abrir(tester, viajeJson(estado: 'en_camino'), (e) => e.http.sinRed('POST', 'viajes/1/estado'));
       await tester.tap(find.widgetWithText(FilledButton, 'Llegué'));

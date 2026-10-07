@@ -15,6 +15,10 @@ abstract interface class AlmacenCola {
   /// guardado es de otro turno o si no se puede leer.
   Future<List<PuntoGps>> leer(int turnoId);
 
+  /// Lo guardado, de cualquier turno (nulo si no hay nada o no se puede leer): al abrir sin ese turno, los
+  /// puntos todavía pueden ser del recorrido de un viaje y se mandan igual.
+  Future<({int turnoId, List<PuntoGps> puntos})?> leerCualquiera();
+
   /// Reemplaza lo guardado por [puntos] del turno [turnoId].
   Future<void> guardar(int turnoId, List<PuntoGps> puntos);
 
@@ -37,28 +41,36 @@ abstract interface class AlmacenCola {
 /// para que una app cerrada a mitad de la escritura no deje un archivo cortado. Un archivo ilegible se lee
 /// como vacío.
 class AlmacenColaArchivo implements AlmacenCola {
-  AlmacenColaArchivo(this._directorio);
+  AlmacenColaArchivo(this._directorio, {this.nombre = nombreArchivo});
 
   static const subdirectorio = 'vehiculos_oficiales';
   static const nombreArchivo = 'cola_ubicaciones.json';
 
   final Future<Directory> Function() _directorio;
 
+  /// El archivo: [nombreArchivo] para la cola del turno, otro para los puntos de turnos ya cerrados.
+  final String nombre;
+
   /// Compartida por todas las instancias: en producción todas usan el mismo archivo.
   static Future<void> _anterior = Future.value();
 
   @override
-  Future<List<PuntoGps>> leer(int turnoId) => _enOrden(() async {
+  Future<List<PuntoGps>> leer(int turnoId) async {
+    final guardado = await leerCualquiera();
+    return guardado != null && guardado.turnoId == turnoId ? guardado.puntos : <PuntoGps>[];
+  }
+
+  @override
+  Future<({int turnoId, List<PuntoGps> puntos})?> leerCualquiera() => _enOrden(() async {
     final archivo = await _archivo();
-    if (!await archivo.exists()) return <PuntoGps>[];
+    if (!await archivo.exists()) return null;
     try {
       final j = leerMapa(jsonDecode(await archivo.readAsString()));
-      if (j['turno_id'] != turnoId) return <PuntoGps>[];
-      return [for (final p in j['puntos'] as List) ?_deDisco(leerMapa(p))];
+      return (turnoId: j['turno_id'] as int, puntos: [for (final p in j['puntos'] as List) ?_deDisco(leerMapa(p))]);
     } catch (e) {
       // JSON cortado o con otra forma: se sigue sin lo guardado.
       debugPrint('vehiculos_oficiales: no se pudo leer la cola de ubicaciones guardada (${e.runtimeType}).');
-      return <PuntoGps>[];
+      return null;
     }
   });
 
@@ -86,7 +98,7 @@ class AlmacenColaArchivo implements AlmacenCola {
     }
   });
 
-  Future<File> _archivo() async => File('${(await _directorio()).path}/$subdirectorio/$nombreArchivo');
+  Future<File> _archivo() async => File('${(await _directorio()).path}/$subdirectorio/$nombre');
 
   static File _temporal(File archivo) => File('${archivo.path}.tmp');
 
@@ -128,6 +140,9 @@ class AlmacenColaNula implements AlmacenCola {
   Future<List<PuntoGps>> leer(int turnoId) async => [];
 
   @override
+  Future<({int turnoId, List<PuntoGps> puntos})?> leerCualquiera() async => null;
+
+  @override
   Future<void> guardar(int turnoId, List<PuntoGps> puntos) async {}
 
   @override
@@ -136,4 +151,12 @@ class AlmacenColaNula implements AlmacenCola {
 
 final almacenColaProvider = Provider<AlmacenCola>(
   (ref) => kIsWeb ? const AlmacenColaNula() : AlmacenColaArchivo(getApplicationCacheDirectory),
+);
+
+/// Los puntos de turnos que ya se cerraron y todavía no llegaron al servidor (ver `TurnoNotifier`): pueden ser
+/// del recorrido de un viaje, que el servidor acepta aunque no haya turno. Se guardan con el turno 0.
+final almacenSinTurnoProvider = Provider<AlmacenCola>(
+  (ref) => kIsWeb
+      ? const AlmacenColaNula()
+      : AlmacenColaArchivo(getApplicationCacheDirectory, nombre: 'ubicaciones_sin_turno.json'),
 );

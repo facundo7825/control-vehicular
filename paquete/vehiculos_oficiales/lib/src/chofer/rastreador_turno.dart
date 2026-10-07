@@ -179,15 +179,19 @@ class RastreadorTurno {
     alPunto(p);
   }
 
-  Future<void> _enviar() async {
+  /// [todo]: lotes hasta vaciar la cola (después de que salieron las acciones del viaje), no solo uno.
+  Future<void> _enviar({bool todo = false}) async {
     try {
-      final resultado = await emisor.enviar();
+      final antes = cola.largo;
+      final resultado = await (todo ? emisor.vaciarTodo() : emisor.enviar());
       if (!_activo) return;
-      _informarAtraso(resultado);
+      // Con un solo lote no salió todo lo que había: sigue atrasado hasta el próximo envío.
+      _informarAtraso(resultado, quedaronLotes: !todo && antes > emisor.lote);
       if (resultado == ResultadoEnvio.enviado) _guardar();
       if (resultado == ResultadoEnvio.sinTurno) {
-        detener();
+        // El turno se lleva los puntos que quedan antes de que se descarten (pueden ser de un viaje).
         alQuedarSinTurno();
+        detener();
       }
     } catch (e) {
       // Corre sin await desde el timer: nada puede escaparse (el emisor ya no lanza ErrorApi).
@@ -203,15 +207,18 @@ class RastreadorTurno {
     return resultado;
   }
 
-  /// Un envío ya, sin esperar al timer: lo pide el turno cuando salieron las acciones del viaje.
+  /// Todo lo pendiente ya, sin esperar al timer: lo pide el turno cuando salieron las acciones del viaje.
   void enviarAhora() {
-    if (_activo) unawaited(_enviar());
+    if (_activo) unawaited(_enviar(todo: true));
   }
 
-  void _informarAtraso(ResultadoEnvio resultado) {
+  /// Atrasado mientras queden puntos sin mandar después de un envío que no salió (sin señal, retenido) o
+  /// que mandó solo uno de varios lotes.
+  void _informarAtraso(ResultadoEnvio resultado, {bool quedaronLotes = false}) {
     final atrasados = switch (resultado) {
       ResultadoEnvio.reintentar || ResultadoEnvio.retenido => cola.largo > 0,
-      ResultadoEnvio.enviado || ResultadoEnvio.sinCambios || ResultadoEnvio.sinTurno => false,
+      ResultadoEnvio.enviado => quedaronLotes && cola.largo > 0,
+      ResultadoEnvio.sinCambios || ResultadoEnvio.sinTurno => false,
     };
     if (atrasados == _atrasados) return;
     _atrasados = atrasados;
