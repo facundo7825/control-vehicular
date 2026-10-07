@@ -249,13 +249,20 @@ class Despachador
         return $vence->lt($minimo) ? $minimo : $vence;
     }
 
-    /** @return Collection<int, Usuario> */
+    /**
+     * Choferes libres a los que todavía no se les ofreció. Un chofer desactivado con el turno abierto sigue
+     * en el mapa, pero no recibe viajes.
+     *
+     * @return Collection<int, Usuario>
+     */
     private function candidatos(Viaje $viaje): Collection
     {
         $yaOfrecidos = OfertaViaje::where('viaje_id', $viaje->id)->pluck('chofer_id');
 
         return $this->estados->libres()
-            ->reject(fn (Usuario $c) => $yaOfrecidos->contains($c->id) || $this->tieneOfertaPendiente($c->id))
+            ->reject(fn (Usuario $c) => ! $c->activo
+                || $yaOfrecidos->contains($c->id)
+                || $this->tieneOfertaPendiente($c->id))
             ->values();
     }
 

@@ -174,6 +174,36 @@ describe('despacho', function () {
         expect(OfertaViaje::sole())->chofer_id->toBe($dep->id)->criterio->toBe(CriterioOferta::Dependencia);
     });
 
+    it('con el chofer asignado inactivo ofrece a la dependencia y al resto, y nunca al inactivo', function () {
+        $asignado = choferEnTurno(-34.601, -58.381);
+        $dep = choferEnTurno(-34.650, -58.430);
+        $resto = choferEnTurno(-34.700, -58.480);
+        $viaje = viajeDe(solicitanteCon($asignado, [$dep]));
+        $asignado->update(['activo' => false]);
+        $d = app(Despachador::class);
+
+        $d->despachar($viaje);
+        expect(OfertaViaje::sole())->chofer_id->toBe($dep->id)->criterio->toBe(CriterioOferta::Dependencia);
+
+        $d->responder(OfertaViaje::sole(), false);
+        expect(OfertaViaje::where('resultado', ResultadoOferta::Pendiente)->sole()->chofer_id)->toBe($resto->id);
+
+        $d->responder(OfertaViaje::where('resultado', ResultadoOferta::Pendiente)->sole(), false);
+        expect(OfertaViaje::where('chofer_id', $asignado->id)->exists())->toBeFalse()
+            ->and($viaje->fresh()->estado)->toBe(EstadoViaje::SinChofer);
+    });
+
+    it('un viaje obligatorio no se asigna a un chofer inactivo', function () {
+        $inactivo = choferEnTurno(-34.601, -58.381);
+        $inactivo->update(['activo' => false]);
+        $activo = choferEnTurno(-34.700, -58.480);
+        $viaje = viajeDe(Usuario::factory()->create(), ['obligatorio' => true]);
+
+        app(Despachador::class)->despachar($viaje);
+
+        expect($viaje->fresh()->chofer_id)->toBe($activo->id);
+    });
+
     it('un viaje obligatorio se asigna directo al chofer asignado', function () {
         choferEnTurno(-34.601, -58.381);
         $asignado = choferEnTurno(-34.700, -58.480);
@@ -267,6 +297,15 @@ describe('reservas', function () {
         expect(Viaje::where('solicitante_id', $juez->id)->sole())
             ->estado->toBe(EstadoViaje::Aceptado)->chofer_id->toBe($asignado->id)
             ->and(OfertaViaje::count())->toBe(0);
+    });
+
+    it('cualquiera disponible nunca ofrece a un chofer inactivo, aunque sea el asignado', function () {
+        $asignado = Usuario::factory()->chofer()->create(['activo' => false]);
+        $otro = Usuario::factory()->chofer()->create();
+
+        pedirReserva(solicitanteCon($asignado));
+
+        expect(OfertaViaje::sole())->chofer_id->toBe($otro->id)->criterio->toBe(CriterioOferta::Disponibilidad);
     });
 
     it('el modo específico no cambia', function () {
