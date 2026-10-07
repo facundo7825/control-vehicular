@@ -309,10 +309,19 @@ class BuscadorNominatim implements BuscadorLugares, GeocodificadorInverso
             if (! isset($f['lat'], $f['lon'], $f['display_name'])) {
                 continue;
             }
-            $direccion = (string) $f['display_name'];
+            // La dirección corta ("calle altura, barrio") en lugar del display_name completo de Nominatim; si
+            // es un lugar con nombre (un edificio, una plaza) va adelante: "Catedral, Rivadavia 626, Centro".
+            $corta = is_array($f['address'] ?? null) ? self::armarDireccion($f) : null;
             $nombre = trim((string) ($f['name'] ?? ''));
+            if ($corta === null) {
+                $direccion = (string) $f['display_name'];
+            } elseif ($nombre !== '' && ! str_starts_with($corta, $nombre)) {
+                $direccion = "{$nombre}, {$corta}";
+            } else {
+                $direccion = $corta;
+            }
             if ($nombre === '') {
-                $nombre = trim(explode(',', $direccion)[0]);
+                $nombre = $corta ?? trim(explode(',', $direccion)[0]);
             }
             $lugares[] = [
                 'nombre' => $nombre,
