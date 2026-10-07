@@ -1,24 +1,26 @@
-# Servidor de mapas propio para Catamarca: recorridos y tiempos (OSRM), búsqueda (Nominatim) y mapa de fondo (teselas PNG).
+# Servidor de mapas propio: recorridos y tiempos (OSRM), búsqueda (Nominatim) y mapa de fondo (teselas PNG).
 # Antes de levantarlo: ./preparar-datos.sh  y  cp .env.example .env  (poner NOMINATIM_CLAVE_DB).
+# Región: MAPAS_REGION en .env (catamarca por defecto, o argentina), la misma que se preparó con REGION=... en el script.
 # Ver README.md y docs/PRODUCCION-MAPAS.md.
 #
 # Los puertos escuchan solo en 127.0.0.1: el backend los usa desde el mismo servidor y las teselas salen a internet por
 # el proxy inverso con HTTPS. Para exponerlos en una red interna: MAPAS_ESCUCHA=<IP interna> (Docker se saltea UFW:
 # ver la guía).
 #
-# Límites de memoria (medidos con Catamarca: OSRM ~110 MB, Nominatim ~0,5 GB y 1,1 GB al importar, teselas ~0,3 GB),
+# Límites de memoria (medidos con Catamarca: OSRM ~110 MB, Nominatim ~0,5 GB y 1,1 GB al importar, teselas ~0,3 GB;
+# con argentina: OSRM ~2,4 GB, Nominatim ~0,9 GB y 4,4 GB al importar, teselas ~0,2–0,6 GB),
 # con margen. Se cambian con OSRM_MEMORIA, NOMINATIM_MEMORIA y TESELAS_MEMORIA en .env.
 name: mapas
 
 services:
   osrm:
     image: ghcr.io/project-osrm/osrm-backend:v6.0.0
-    command: osrm-routed --algorithm mld --max-table-size 200 /data/catamarca.osrm
+    command: osrm-routed --algorithm mld --max-table-size 200 /data/${MAPAS_REGION:-catamarca}.osrm
     volumes:
       - ./datos/osrm:/data:ro
     ports:
       - "${MAPAS_ESCUCHA:-127.0.0.1}:${OSRM_PUERTO:-5001}:5000"
-    mem_limit: ${OSRM_MEMORIA:-1g}
+    mem_limit: ${OSRM_MEMORIA:-4g}
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:5000/nearest/v1/driving/-65.779,-28.469"]
       interval: 30s
@@ -30,7 +32,7 @@ services:
   nominatim:
     image: mediagis/nominatim:5.3
     environment:
-      PBF_PATH: /datos/catamarca.osm.pbf
+      PBF_PATH: /datos/${MAPAS_REGION:-catamarca}.osm.pbf
       IMPORT_STYLE: full
       # Clave interna de PostgreSQL (el puerto 5432 no se publica). Obligatoria: va en infra/mapas/.env.
       NOMINATIM_PASSWORD: "${NOMINATIM_CLAVE_DB:?Falta NOMINATIM_CLAVE_DB. Copiar .env.example a .env y poner una clave}"
@@ -41,26 +43,26 @@ services:
       POSTGRES_EFFECTIVE_CACHE_SIZE: 2GB
       GUNICORN_WORKERS: ${NOMINATIM_WORKERS:-2}
     volumes:
-      - ./datos/catamarca.osm.pbf:/datos/catamarca.osm.pbf:ro
+      - ./datos/${MAPAS_REGION:-catamarca}.osm.pbf:/datos/${MAPAS_REGION:-catamarca}.osm.pbf:ro
       - nominatim-db:/var/lib/postgresql/16/main
     shm_size: 1gb
     ports:
       - "${MAPAS_ESCUCHA:-127.0.0.1}:${NOMINATIM_PUERTO:-8088}:8080"
-    mem_limit: ${NOMINATIM_MEMORIA:-3g}
+    mem_limit: ${NOMINATIM_MEMORIA:-5g}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8080/status"]
       interval: 30s
       timeout: 5s
       retries: 3
-      # La primera vez importa el recorte antes de responder (2–3 minutos con Catamarca).
-      start_period: 30m
+      # La primera vez importa los datos antes de responder: 2–3 minutos con catamarca, ~64 minutos con argentina.
+      start_period: 90m
     restart: unless-stopped
 
   teselas:
     image: maptiler/tileserver-gl:v5.6.0
     command: --config /config/config.json --port 8080
     volumes:
-      - ./tileserver/config.json:/config/config.json:ro
+      - ./tileserver/${MAPAS_REGION:-catamarca}.json:/config/config.json:ro
       - ./datos/teselas:/data:ro
     ports:
       - "${MAPAS_ESCUCHA:-127.0.0.1}:${TESELAS_PUERTO:-8089}:8080"
