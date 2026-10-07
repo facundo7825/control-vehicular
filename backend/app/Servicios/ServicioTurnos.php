@@ -37,10 +37,12 @@ class ServicioTurnos
             if (! $vehiculo || ! $vehiculo->activo) {
                 throw new ReglaNegocio('El vehículo no existe o no está activo.');
             }
-            if (Turno::where('chofer_id', $chofer->id)->whereNull('fin')->exists()) {
+            // Lecturas actuales (con lock): si este iniciar corre dentro de una transacción que ya leyó antes (p. ej. un
+            // fichaje), su snapshot puede no ver un turno que otro abrió mientras se esperaba el lock del vehículo.
+            if (Turno::where('chofer_id', $chofer->id)->whereNull('fin')->lockForUpdate()->exists()) {
                 throw new ReglaNegocio('Ya tenés un turno abierto.');
             }
-            if (Turno::where('vehiculo_id', $vehiculo->id)->whereNull('fin')->exists()) {
+            if (Turno::where('vehiculo_id', $vehiculo->id)->whereNull('fin')->lockForUpdate()->exists()) {
                 throw new ReglaNegocio('El vehículo está en uso por otro chofer.');
             }
             $this->rechazarSiEstaEnViajeLargo($vehiculo->id, $chofer->id);
@@ -86,7 +88,7 @@ class ServicioTurnos
             if (Viaje::activosDeChofer($chofer->id)->exists()) {
                 throw new ReglaNegocio('Terminá el viaje en curso antes de cambiar de vehículo.');
             }
-            if (Turno::where('vehiculo_id', $vehiculo->id)->whereNull('fin')->exists()) {
+            if (Turno::where('vehiculo_id', $vehiculo->id)->whereNull('fin')->lockForUpdate()->exists()) {
                 throw new ReglaNegocio('El vehículo está en uso por otro chofer.');
             }
             $this->rechazarSiEstaEnViajeLargo($vehiculo->id, $chofer->id);
