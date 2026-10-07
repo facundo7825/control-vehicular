@@ -92,10 +92,11 @@ void main() {
     });
   });
 
-  test(
-    'la hora del servidor avanza con un cronómetro monotónico: un cambio de la hora del teléfono no la mueve',
-    () async {
-      final cronometro = CronometroFalso();
+  group('hora del servidor sin señal', () {
+    late CronometroFalso cronometro;
+
+    setUp(() async {
+      cronometro = CronometroFalso();
       api = ApiVehiculos(
         ClienteApi(
           baseApi: Uri.parse('http://10.0.2.2:8000/api/'),
@@ -107,17 +108,33 @@ void main() {
       reloj = RelojServidor(api.cliente);
       http.responder('GET', 'configuracion', 200, p.configuracion);
       http.fechaServidor = ahora;
-
       await withClock(Clock.fixed(ahora), () async {
         await api.configuracion();
       });
-      // Sin señal, el teléfono corrige su hora 2 h para adelante; mientras tanto pasaron 5 min.
+    });
+
+    test('si el reloj del teléfono vuelve atrás, cuenta el cronómetro', () {
+      // Sin señal, el teléfono corrige su hora 2 h para atrás; mientras tanto pasaron 5 min.
       cronometro.transcurrido = const Duration(minutes: 5);
-      withClock(Clock.fixed(ahora.add(const Duration(hours: 2))), () {
+      withClock(Clock.fixed(ahora.subtract(const Duration(hours: 2))), () {
         expect(reloj.ahora(), ahora.add(const Duration(minutes: 5)));
       });
-    },
-  );
+    });
+
+    test('con el teléfono dormido (el cronómetro de Android no avanza) cuenta el reloj', () {
+      cronometro.transcurrido = const Duration(minutes: 5);
+      withClock(Clock.fixed(ahora.add(const Duration(minutes: 40))), () {
+        expect(reloj.ahora(), ahora.add(const Duration(minutes: 40)));
+      });
+    });
+
+    test('con el reloj quieto o atrasado respecto del cronómetro, cuenta el cronómetro', () {
+      cronometro.transcurrido = const Duration(minutes: 5);
+      withClock(Clock.fixed(ahora.add(const Duration(minutes: 2))), () {
+        expect(reloj.ahora(), ahora.add(const Duration(minutes: 5)));
+      });
+    });
+  });
 }
 
 /// Un cronómetro cuyo tiempo transcurrido fija el test.

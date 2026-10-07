@@ -42,15 +42,18 @@ class AlmacenTokenSeguro implements AlmacenToken {
     return usuario == null ? null : (jsonDecode(usuario) as Map).cast<String, dynamic>();
   }
 
+  /// La clave de la sesión se borra primero y se escribe al final: si la app se corta a mitad, nunca queda la
+  /// clave de esta sesión con el token o el usuario de otra.
   @override
   Future<void> guardar(String tokenPJ, String tokenSanctum, {Map<String, dynamic>? usuario}) async {
-    await _storage.write(key: _claveSesion, value: claveDeSesion(tokenPJ));
+    await _storage.delete(key: _claveSesion);
     await _storage.write(key: _claveToken, value: tokenSanctum);
     if (usuario == null) {
       await _storage.delete(key: _claveUsuario);
     } else {
       await _storage.write(key: _claveUsuario, value: jsonEncode(usuario));
     }
+    await _storage.write(key: _claveSesion, value: claveDeSesion(tokenPJ));
   }
 
   @override

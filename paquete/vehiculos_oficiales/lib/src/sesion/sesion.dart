@@ -66,6 +66,7 @@ class SesionNotifier extends Notifier<EstadoSesion> {
     final aviso = ref.watch(avisoSesionProvider);
     aviso.escuchar(() {
       final antes = state;
+      _dejarDeConfirmar();
       state = const SesionVencida();
       unawaited(_almacenar('borrar', (a) => a.borrar()));
       if (antes is SesionLista) unawaited(_borrarCola(antes.usuario.id));
@@ -212,15 +213,22 @@ class SesionNotifier extends Notifier<EstadoSesion> {
   /// módulo: el turno y su GPS siguen); otro, o con otro rol, la reemplaza. Un 401 vence la sesión como
   /// siempre (el aviso borra lo guardado). Sin red (o el servidor caído) se reintenta más tarde. Nunca lanza.
   Future<void> _confirmar(String tokenPJ) async {
-    if (_confirmando || !ref.mounted) return;
+    final aviso = ref.read(avisoSesionProvider);
+    // Una sesión que venció (401 de cualquier pedido) no se vuelve a confirmar ni a guardar.
+    bool vigente() => ref.mounted && !aviso.avisado && state is SesionLista;
+    if (_confirmando || !vigente()) return;
     _confirmando = true;
     final api = ref.read(apiProvider);
     try {
       final r = await api.intercambiar(tokenPJ);
-      if (!ref.mounted) return;
+      if (!vigente()) return;
       api.cliente.token = r.token;
       await _almacenar('guardar', (a) => a.guardar(tokenPJ, r.token, usuario: r.usuario.toJson()));
-      if (!ref.mounted) return;
+      if (!vigente()) {
+        // Venció mientras se guardaba: no queda nada guardado.
+        await _almacenar('borrar', (a) => a.borrar());
+        return;
+      }
       _dejarDeConfirmar();
       final actual = state;
       if (actual is SesionLista && actual.usuario.id == r.usuario.id && actual.usuario.rol == r.usuario.rol) return;
@@ -229,9 +237,18 @@ class SesionNotifier extends Notifier<EstadoSesion> {
       _dejarDeConfirmar(); // el aviso ya pasó a SesionVencida
     } on AccesoDenegado catch (e) {
       _dejarDeConfirmar();
-      if (ref.mounted) state = SesionDeshabilitada(e.mensaje);
-    } on ErrorApi {
-      // Sin red, 5xx o el PJ caído (503): la sesión guardada sigue y se reintenta.
+      if (vigente()) state = SesionDeshabilitada(e.mensaje);
+    } on SinConexion {
+      // Sin red: la sesión guardada sigue y se reintenta.
+    } on ErrorServidor {
+      // 5xx: se reintenta.
+    } on ServicioNoDisponible {
+      // El PJ caído (503): se reintenta.
+    } on ErrorApi catch (e) {
+      // Cualquier otro rechazo (422, 404…) no se arregla reintentando: la sesión guardada sigue hasta que un
+      // pedido diga lo contrario.
+      debugPrint('vehiculos_oficiales: no se pudo confirmar la sesión guardada (${e.runtimeType}).');
+      _dejarDeConfirmar();
     } catch (e) {
       debugPrint('vehiculos_oficiales: error inesperado al confirmar la sesión (${e.runtimeType}).');
     } finally {

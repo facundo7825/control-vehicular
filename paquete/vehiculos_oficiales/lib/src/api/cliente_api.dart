@@ -44,14 +44,21 @@ class ClienteApi {
   /// El `Date` de la última respuesta que lo trajo y el tiempo transcurrido desde entonces.
   DateTime? _horaServidor;
   Stopwatch? _desdeHoraServidor;
+  DateTime? _relojAlSincronizar;
 
-  /// Hora del servidor: el último `Date` más lo que pasó desde esa respuesta, medido con un cronómetro
-  /// monotónico. Un cambio de la hora del teléfono mientras tanto (sin señal, el reloj se corrige o el chofer lo
-  /// toca) no la mueve. Nula hasta la primera respuesta con `Date`.
+  /// Hora del servidor: el último `Date` más lo que pasó desde esa respuesta. Lo que pasó es lo mayor entre lo
+  /// que avanzó el reloj del teléfono y un cronómetro monotónico: en Android el cronómetro no cuenta el tiempo
+  /// con el teléfono dormido (el reloj sí), y si el reloj del teléfono vuelve atrás (se corrige sin señal o lo
+  /// toca el chofer) se usa solo el cronómetro. Un adelanto manual del reloj se acepta (es raro). Nula hasta la
+  /// primera respuesta con `Date`.
   DateTime? horaServidor() {
     final base = _horaServidor;
     final desde = _desdeHoraServidor;
-    return base == null || desde == null ? null : base.add(desde.elapsed);
+    final relojEntonces = _relojAlSincronizar;
+    if (base == null || desde == null || relojEntonces == null) return null;
+    final cronometro = desde.elapsed;
+    final reloj = clock.now().difference(relojEntonces);
+    return base.add(reloj.isNegative || reloj < cronometro ? cronometro : reloj);
   }
 
   Future<Object?> get(String ruta, {Map<String, dynamic>? query}) =>
@@ -102,6 +109,7 @@ class ClienteApi {
       desfaseReloj = servidor.difference(clock.now().toUtc());
       _horaServidor = servidor;
       _desdeHoraServidor = _cronometro()..start();
+      _relojAlSincronizar = clock.now();
     } catch (e) {
       // Se conserva el desfase anterior.
       debugPrint('vehiculos_oficiales: encabezado Date ignorado (${e.runtimeType}).');

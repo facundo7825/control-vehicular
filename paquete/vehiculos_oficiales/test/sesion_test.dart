@@ -274,6 +274,60 @@ void main() {
       expect(await e.almacen.leer(tokenPJ), isNull);
     });
 
+    Future<void> pasar() async {
+      for (var i = 0; i < 10; i++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+    }
+
+    test('un 401 de otro pedido mientras se confirma: la sesión queda vencida y no se vuelve a guardar', () async {
+      await e.almacen.guardar(tokenPJ, '7|guardado', usuario: usuario);
+      e.http
+        ..sinRed('POST', 'auth/intercambio')
+        ..responder('GET', 'viajes/actual', 401, p.noAutenticado);
+      final c = crear();
+      await sesionResuelta(c);
+
+      e.http.limpiar('POST', 'auth/intercambio');
+      final intercambio = e.http.demorar('POST', 'auth/intercambio');
+      tr.cambiar(EstadoConexion.conectado);
+      await pasar();
+      await expectLater(c.read(apiProvider).viajeActual(), throwsA(isA<SesionInvalida>()));
+      intercambio.complete((200, '{"token":"8|nuevo","usuario":${jsonEncode(usuario)}}'));
+      await pasar();
+      // Ni el timer ni otra reconexión la reviven.
+      tr
+        ..cambiar(EstadoConexion.desconectado)
+        ..cambiar(EstadoConexion.conectado);
+      await pasar();
+
+      expect(c.read(sesionProvider), isA<SesionVencida>());
+      expect(await e.almacen.leer(tokenPJ), isNull);
+      expect(await e.almacen.leerUsuario(tokenPJ), isNull);
+      expect(e.sesionesInvalidas, 1);
+      expect(e.http.pedidos.where((r) => r.uri.path == '/api/auth/intercambio'), hasLength(2));
+    });
+
+    test('un rechazo que no es de red (422) deja de reintentar la confirmación', () async {
+      await e.almacen.guardar(tokenPJ, '7|guardado', usuario: usuario);
+      e.http.sinRed('POST', 'auth/intercambio');
+      final c = crear();
+      await sesionResuelta(c);
+
+      e.http
+        ..limpiar('POST', 'auth/intercambio')
+        ..responder('POST', 'auth/intercambio', 422, p.validacion);
+      tr.cambiar(EstadoConexion.conectado);
+      await pasar();
+      tr
+        ..cambiar(EstadoConexion.desconectado)
+        ..cambiar(EstadoConexion.conectado);
+      await pasar();
+
+      expect(e.http.pedidos.where((r) => r.uri.path == '/api/auth/intercambio'), hasLength(2));
+      expect(c.read(sesionProvider), isA<SesionLista>());
+    });
+
     test('sin usuario guardado (una sesión de antes) es el error de siempre', () async {
       await e.almacen.guardar(tokenPJ, '7|guardado');
       e.http.sinRed('POST', 'auth/intercambio');
