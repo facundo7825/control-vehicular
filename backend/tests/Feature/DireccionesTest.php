@@ -1,6 +1,7 @@
 <?php
 
 use App\Enums\EstadoViaje;
+use App\Enums\ResultadoOferta;
 use App\Events\ViajeActualizado;
 use App\Filament\Resources\Viajes\Pages\CreateViaje;
 use App\Filament\Resources\Viajes\Pages\ListViajes;
@@ -11,6 +12,7 @@ use App\Mapas\BuscadorFalso;
 use App\Mapas\BuscadorGoogle;
 use App\Mapas\BuscadorNominatim;
 use App\Mapas\GeocodificadorInverso;
+use App\Models\OfertaViaje;
 use App\Models\PuntoRecorrido;
 use App\Models\Usuario;
 use App\Models\Viaje;
@@ -60,9 +62,13 @@ function geocodificadorCaido(): GeocodificadorInverso
     {
         public int $consultas = 0;
 
-        public function direccion(float $lat, float $lng): ?string
+        /** @var list<?float> */
+        public array $plazos = [];
+
+        public function direccion(float $lat, float $lng, ?float $hasta = null): ?string
         {
             $this->consultas++;
+            $this->plazos[] = $hasta;
 
             return null;
         }
@@ -91,11 +97,11 @@ describe('geocodificación inversa', function () {
             ->and($falso->direccion(-34.6037, -58.3816))->not->toBe($falso->direccion(-34.609, -58.392));
     });
 
-    it('Nominatim pide /reverse con los parámetros de la política y arma "calle altura, localidad"', function () {
+    it('Nominatim pide /reverse con los parámetros de la política y arma "calle altura, barrio"', function () {
         Http::fake([NOMINATIM_INVERSO => Http::response(respuestaInversa())]);
         $esperas = [];
 
-        expect(inversoSinEspera($esperas)->direccion(-28.470012, -65.785049))->toBe('San Martín 129, San Fernando del Valle de Catamarca');
+        expect(inversoSinEspera($esperas)->direccion(-28.470012, -65.785049))->toBe('San Martín 129, Centro');
 
         Http::assertSent(function (Request $req) {
             parse_str((string) parse_url($req->url(), PHP_URL_QUERY), $q);
@@ -112,13 +118,17 @@ describe('geocodificación inversa', function () {
     it('arma la dirección según lo que traiga la respuesta', function (array $fila, ?string $esperada) {
         expect(BuscadorNominatim::armarDireccion($fila))->toBe($esperada);
     })->with([
-        'calle y altura' => [respuestaInversa(), 'San Martín 129, San Fernando del Valle de Catamarca'],
-        'sin altura' => [respuestaInversa(['address' => ['house_number' => '']]), 'San Martín, San Fernando del Valle de Catamarca'],
+        'calle y altura' => [respuestaInversa(), 'San Martín 129, Centro'],
+        'sin altura' => [respuestaInversa(['address' => ['house_number' => '']]), 'San Martín, Centro'],
         'en un pueblo' => [['address' => ['road' => 'Belgrano', 'house_number' => '40', 'town' => 'Andalgalá']], 'Belgrano 40, Andalgalá'],
-        'sin localidad, el barrio' => [['address' => ['road' => 'Sarmiento', 'house_number' => '520', 'suburb' => 'Centro']], 'Sarmiento 520, Centro'],
+        'sin barrio, la localidad' => [['address' => ['road' => 'Sarmiento', 'house_number' => '520', 'city' => 'San Fernando del Valle de Catamarca']], 'Sarmiento 520, San Fernando del Valle de Catamarca'],
+        'el barrio antes que la localidad' => [['address' => ['road' => 'Sarmiento', 'house_number' => '520', 'suburb' => 'Centro', 'city' => 'San Fernando del Valle de Catamarca']], 'Sarmiento 520, Centro'],
         'solo la calle' => [['address' => ['road' => 'Ruta 38']], 'Ruta 38'],
         'sin calle, el nombre del lugar' => [['name' => 'Plaza 25 de Mayo', 'address' => ['city' => 'Catamarca']], 'Plaza 25 de Mayo'],
         'sin calle ni nombre, la localidad' => [['name' => '', 'address' => ['village' => 'Fiambalá']], 'Fiambalá'],
+        'en un paraje' => [['address' => ['road' => 'Ruta 4', 'hamlet' => 'Las Juntas']], 'Ruta 4, Las Juntas'],
+        'en un municipio' => [['address' => ['municipality' => 'Valle Viejo']], 'Valle Viejo'],
+        'el barrio es "neighbourhood"' => [['address' => ['road' => 'Maipú', 'house_number' => '10', 'neighbourhood' => 'Villa Cubas', 'city' => 'Catamarca']], 'Maipú 10, Villa Cubas'],
         'sin nada' => [['error' => 'Unable to geocode'], null],
     ]);
 
@@ -131,7 +141,7 @@ describe('geocodificación inversa', function () {
         $n = inversoSinEspera($esperas);
 
         $n->direccion(-28.47001, -65.78501);
-        expect($n->direccion(-28.47002, -65.78502))->toBe('San Martín 129, San Fernando del Valle de Catamarca');
+        expect($n->direccion(-28.47002, -65.78502))->toBe('San Martín 129, Centro');
         Http::assertSentCount(1);
 
         expect($n->direccion(0.0, 0.0))->toBeNull()->and($n->direccion(0.0, 0.0))->toBeNull();
@@ -163,7 +173,7 @@ describe('geocodificación inversa', function () {
 
         $this->travel(61)->seconds();
         $caido = false;
-        expect($n->direccion(-28.47, -65.785))->toBe('San Martín 129, San Fernando del Valle de Catamarca');
+        expect($n->direccion(-28.47, -65.785))->toBe('San Martín 129, Centro');
     })->with(['500', 'sin conexion']);
 
     it('Nominatim espera como mucho 2 s por punto', function () {
@@ -211,6 +221,51 @@ describe('geocodificación inversa', function () {
 
         $lock->release();
         expect($n->direccion(-28.47, -65.785))->not->toBeNull();
+    });
+
+    it('Nominatim no corta por un timeout que achicó el propio plazo (sí con el timeout completo)', function () {
+        $intentos = 0;
+        Http::fake(['127.0.0.1:8088/*' => function () use (&$intentos) {
+            $intentos++;
+
+            throw new ConnectionException('timeout');
+        }]);
+        $esperas = [];
+        $n = inversoSinEspera($esperas, 'http://127.0.0.1:8088');
+
+        // Quedaba 1,5 s del plazo compartido: el timeout fue de 1,5 s, no de 2.
+        expect($n->direccion(-28.47, -65.785, microtime(true) + 1.5))->toBeNull()
+            ->and(BuscadorNominatim::cortado())->toBeFalse();
+
+        expect($n->direccion(-28.48, -65.79))->toBeNull()
+            ->and(BuscadorNominatim::cortado())->toBeTrue()
+            ->and($intentos)->toBe(2);
+    });
+
+    it('Nominatim no pide (ni toma el lock ni marca el último pedido) si del plazo queda menos de 1 s', function () {
+        Http::fake();
+        $esperas = [];
+        $n = inversoSinEspera($esperas);
+
+        expect($n->direccion(-28.47, -65.785, microtime(true) + 0.5))->toBeNull();
+
+        Http::assertNothingSent();
+        expect(Cache::has('lugares:nominatim:ultimo'))->toBeFalse()
+            ->and(Cache::lock('lugares:nominatim:lock', 15)->get())->toBeTrue();
+    });
+
+    it('Nominatim público no espera ni pide si la espera de 1 s dejaría menos de 1 s de plazo', function () {
+        Http::fake();
+        $ultimo = microtime(true);
+        Cache::put('lugares:nominatim:ultimo', $ultimo, 60);
+        $esperas = [];
+
+        expect(inversoSinEspera($esperas)->direccion(-28.47, -65.785, microtime(true) + 1.5))->toBeNull();
+
+        expect($esperas)->toBe([])
+            ->and(Cache::get('lugares:nominatim:ultimo'))->toBe($ultimo)
+            ->and(BuscadorNominatim::cortado())->toBeFalse();
+        Http::assertNothingSent();
     });
 
     it('Nominatim no deja en el log el punto ni la URL', function () {
@@ -370,6 +425,18 @@ describe('al crear un viaje', function () {
             && $job->delay->eq(now()->addSeconds(CompletarDirecciones::ESPERA_SEG)));
     });
 
+    it('los dos puntos comparten un solo plazo de 2 s', function () use ($pedido) {
+        $this->app->instance(GeocodificadorInverso::class, $caido = geocodificadorCaido());
+
+        $antes = microtime(true);
+        $this->actingAs(Usuario::factory()->create())->postJson('/api/viajes', $pedido())->assertCreated();
+
+        expect($caido->plazos)->toHaveCount(2)
+            ->and($caido->plazos[0])->toBe($caido->plazos[1])
+            ->and($caido->plazos[0])->toBeGreaterThanOrEqual($antes + GeocodificadorInverso::PLAZO_SEG)
+            ->toBeLessThanOrEqual(microtime(true) + GeocodificadorInverso::PLAZO_SEG);
+    });
+
     it('completa también las reservas', function () use ($pedido) {
         fijarDuracionRuta(1500);
         $chofer = Usuario::factory()->chofer()->create();
@@ -415,6 +482,28 @@ describe('job CompletarDirecciones', function () {
             ->destino_direccion->toBe('Tribunales');
         Event::assertDispatched(ViajeActualizado::class, fn (ViajeActualizado $e) => $e->viaje->is($viaje) && $e->soloDatos);
         $job->assertNotReleased();
+    });
+
+    it('también avisa a los choferes con una oferta pendiente del viaje', function () {
+        Event::fake([ViajeActualizado::class]);
+        $ofrecido = Usuario::factory()->chofer()->create();
+        $rechazo = Usuario::factory()->chofer()->create();
+        $viaje = Viaje::factory()->create(['estado' => EstadoViaje::Ofrecido]);
+        foreach ([[$ofrecido, ResultadoOferta::Pendiente], [$rechazo, ResultadoOferta::Rechazada]] as [$chofer, $resultado]) {
+            OfertaViaje::create([
+                'viaje_id' => $viaje->id, 'chofer_id' => $chofer->id, 'resultado' => $resultado,
+                'ofrecido_en' => now(), 'vence_en' => now()->addSeconds(30),
+            ]);
+        }
+
+        (new CompletarDirecciones($viaje->id))->withFakeQueueInteractions()->handle(app(CompletadorDirecciones::class));
+
+        Event::assertDispatched(ViajeActualizado::class, function (ViajeActualizado $e) use ($ofrecido) {
+            $canales = array_map(fn ($c) => $c->name, $e->broadcastOn());
+
+            return $e->choferesConOferta === [$ofrecido->id] && $e->soloDatos
+                && in_array("private-chofer.{$ofrecido->id}", $canales, true);
+        });
     });
 
     it('si sigue fallando se reintenta, cada vez más espaciado, hasta 3 intentos', function () {
@@ -491,16 +580,29 @@ describe('comando vehiculos:completar-direcciones', function () {
         $this->artisan('vehiculos:completar-direcciones --limite=0')->assertFailed();
     });
 
-    it('se detiene si el servicio no responde', function () {
-        $this->app->instance(GeocodificadorInverso::class, $caido = geocodificadorCaido());
+    it('sigue con los demás si un punto no tiene dirección', function () {
+        $this->app->instance(GeocodificadorInverso::class, $sinDireccion = geocodificadorCaido());
         Viaje::factory()->count(8)->create();
 
         $this->artisan('vehiculos:completar-direcciones')
-            ->expectsOutputToContain('no responde')
-            ->expectsOutput('Viajes completos: 0. Sin dirección todavía: 5.')
+            ->doesntExpectOutputToContain('pausa')
+            ->expectsOutput('Viajes completos: 0. Sin dirección todavía: 8.')
             ->assertSuccessful();
 
-        expect($caido->consultas)->toBe(10);
+        expect($sinDireccion->consultas)->toBe(16);
+    });
+
+    it('se detiene si el geocodificador entra en su corte por una falla', function () {
+        config(['vehiculos.lugares.driver' => 'nominatim', 'vehiculos.lugares.nominatim_url' => 'http://127.0.0.1:8088']);
+        Http::fake(['127.0.0.1:8088/*' => Http::response('error', 500)]);
+        Viaje::factory()->count(3)->create();
+
+        $this->artisan('vehiculos:completar-direcciones')
+            ->expectsOutputToContain('quedó en pausa por 60 s')
+            ->expectsOutput('Viajes completos: 0. Sin dirección todavía: 1.')
+            ->assertSuccessful();
+
+        Http::assertSentCount(1);
     });
 });
 

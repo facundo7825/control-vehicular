@@ -71,10 +71,15 @@ class BuscadorGoogle implements BuscadorLugares, GeocodificadorInverso
     }
 
     /** Geocoding API (reverse), en castellano. El punto se redondea a 4 decimales (~11 m) antes de enviarlo. */
-    public function direccion(float $lat, float $lng): ?string
+    public function direccion(float $lat, float $lng, ?float $hasta = null): ?string
     {
+        $queda = $hasta === null ? self::PLAZO_SEG : $hasta - microtime(true);
+        if ($queda < self::PLAZO_MINIMO_SEG) {
+            return null;
+        }
+
         try {
-            $r = Http::timeout(2)->get(self::URL_INVERSA, [
+            $r = Http::timeout(round(min(self::PLAZO_SEG, $queda), 2))->get(self::URL_INVERSA, [
                 'latlng' => round($lat, 4).','.round($lng, 4),
                 'language' => 'es',
                 'key' => $this->apiKey,

@@ -17,13 +17,17 @@ class CompletadorDirecciones
 
     public function __construct(private GeocodificadorInverso $geocodificador) {}
 
-    /** Los datos de un pedido con las direcciones que faltaban (como mucho 2 s por punto). */
+    /**
+     * Los datos de un pedido con las direcciones que faltaban. Un solo plazo de 2 s para los dos puntos: crear el
+     * viaje nunca espera más que eso; lo que no llegue lo completa el job.
+     */
     public function completar(array $datos): array
     {
+        $hasta = microtime(true) + GeocodificadorInverso::PLAZO_SEG;
         foreach (self::PUNTOS as $punto) {
             if (blank($datos["{$punto}_direccion"] ?? null)) {
                 $datos["{$punto}_direccion"] = $this->geocodificador->direccion(
-                    (float) $datos["{$punto}_lat"], (float) $datos["{$punto}_lng"],
+                    (float) $datos["{$punto}_lat"], (float) $datos["{$punto}_lng"], $hasta,
                 );
             }
         }
@@ -41,6 +45,7 @@ class CompletadorDirecciones
 
     /**
      * Completa en la base los puntos sin dirección (sin pisar una dirección que se haya guardado mientras tanto).
+     * Fuera del pedido (job y comando): cada punto con su propio plazo.
      *
      * @return bool si se completó alguno
      */

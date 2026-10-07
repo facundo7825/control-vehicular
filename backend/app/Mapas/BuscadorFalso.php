@@ -19,7 +19,7 @@ class BuscadorFalso implements BuscadorLugares, GeocodificadorInverso
     }
 
     /** Una calle inventada que depende del punto (sin mostrar sus coordenadas): "Calle Falsa 123, Ciudad de prueba". */
-    public function direccion(float $lat, float $lng): ?string
+    public function direccion(float $lat, float $lng, ?float $hasta = null): ?string
     {
         $altura = (abs((int) round($lat * 10000)) + abs((int) round($lng * 10000))) % 1000 + 1;
 
