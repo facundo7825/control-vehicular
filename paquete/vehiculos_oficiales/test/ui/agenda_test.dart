@@ -142,4 +142,34 @@ void main() {
     expect(find.byType(ViajeChofer), findsOneWidget);
     expect(find.text('Llegué'), findsOneWidget);
   });
+
+  testWidgets('un viaje largo se ve con su etiqueta, salida, regreso y pasajeros, y sin rechazar', (tester) async {
+    final largo = p.json(c.reservaConfirmada)
+      ..['id'] = 7
+      ..['tipo'] = 'largo'
+      ..['destino'] = {'lat': -28.46, 'lng': -65.78, 'direccion': 'Tinogasta'}
+      ..['regreso_estimado'] = '2026-10-04T21:30:00+00:00'
+      ..['pasajeros'] = 'Dr. Ruiz y dos asesores';
+    final agenda = p.json(c.agenda)..['reservas'] = [largo];
+    e = entornoChofer(agenda: jsonEncode(agenda));
+
+    await abrirAgenda(tester);
+
+    expect(find.textContaining('Viaje largo'), findsOneWidget);
+    expect(find.textContaining('Tinogasta'), findsOneWidget);
+    expect(find.textContaining('Regreso'), findsOneWidget);
+    expect(find.textContaining('Dr. Ruiz y dos asesores'), findsOneWidget);
+    expect(find.text('Voy en camino'), findsOneWidget);
+    expect(find.text('Rechazar'), findsOneWidget); // solo el de la solicitud; el largo no tiene
+  });
+
+  testWidgets('un evento de un viaje largo recarga la agenda', (tester) async {
+    await abrirAgenda(tester);
+    final antes = consultasAgenda();
+
+    tr.emitir('chofer.2', Eventos.viajeActualizado, p.json(c.reservaConfirmada)..['tipo'] = 'largo');
+    await esperar(tester);
+
+    expect(consultasAgenda(), antes + 1);
+  });
 }

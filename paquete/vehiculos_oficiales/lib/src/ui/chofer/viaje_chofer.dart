@@ -186,7 +186,10 @@ class _EnCursoState extends ConsumerState<_EnCurso> {
             children: [
               Text(viaje.solicitante.nombre, style: texto.titleLarge),
               if (viaje.obligatorio) const Text('Viaje obligatorio'),
-              if (viaje.programadoPara case final cuando?) Text('Reserva para ${formatearFechaHora(cuando)}'),
+              if (viaje.programadoPara case final cuando?)
+                Text('${viaje.esLargo ? 'Viaje largo' : 'Reserva'} para ${formatearFechaHora(cuando)}'),
+              if (viaje.regresoEstimado case final regreso?) Text('Regreso estimado: ${formatearFechaHora(regreso)}'),
+              if (viaje.pasajeros case final pasajeros? when pasajeros.isNotEmpty) Text('Pasajeros: $pasajeros'),
               Text('Origen: ${viaje.origen.descripcion}'),
               Text('Destino: ${viaje.destino.descripcion}'),
               if (viaje.motivo case final motivo?) Text('Motivo: $motivo'),

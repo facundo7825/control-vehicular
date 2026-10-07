@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
+import 'package:vehiculos_oficiales/src/chofer/pasos_viaje.dart';
 
 import 'fixtures/payloads.dart' as p;
 
@@ -271,5 +272,42 @@ void main() {
   test('un estado desconocido es un error de formato', () {
     expect(() => EstadoViaje.desde('volando'), throwsFormatException);
     expect(() => ModoViaje.desde('teletransporte'), throwsFormatException);
+  });
+
+  group('viaje largo', () {
+    Map<String, dynamic> largo() => p.json(p.reservaCreada)
+      ..['tipo'] = 'largo'
+      ..['estado'] = 'aceptado'
+      ..['regreso_estimado'] = '2026-10-03T21:30:00+00:00'
+      ..['pasajeros'] = 'Dr. Ruiz y dos asesores';
+
+    test('lee tipo, regreso estimado y pasajeros', () {
+      final v = Viaje.fromJson(largo());
+
+      expect(v.tipo, TipoViaje.largo);
+      expect(v.tipo.etiqueta, 'Viaje largo');
+      expect(v.regresoEstimado, DateTime.utc(2026, 10, 3, 21, 30));
+      expect(v.regresoEstimado!.isUtc, isTrue);
+      expect(v.pasajeros, 'Dr. Ruiz y dos asesores');
+    });
+
+    test('un JSON viejo, sin regreso ni pasajeros, queda en nulo', () {
+      final v = Viaje.fromJson(p.json(p.reservaCreada));
+
+      expect(v.regresoEstimado, isNull);
+      expect(v.pasajeros, isNull);
+    });
+
+    test('un tipo que la app no conoce no rompe: se trata como reserva', () {
+      final v = Viaje.fromJson(largo()..['tipo'] = 'excursion');
+
+      expect(v.tipo, TipoViaje.reserva);
+    });
+
+    test('el chofer no puede cancelar un viaje largo asignado por el encargado', () {
+      expect(Viaje.fromJson(largo()).cancelablePorChofer, isFalse);
+      expect(Viaje.fromJson(largo()).cancelablePorSolicitante, isFalse);
+      expect(Viaje.fromJson(p.json(p.reservaCreada)..['estado'] = 'aceptado').cancelablePorSolicitante, isTrue);
+    });
   });
 }

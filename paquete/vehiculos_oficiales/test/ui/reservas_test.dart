@@ -202,4 +202,24 @@ void main() {
     expect(find.byType(PantallaReserva), findsOneWidget);
     expect(find.text('Casa de Gobierno'), findsOneWidget);
   });
+
+  testWidgets('mis viajes: un viaje largo es una reserva confirmada con chofer y vehículo, sin cancelar', (
+    tester,
+  ) async {
+    final largo = _reserva(estado: 'aceptado', id: 9)
+      ..['tipo'] = 'largo'
+      ..['chofer'] = {'id': 2, 'nombre': 'Carlos Gómez', 'telefono': null}
+      ..['vehiculo'] = {'id': 3, 'patente': 'AB123CD', 'marca': 'Toyota', 'modelo': 'Hilux', 'color': 'Blanco'}
+      ..['regreso_estimado'] = '2026-10-03T21:30:00+00:00';
+    e.http.responder('GET', 'viajes', 200, _misViajes(proximas: [largo]));
+
+    await abrir(tester);
+    await tester.tap(find.byTooltip('Mis viajes'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Viaje largo'), findsOneWidget);
+    expect(find.textContaining('Carlos Gómez'), findsOneWidget);
+    expect(find.textContaining('Toyota Hilux (AB123CD)'), findsOneWidget);
+    expect(find.byTooltip('Cancelar reserva'), findsNothing);
+  });
 }

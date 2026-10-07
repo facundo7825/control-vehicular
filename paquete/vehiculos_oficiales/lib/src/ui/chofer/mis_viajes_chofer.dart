@@ -95,7 +95,11 @@ class _Fila extends StatelessWidget {
   Widget build(BuildContext context) {
     final cuando = fechaDelViaje(viaje, QuienMira.chofer);
     return ListTile(
-      leading: Icon(viaje.tipo == TipoViaje.reserva ? Icons.event_available : Icons.local_taxi),
+      leading: Icon(switch (viaje.tipo) {
+        TipoViaje.largo => Icons.luggage,
+        TipoViaje.reserva => Icons.event_available,
+        TipoViaje.inmediato => Icons.local_taxi,
+      }),
       title: Text([if (cuando != null) formatearFechaHora(cuando), viaje.destino.descripcion].join(' · ')),
       subtitle: Text([viaje.solicitante.nombre, viaje.estado.texto].where((t) => t.isNotEmpty).join(' · ')),
       onTap: () => context.push(Rutas.detalleViajeChofer(viaje.id)),

@@ -184,8 +184,8 @@ class _Activo extends ConsumerWidget {
                         onPressed: () => ref.read(lanzadorUrlProvider)(Uri(scheme: 'tel', path: telefono)),
                       ),
                     ),
-                  if (telefono != null && viaje.estado.cancelablePorSolicitante) const SizedBox(width: 12),
-                  if (viaje.estado.cancelablePorSolicitante)
+                  if (telefono != null && viaje.cancelablePorSolicitante) const SizedBox(width: 12),
+                  if (viaje.cancelablePorSolicitante)
                     Expanded(
                       child: OutlinedButton(
                         onPressed: () => _cancelar(context, ref),

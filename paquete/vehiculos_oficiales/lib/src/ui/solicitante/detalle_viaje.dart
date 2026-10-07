@@ -132,8 +132,11 @@ class _Contenido extends ConsumerWidget {
                   const Text('No hubo choferes disponibles'),
                 ],
                 const SizedBox(height: 16),
+                if (viaje.esLargo) _Fila('Tipo', viaje.tipo.etiqueta),
                 _Fila('Origen', viaje.origen.descripcion),
                 _Fila('Destino', viaje.destino.descripcion),
+                if (viaje.regresoEstimado case final t?) _Fila('Regreso estimado', formatearFechaHora(t)),
+                if (viaje.pasajeros case final t? when t.isNotEmpty) _Fila('Pasajeros', t),
                 if (esChofer) ...[
                   const SizedBox(height: 16),
                   _Fila('Solicitante', viaje.solicitante.nombre),

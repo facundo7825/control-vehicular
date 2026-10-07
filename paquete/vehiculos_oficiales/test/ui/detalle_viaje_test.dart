@@ -235,4 +235,24 @@ void main() {
 
     expect(find.text('Elegir otro'), findsOneWidget);
   });
+
+  testWidgets('un viaje largo muestra el tipo, el regreso estimado y los pasajeros', (tester) async {
+    final largo = _finalizado()
+      ..['tipo'] = 'largo'
+      ..['regreso_estimado'] = '2026-10-01T21:30:00+00:00'
+      ..['pasajeros'] = 'Dr. Ruiz y dos asesores';
+    await abrirDetalle(tester, largo);
+
+    expect(fila('Tipo', 'Viaje largo'), findsOneWidget);
+    expect(fila('Regreso estimado', fecha(21, 30)), findsOneWidget);
+    expect(fila('Pasajeros', 'Dr. Ruiz y dos asesores'), findsOneWidget);
+  });
+
+  testWidgets('un viaje común no muestra regreso ni pasajeros', (tester) async {
+    await abrirDetalle(tester, _finalizado());
+
+    expect(find.text('Regreso estimado'), findsNothing);
+    expect(find.text('Pasajeros'), findsNothing);
+    expect(find.text('Tipo'), findsNothing);
+  });
 }

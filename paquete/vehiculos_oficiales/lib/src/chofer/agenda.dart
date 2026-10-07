@@ -26,7 +26,7 @@ class AgendaNotifier extends AsyncNotifier<Agenda> {
       if (_avisosDeAgenda.contains(a.tipo)) ref.invalidateSelf();
     });
     final canal = ref.watch(tiempoRealProvider).canal(Canales.chofer(usuario.id)).listen((e) {
-      if (_esDeReserva(e.datos)) ref.invalidateSelf();
+      if (_esDeAgenda(e.datos)) ref.invalidateSelf();
     });
     ref.onDispose(() {
       unawaited(avisos.cancel());
@@ -37,10 +37,10 @@ class AgendaNotifier extends AsyncNotifier<Agenda> {
 
   /// `viaje.actualizado` trae el viaje; `oferta.creada`, `{oferta_id, vence_en, viaje}`. Se mira solo el
   /// tipo, sin leer el resto: un evento raro no puede romper nada.
-  static bool _esDeReserva(Json datos) {
+  static bool _esDeAgenda(Json datos) {
     final viaje = datos['viaje'];
     final tipo = viaje is Map ? viaje['tipo'] : datos['tipo'];
-    return tipo == TipoViaje.reserva.name;
+    return tipo == TipoViaje.reserva.name || tipo == TipoViaje.largo.name;
   }
 
   /// Acepta una solicitud de reserva. 422 si ya no está disponible o se superpone con otra: la agenda se

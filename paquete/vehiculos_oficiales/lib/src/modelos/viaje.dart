@@ -33,10 +33,17 @@ enum EstadoViaje {
 }
 
 enum TipoViaje {
-  inmediato,
-  reserva;
+  inmediato('Viaje inmediato'),
+  reserva('Reserva'),
+  largo('Viaje largo');
 
-  static TipoViaje desde(String valor) => values.byName(valor);
+  const TipoViaje(this.etiqueta);
+
+  final String etiqueta;
+
+  /// Un tipo que la app no conoce (un backend más nuevo) se trata como reserva: se programa y se asigna,
+  /// y la agenda lo muestra, en vez de romper la lectura del viaje.
+  static TipoViaje desde(String valor) => values.where((t) => t.name == valor).firstOrNull ?? reserva;
 }
 
 enum ModoViaje {
@@ -91,6 +98,8 @@ class Viaje {
     this.canceladoPor,
     this.motivoCancelacion,
     this.metrosRecorridos,
+    this.regresoEstimado,
+    this.pasajeros,
   });
 
   factory Viaje.fromJson(Json j) => Viaje(
@@ -116,6 +125,8 @@ class Viaje {
     canceladoPor: CanceladoPor.desde(j['cancelado_por']),
     motivoCancelacion: j['motivo_cancelacion'] as String?,
     metrosRecorridos: j['metros_recorridos'] as int?,
+    regresoEstimado: leerFechaOpcional(j['regreso_estimado']),
+    pasajeros: j['pasajeros'] as String?,
   );
 
   final int id;
@@ -144,6 +155,17 @@ class Viaje {
 
   /// Se calcula al finalizar.
   final int? metrosRecorridos;
+
+  /// Solo en los viajes largos: cuándo se espera que vuelva el chofer.
+  final DateTime? regresoEstimado;
+
+  /// Solo en los viajes largos: las otras personas que viajan además del solicitante.
+  final String? pasajeros;
+
+  bool get esLargo => tipo == TipoViaje.largo;
+
+  /// Un viaje largo lo asigna y lo cambia el encargado: el solicitante no lo cancela desde la app.
+  bool get cancelablePorSolicitante => !esLargo && estado.cancelablePorSolicitante;
 }
 
 /// `GET /viajes/{id}/recorrido`: `{puntos: [[lat,lng],…], disponible, vencido, retencion_dias}`.

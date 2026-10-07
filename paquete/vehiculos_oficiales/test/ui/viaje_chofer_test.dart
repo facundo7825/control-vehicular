@@ -419,4 +419,18 @@ void main() {
       });
     }
   });
+
+  testWidgets('un viaje largo en camino muestra regreso y pasajeros y no se puede cancelar', (tester) async {
+    final largo = p.json(viajeJson(estado: 'en_camino', tipo: 'largo'))
+      ..['programado_para'] = '2026-10-02T13:00:00+00:00'
+      ..['regreso_estimado'] = '2026-10-03T21:30:00+00:00'
+      ..['pasajeros'] = 'Dr. Ruiz y dos asesores';
+    await abrir(tester, jsonEncode(largo));
+
+    expect(find.textContaining('Viaje largo para'), findsOneWidget);
+    expect(find.textContaining('Regreso estimado'), findsOneWidget);
+    expect(find.text('Pasajeros: Dr. Ruiz y dos asesores'), findsOneWidget);
+    expect(find.text('Llegué'), findsOneWidget);
+    expect(find.text('Cancelar viaje'), findsNothing);
+  });
 }
