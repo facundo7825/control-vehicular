@@ -14,6 +14,7 @@ use App\Models\Usuario;
 use App\Models\Vehiculo;
 use App\Models\Viaje;
 use App\Support\HoraLocal;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
@@ -109,14 +110,14 @@ class ServicioTurnos
      * viajes activos. Devuelve null, sin lanzar, si no corresponde: no hay turno, no está pendiente (una
      * entrada posterior lo anuló) o todavía tiene un viaje activo. Se decide con la fila del chofer bloqueada.
      */
-    public function finalizarPendiente(Usuario $chofer): ?Turno
+    public function finalizarPendiente(Usuario $chofer, ?Carbon $finViaje = null): ?Turno
     {
-        return $this->cerrar($chofer, soloPendiente: true);
+        return $this->cerrar($chofer, soloPendiente: true, finViaje: $finViaje);
     }
 
-    private function cerrar(Usuario $chofer, bool $soloPendiente): ?Turno
+    private function cerrar(Usuario $chofer, bool $soloPendiente, ?Carbon $finViaje = null): ?Turno
     {
-        $turno = DB::transaction(function () use ($chofer, $soloPendiente) {
+        $turno = DB::transaction(function () use ($chofer, $soloPendiente, $finViaje) {
             // Mismo bloqueo que toma Asignador::asignar: no se puede cerrar el turno mientras se le asigna un viaje.
             Usuario::whereKey($chofer->id)->lockForUpdate()->first();
 
@@ -133,7 +134,12 @@ class ServicioTurnos
                 throw new ReglaNegocio('Finalizá el viaje en curso antes de cerrar el turno.');
             }
 
-            $turno->update(['fin' => now()]);
+            // Cierre pendiente por un "Finalizar" que llegó tarde: el turno termina cuando terminó el viaje, pero no
+            // antes de la salida fichada (ni del inicio del turno). Si no, ahora.
+            $fin = $soloPendiente && $finViaje
+                ? $finViaje->copy()->max($turno->cierre_pendiente_en)->max($turno->inicio)->min(now())
+                : now();
+            $turno->update(['fin' => $fin]);
             // Privacidad: fuera de turno no se conserva la ubicación.
             UbicacionChofer::where('chofer_id', $chofer->id)->delete();
 

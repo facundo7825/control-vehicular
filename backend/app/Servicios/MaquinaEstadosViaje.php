@@ -16,7 +16,7 @@ use Illuminate\Support\Facades\DB;
 /** Única puerta para cambiar el estado de un viaje (spec 5.1). */
 class MaquinaEstadosViaje
 {
-    public function __construct(private AvisoEstadoChofer $aviso) {}
+    public function __construct(private AvisoEstadoChofer $aviso, private ServicioUbicacion $ubicacion) {}
 
     private const PERMITIDAS = [
         'buscando' => [E::Ofrecido, E::Aceptado, E::SinChofer, E::Cancelado],
@@ -165,6 +165,8 @@ class MaquinaEstadosViaje
             $viaje->{$marca} = $momento ?? now();
         }
         if ($hacia === E::Finalizado) {
+            // Un "Finalizar" enviado tarde (sin señal): los puntos posteriores al fin real no son de este viaje.
+            $this->ubicacion->recortarAlFinalizar($viaje);
             // Se calcula una sola vez (los puntos de un viaje): el mapa y los reportes solo suman la columna.
             $viaje->metros_recorridos = KilometrosRecorridos::metrosDe($viaje->id);
         }

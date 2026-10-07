@@ -24,6 +24,8 @@ class ViajeController extends Controller
 
     private const MAX_PUNTOS_RECORRIDO = 500;
 
+    private const FECHA_ISO = '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:?\d{2})?$/';
+
     public function __construct(private ServicioViaje $viajes) {}
 
     public function store(Request $request): JsonResponse
@@ -162,7 +164,8 @@ class ViajeController extends Controller
         $datos = $request->validate([
             'estado' => ['required', 'in:en_camino,llego,en_curso,finalizado'],
             // Cuándo lo tocó el chofer (la app lo guarda si no hay señal) y su id, para no aplicarla dos veces.
-            'momento' => ['nullable', 'date'],
+            // ISO-8601 estricto (con o sin offset; sin offset es hora local): nada de "now" ni "+1 hour".
+            'momento' => ['nullable', 'string', 'regex:'.self::FECHA_ISO, 'date'],
             'id_accion' => ['nullable', 'uuid'],
         ]);
 

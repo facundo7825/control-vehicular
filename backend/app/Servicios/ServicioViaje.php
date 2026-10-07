@@ -19,6 +19,7 @@ use App\Models\Usuario;
 use App\Models\Vehiculo;
 use App\Models\Viaje;
 use App\Support\HoraLocal;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
@@ -112,6 +113,8 @@ class ServicioViaje
     /** Una acción guardada sin señal se acepta hasta este tiempo después. */
     private const ANTIGUEDAD_MAXIMA_MOMENTO_H = 24;
 
+    private const ACCION_DE_OTRO_VIAJE = 'Esa acción ya se registró en otro viaje.';
+
     /**
      * El chofer avanza el viaje. La app puede mandar la acción tarde (la tocó sin señal): `$momento` es cuándo la
      * tocó y `$idAccion` (uuid de la app) hace que un reenvío de una acción ya aplicada no la repita.
@@ -121,6 +124,10 @@ class ServicioViaje
     ): Viaje {
         if (! in_array($hacia, self::PASOS_CHOFER, true)) {
             throw new ReglaNegocio('Estado no válido para el chofer.');
+        }
+        // Un reenvío de una acción ya aplicada responde 200 siempre, aunque su hora ya no pasara las validaciones.
+        if ($this->accionYaAplicada($idAccion, $viaje, $chofer)) {
+            return $viaje->refresh()->load(['chofer', 'vehiculo', 'solicitante']);
         }
         if ($momento) {
             if ($momento->gt(now()->addMinutes(self::TOLERANCIA_MOMENTO_MIN))) {
@@ -132,16 +139,40 @@ class ServicioViaje
             $momento = $momento->copy()->min(now());
         }
 
+        try {
+            $this->aplicarAvance($viaje, $chofer, $hacia, $momento, $idAccion);
+        } catch (UniqueConstraintViolationException) {
+            // El mismo id_accion llegó a la vez para otro viaje (cada pedido bloqueó su viaje): vale el primero.
+            if (! $this->accionYaAplicada($idAccion, $viaje, $chofer)) {
+                throw new ReglaNegocio(self::ACCION_DE_OTRO_VIAJE);
+            }
+        }
+
+        return $viaje->refresh()->load(['chofer', 'vehiculo', 'solicitante']);
+    }
+
+    /** ¿La acción ya se aplicó en este viaje? Si el id_accion es de otro viaje o de otro chofer, 422. */
+    private function accionYaAplicada(?string $idAccion, Viaje $viaje, Usuario $chofer): bool
+    {
+        $previa = $idAccion !== null ? AccionViaje::where('id_accion', $idAccion)->first() : null;
+        if (! $previa) {
+            return false;
+        }
+        if ($previa->viaje_id !== $viaje->id || $previa->chofer_id !== $chofer->id) {
+            throw new ReglaNegocio(self::ACCION_DE_OTRO_VIAJE);
+        }
+
+        return true;
+    }
+
+    private function aplicarAvance(Viaje $viaje, Usuario $chofer, EstadoViaje $hacia, ?Carbon $momento, ?string $idAccion): void
+    {
         DB::transaction(function () use ($viaje, $chofer, $hacia, $momento, $idAccion) {
             // Mismo primer lock que la máquina de estados (el viaje): dos reenvíos de la misma acción se ordenan acá.
             $viaje->setRawAttributes(Viaje::whereKey($viaje->id)->lockForUpdate()->firstOrFail()->getAttributes(), true);
 
-            if ($idAccion !== null && ($previa = AccionViaje::where('id_accion', $idAccion)->first())) {
-                if ($previa->viaje_id !== $viaje->id || $previa->chofer_id !== $chofer->id) {
-                    throw new ReglaNegocio('Esa acción ya se registró en otro viaje.');
-                }
-
-                return; // ya aplicada: se devuelve el viaje como está
+            if ($this->accionYaAplicada($idAccion, $viaje, $chofer)) {
+                return; // un reenvío concurrente ya la aplicó: se devuelve el viaje como está
             }
 
             $this->validarVigencia($viaje, $chofer, $hacia, $idAccion !== null);
@@ -166,8 +197,6 @@ class ServicioViaje
                 ]);
             }
         }, attempts: 3);
-
-        return $viaje->refresh()->load(['chofer', 'vehiculo', 'solicitante']);
     }
 
     /**

@@ -67,10 +67,11 @@ class ServicioAsistencia
     /**
      * Cierra el turno con cierre pendiente si el chofer ya no tiene viajes activos y le avisa.
      * Lo llama CerrarTurnoPendiente cuando termina un viaje (y la salida, por si el viaje terminó entretanto).
+     * Con $finViaje (el viaje finalizó a esa hora), el turno no termina antes de la salida fichada.
      */
-    public function cerrarPendiente(Usuario $chofer): bool
+    public function cerrarPendiente(Usuario $chofer, ?Carbon $finViaje = null): bool
     {
-        if (! $this->turnos->finalizarPendiente($chofer)) {
+        if (! $this->turnos->finalizarPendiente($chofer, $finViaje)) {
             return false;
         }
 

@@ -2,6 +2,7 @@
 
 namespace App\Listeners;
 
+use App\Enums\EstadoViaje;
 use App\Events\ViajeActualizado;
 use App\Models\Turno;
 use App\Models\Usuario;
@@ -33,7 +34,11 @@ class CerrarTurnoPendiente
                 $pendiente = Turno::where('chofer_id', $choferId)->whereNull('fin')->whereNotNull('cierre_pendiente_en')->exists();
 
                 if ($pendiente && $chofer = Usuario::find($choferId)) {
-                    $this->asistencia->cerrarPendiente($chofer);
+                    // Un "Finalizar" que llegó tarde (sin señal): el turno se cierra cuando terminó el viaje.
+                    $finViaje = $e->viaje->estado === EstadoViaje::Finalizado && $e->viaje->chofer_id === $choferId
+                        ? $e->viaje->finalizado_en
+                        : null;
+                    $this->asistencia->cerrarPendiente($chofer, $finViaje);
                 }
             } catch (Throwable $error) {
                 report($error);

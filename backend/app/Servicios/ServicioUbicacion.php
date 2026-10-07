@@ -10,7 +10,6 @@ use App\Models\UbicacionChofer;
 use App\Models\Usuario;
 use App\Models\Viaje;
 use App\Support\HoraLocal;
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -84,8 +83,6 @@ class ServicioUbicacion
 
     /**
      * Las filas de recorrido_viaje de los puntos que caen dentro del intervalo de algún viaje del chofer.
-     * Se consultan solo los viajes que se superponen con el lote: empezados antes de su último punto y
-     * todavía en marcha o terminados después del primero.
      *
      * @param  Collection<int, array<string, mixed>>  $puntos  ordenados por momento
      * @return Collection<int, array{viaje_id: int, lat: float, lng: float, registrado_en: Carbon}>
@@ -95,22 +92,11 @@ class ServicioUbicacion
         if ($puntos->isEmpty()) {
             return collect();
         }
-        $desde = $puntos->first()['momento'];
-        $hasta = $puntos->last()['momento'];
-
-        $viajes = Viaje::where('chofer_id', $chofer->id)
-            ->whereNotNull('iniciado_en')
-            ->where('iniciado_en', '<=', $hasta)
-            ->where(fn (Builder $q) => $q
-                ->where(fn (Builder $enMarcha) => $enMarcha->whereNull('finalizado_en')->whereNull('cancelado_en'))
-                ->orWhere('finalizado_en', '>=', $desde)
-                ->orWhere('cancelado_en', '>=', $desde))
-            ->get(['id', 'iniciado_en', 'finalizado_en', 'cancelado_en']);
+        $viajes = $this->viajesDelLote($chofer->id, $puntos->first()['momento'], $puntos->last()['momento']);
 
         return $puntos
             ->map(function (array $p) use ($viajes) {
-                $viaje = $viajes->first(fn (Viaje $v) => $p['momento']->gte($v->iniciado_en)
-                    && $p['momento']->lte($v->finalizado_en ?? $v->cancelado_en ?? now()));
+                $viaje = $viajes->first(fn (Viaje $v) => self::contiene($v, $p['momento']));
 
                 return $viaje
                     ? ['viaje_id' => $viaje->id, 'lat' => $p['lat'], 'lng' => $p['lng'], 'registrado_en' => $p['momento']]
@@ -118,6 +104,70 @@ class ServicioUbicacion
             })
             ->filter()
             ->values();
+    }
+
+    /**
+     * Los viajes del chofer que se superponen con [$desde, $hasta], del más nuevo al más viejo: un punto justo en
+     * el fin de un viaje y el inicio del siguiente va al siguiente. Consultas acotadas por los índices del chofer:
+     * el viaje en curso y los terminados (finalizados o cancelados ya iniciados) desde el primer punto.
+     *
+     * @return Collection<int, Viaje>
+     */
+    private function viajesDelLote(int $choferId, Carbon $desde, Carbon $hasta): Collection
+    {
+        $columnas = ['id', 'iniciado_en', 'finalizado_en', 'cancelado_en'];
+        $enCurso = Viaje::where('chofer_id', $choferId)->where('estado', EstadoViaje::EnCurso)->get($columnas);
+        $finalizados = Viaje::where('chofer_id', $choferId)->where('finalizado_en', '>=', $desde)
+            ->where('iniciado_en', '<=', $hasta)->get($columnas);
+        $cancelados = Viaje::where('chofer_id', $choferId)->where('estado', EstadoViaje::Cancelado)
+            ->where('cancelado_en', '>=', $desde)->where('iniciado_en', '<=', $hasta)->get($columnas);
+
+        return $enCurso->concat($finalizados)->concat($cancelados)
+            ->filter(fn (Viaje $v) => $v->iniciado_en !== null)
+            ->unique('id')
+            ->sortByDesc(fn (Viaje $v) => $v->iniciado_en->getTimestamp())
+            ->values();
+    }
+
+    private static function contiene(Viaje $viaje, Carbon $momento): bool
+    {
+        return $momento->gte($viaje->iniciado_en) && $momento->lte($viaje->finalizado_en ?? $viaje->cancelado_en ?? now());
+    }
+
+    /**
+     * Al finalizar con una hora anterior a la de puntos ya recibidos (el "Finalizar" llegó tarde), esos puntos
+     * no son de este viaje: pasan al viaje del chofer que los contiene, si hay alguno, o se borran. Corre en la
+     * transacción de la máquina de estados, con el viaje bloqueado; no toca la fila de otro viaje.
+     */
+    public function recortarAlFinalizar(Viaje $viaje): void
+    {
+        $fin = $viaje->finalizado_en;
+        $sobrantes = fn () => PuntoRecorrido::where('viaje_id', $viaje->id)->where('registrado_en', '>', $fin);
+        $hasta = $sobrantes()->max('registrado_en');
+        if ($hasta === null || $viaje->chofer_id === null) {
+            return;
+        }
+        $hasta = Carbon::parse($hasta);
+
+        $otros = Viaje::where('chofer_id', $viaje->chofer_id)->whereKeyNot($viaje->id)
+            ->where('iniciado_en', '>=', $viaje->iniciado_en ?? $fin)->where('iniciado_en', '<=', $hasta)
+            ->orderByDesc('iniciado_en')
+            ->get(['id', 'iniciado_en', 'finalizado_en', 'cancelado_en']);
+
+        foreach ($otros as $otro) {
+            $desde = $otro->iniciado_en->copy()->max($fin);
+            $hastaOtro = $otro->finalizado_en ?? $otro->cancelado_en ?? now();
+            $enRango = fn () => $sobrantes()->where('registrado_en', '>=', $desde)->where('registrado_en', '<=', $hastaOtro);
+            // Los que el otro viaje ya tiene (mismo momento) se descartan: el índice único no admite repetidos.
+            $repetidos = PuntoRecorrido::where('viaje_id', $otro->id)
+                ->whereBetween('registrado_en', [$desde, $hastaOtro])->pluck('registrado_en');
+            if ($repetidos->isNotEmpty()) {
+                $enRango()->whereIn('registrado_en', $repetidos->all())->delete();
+            }
+            $enRango()->update(['viaje_id' => $otro->id]);
+        }
+
+        $sobrantes()->delete();
     }
 
     /**

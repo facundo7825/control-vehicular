@@ -38,7 +38,8 @@ function viajeConRecorrido(Usuario $chofer, Vehiculo $vehiculo, array $puntos, a
     foreach ($puntos as $i => [$lat, $lng]) {
         PuntoRecorrido::create([
             'viaje_id' => $viaje->id, 'lat' => $lat, 'lng' => $lng,
-            'registrado_en' => now()->subDay()->addMinutes($i),
+            // Dentro del viaje: los km cuentan solo los puntos hasta su finalizado_en.
+            'registrado_en' => ($viaje->finalizado_en ?? now()->subDay())->copy()->subMinutes(count($puntos) - $i),
         ]);
     }
     if ($viaje->estado === EstadoViaje::Finalizado && ! array_key_exists('metros_recorridos', $attrs)) {

@@ -10,9 +10,11 @@ use App\Models\Turno;
 use App\Models\UbicacionChofer;
 use App\Models\Usuario;
 use App\Models\Viaje;
+use App\Servicios\KilometrosRecorridos;
 use App\Servicios\ServicioTurnos;
 use App\Servicios\ServicioViaje;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 
@@ -297,4 +299,123 @@ describe('panel', function () {
 
         expect(substr_count($html, 'registrado sin señal'))->toBe(1);
     });
+});
+
+describe('ajustes de la revisión', function () {
+    it('un Finalizar tardío deja fuera de los km los puntos posteriores al fin real, y los pasa al viaje que los contiene o los borra', function () {
+        $chofer = choferEnTurno();
+        $viaje = viajeSinSenal($chofer, ['estado' => EstadoViaje::EnCurso, 'llego_en' => now()->subMinutes(35),
+            'iniciado_en' => now()->subMinutes(30)]);
+
+        // Mientras el servidor lo seguía viendo en curso, llegaron puntos de después del fin real (-10).
+        $this->actingAs($chofer)->postJson('/api/ubicacion', ['puntos' => [
+            ['lat' => -34.600, 'lng' => -58.380, 'registrado_en' => now()->subMinutes(25)->toIso8601String()],
+            ['lat' => -34.610, 'lng' => -58.380, 'registrado_en' => now()->subMinutes(15)->toIso8601String()],
+            ['lat' => -34.700, 'lng' => -58.380, 'registrado_en' => now()->subMinutes(8)->toIso8601String()],
+            ['lat' => -34.800, 'lng' => -58.380, 'registrado_en' => now()->subMinutes(6)->toIso8601String()],
+            ['lat' => -34.900, 'lng' => -58.380, 'registrado_en' => now()->subMinutes(5)->toIso8601String()],
+        ]])->assertNoContent();
+        expect(PuntoRecorrido::where('viaje_id', $viaje->id)->count())->toBe(5);
+
+        // Otro viaje del chofer que empezó a las -7 (ya tiene un punto a las -5).
+        $siguiente = viajeSinSenal($chofer, ['estado' => EstadoViaje::EnCurso, 'iniciado_en' => now()->subMinutes(7)]);
+        PuntoRecorrido::create(['viaje_id' => $siguiente->id, 'lat' => -34.950, 'lng' => -58.380, 'registrado_en' => now()->subMinutes(5)]);
+
+        avanzarSinSenal($chofer, $viaje, 'finalizado', now()->subMinutes(10)->toIso8601String())->assertOk();
+
+        expect(PuntoRecorrido::where('viaje_id', $viaje->id)->orderBy('registrado_en')->pluck('lat')->all())->toBe([-34.600, -34.610])
+            ->and(PuntoRecorrido::where('viaje_id', $siguiente->id)->orderBy('registrado_en')->pluck('lat')->all())->toBe([-34.800, -34.950])
+            ->and($viaje->fresh()->metros_recorridos)->toBe((int) round(Distancia::metros(-34.600, -58.380, -34.610, -58.380)));
+    });
+
+    it('los km de un viaje cuentan solo los puntos dentro de su intervalo', function () {
+        $viaje = Viaje::factory()->create(['estado' => EstadoViaje::Finalizado, 'iniciado_en' => now()->subMinutes(30),
+            'finalizado_en' => now()->subMinutes(10)]);
+        foreach ([[40, -34.5], [25, -34.6], [15, -34.61], [5, -34.9]] as [$min, $lat]) {
+            PuntoRecorrido::create(['viaje_id' => $viaje->id, 'lat' => $lat, 'lng' => -58.38, 'registrado_en' => now()->subMinutes($min)]);
+        }
+
+        expect(KilometrosRecorridos::metrosDe($viaje->id))->toBe((int) round(Distancia::metros(-34.6, -58.38, -34.61, -58.38)));
+    });
+
+    it('un reenvío de una acción ya aplicada responde 200 aunque ya tenga más de 24 horas', function () {
+        $chofer = choferEnTurno();
+        $viaje = viajeSinSenal($chofer, ['estado' => EstadoViaje::EnCamino]);
+        $id = (string) Str::uuid();
+        $momento = now()->subMinutes(5)->toIso8601String();
+        avanzarSinSenal($chofer, $viaje, 'llego', $momento, $id)->assertOk();
+
+        $this->travel(25)->hours();
+
+        avanzarSinSenal($chofer, $viaje, 'llego', $momento, $id)->assertOk()->assertJsonPath('estado', 'llego');
+    });
+
+    it('el mismo id_accion en dos viajes a la vez: el segundo recibe 422 sin cambiar nada', function () {
+        $chofer = choferEnTurno();
+        $uno = viajeSinSenal($chofer, ['estado' => EstadoViaje::EnCamino]);
+        $otro = viajeSinSenal($chofer, ['estado' => EstadoViaje::EnCamino]);
+        $id = (string) Str::uuid();
+
+        // El otro pedido registra la acción justo después de que este verificó que no existía (con su viaje bloqueado).
+        $consultas = 0;
+        DB::listen(function ($consulta) use (&$consultas, $id, $uno, $chofer) {
+            if (str_contains($consulta->sql, 'from "acciones_viaje"') && $consulta->bindings === [$id] && ++$consultas === 2) {
+                DB::table('acciones_viaje')->insert(['id_accion' => $id, 'viaje_id' => $uno->id, 'chofer_id' => $chofer->id,
+                    'estado' => 'llego', 'momento' => now(), 'aplicada_en' => now()]);
+            }
+        });
+
+        avanzarSinSenal($chofer, $otro, 'llego', null, $id)
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Esa acción ya se registró en otro viaje.');
+
+        expect($consultas)->toBeGreaterThanOrEqual(2)
+            ->and($otro->fresh()->estado)->toBe(EstadoViaje::EnCamino);
+    });
+
+    it('un punto justo en el fin de un viaje y el inicio del siguiente va al siguiente', function () {
+        $chofer = choferEnTurno();
+        $limite = now()->subMinutes(20);
+        $anterior = viajeSinSenal($chofer, ['estado' => EstadoViaje::Finalizado, 'iniciado_en' => now()->subMinutes(40),
+            'finalizado_en' => $limite]);
+        $siguiente = viajeSinSenal($chofer, ['estado' => EstadoViaje::EnCurso, 'iniciado_en' => $limite]);
+
+        $this->actingAs($chofer)->postJson('/api/ubicacion', ['puntos' => [
+            ['lat' => -34.60, 'lng' => -58.38, 'registrado_en' => $limite->toIso8601String()],
+        ]])->assertNoContent();
+
+        expect(PuntoRecorrido::where('viaje_id', $siguiente->id)->count())->toBe(1)
+            ->and(PuntoRecorrido::where('viaje_id', $anterior->id)->count())->toBe(0);
+    });
+
+    it('con cierre pendiente, un Finalizar tardío cierra el turno a la hora en que terminó el viaje', function () {
+        $chofer = choferEnTurno();
+        $turno = $chofer->turnoAbierto;
+        $turno->update(['cierre_pendiente_en' => now()->subMinutes(40)]); // fichó la salida con el viaje en curso
+        $viaje = viajeSinSenal($chofer, ['estado' => EstadoViaje::EnCurso, 'iniciado_en' => now()->subMinutes(60)]);
+
+        avanzarSinSenal($chofer, $viaje, 'finalizado', now()->subMinutes(30)->toIso8601String())->assertOk();
+
+        expect($turno->fresh()->fin->equalTo(now()->subMinutes(30)))->toBeTrue();
+    });
+
+    it('si el viaje terminó antes de fichar la salida, el turno cierra a la hora de la salida', function () {
+        $chofer = choferEnTurno();
+        $turno = $chofer->turnoAbierto;
+        $turno->update(['cierre_pendiente_en' => now()->subMinutes(20)]);
+        $viaje = viajeSinSenal($chofer, ['estado' => EstadoViaje::EnCurso, 'iniciado_en' => now()->subMinutes(60)]);
+
+        avanzarSinSenal($chofer, $viaje, 'finalizado', now()->subMinutes(30)->toIso8601String())->assertOk();
+
+        expect($turno->fresh()->fin->equalTo(now()->subMinutes(20)))->toBeTrue();
+    });
+
+    it('el momento tiene que ser una fecha ISO-8601', function (string $momento) {
+        $chofer = choferEnTurno();
+        $viaje = viajeSinSenal($chofer, ['estado' => EstadoViaje::EnCamino]);
+
+        avanzarSinSenal($chofer, $viaje, 'llego', $momento)->assertStatus(422)->assertJsonValidationErrors('momento');
+
+        expect($viaje->fresh()->estado)->toBe(EstadoViaje::EnCamino);
+    })->with(['now', '+1 hour', 'yesterday', '01/10/2026 11:00']);
 });
