@@ -22,6 +22,9 @@ class ServicioViaje
     /** Error de la app al pedir con un viaje en marcha (le habla al solicitante; el panel lo traduce). */
     public const YA_TIENE_VIAJE = 'Ya tenés un viaje en curso.';
 
+    /** Un viaje largo lo asignó el encargado: ni el chofer ni el solicitante lo cancelan. */
+    private const LARGO_SOLO_ENCARGADO = 'Los viajes largos solo puede cancelarlos o cambiarlos un administrador.';
+
     public function __construct(
         private Despachador $despachador,
         private CalculadorEstadoChofer $estados,
@@ -30,6 +33,7 @@ class ServicioViaje
         private DisponibilidadReservas $disponibilidad,
         private AvisosReserva $avisosReserva,
         private CompletadorDirecciones $direcciones,
+        private ServicioViajesLargos $largos,
     ) {}
 
     /** Un inmediato se puede reasignar hasta que empieza el viaje con el pasajero (spec 5.6). */
@@ -38,7 +42,7 @@ class ServicioViaje
         EstadoViaje::EnCamino, EstadoViaje::Llego, EstadoViaje::SinChofer,
     ];
 
-    /** Una reserva, mientras el chofer no haya salido. */
+    /** Una reserva o un viaje largo, mientras el chofer no haya salido. */
     private const REASIGNABLES_RESERVA = [
         EstadoViaje::Buscando, EstadoViaje::Ofrecido, EstadoViaje::Aceptado, EstadoViaje::SinChofer,
     ];
@@ -106,7 +110,7 @@ class ServicioViaje
             throw new ReglaNegocio('Estado no válido para el chofer.');
         }
 
-        if ($hacia === EstadoViaje::EnCamino && $viaje->tipo === TipoViaje::Reserva) {
+        if ($hacia === EstadoViaje::EnCamino && $viaje->tipo->esAgendado()) {
             $this->salirHaciaReserva($viaje, $chofer);
         } else {
             $this->maquina->transicionar($viaje, $hacia);
@@ -115,7 +119,10 @@ class ServicioViaje
         return $viaje->load(['chofer', 'vehiculo', 'solicitante']);
     }
 
-    /** Spec 5.4 paso 7: la reserva arranca como un viaje normal, pero no antes de tiempo, sin turno ni con otro viaje. */
+    /**
+     * Spec 5.4 paso 7: la reserva arranca como un viaje normal, pero no antes de tiempo, sin turno ni con otro viaje.
+     * Un viaje largo, igual, pero con el vehículo que le asignó el encargado.
+     */
     private function salirHaciaReserva(Viaje $viaje, Usuario $chofer): void
     {
         DB::transaction(function () use ($viaje, $chofer) {
@@ -134,16 +141,19 @@ class ServicioViaje
                 return;
             }
 
+            $largo = $viaje->tipo === TipoViaje::Largo;
+            [$esta, $la] = $largo ? ['este viaje largo', 'el viaje largo'] : ['esta reserva', 'la reserva'];
             $desde = $viaje->programado_para->copy()->subMinutes($this->parametros->entero('bloqueo_antes_reserva_min'));
             if (now()->lt($desde)) {
-                throw new ReglaNegocio('Podés salir hacia esta reserva a partir de las '.HoraLocal::formatear($desde, 'H:i').'.');
+                throw new ReglaNegocio("Podés salir hacia $esta a partir de las ".HoraLocal::formatear($desde, 'H:i').'.');
             }
 
-            $vehiculoId = $chofer->turnoAbierto()->value('vehiculo_id')
-                ?? throw new ReglaNegocio('Iniciá tu turno para comenzar la reserva.');
+            $vehiculoTurno = $chofer->turnoAbierto()->value('vehiculo_id')
+                ?? throw new ReglaNegocio("Iniciá tu turno para comenzar $la.");
+            $vehiculoId = $largo ? $viaje->vehiculo_id : $vehiculoTurno;
 
             if (Viaje::activosDeChofer($chofer->id)->whereKeyNot($viaje->id)->exists()) {
-                throw new ReglaNegocio('Terminá tu viaje actual antes de comenzar la reserva.');
+                throw new ReglaNegocio("Terminá tu viaje actual antes de comenzar $la.");
             }
 
             $this->maquina->transicionar($viaje, EstadoViaje::EnCamino, ['vehiculo_id' => $vehiculoId]);
@@ -154,6 +164,9 @@ class ServicioViaje
     {
         if ($viaje->solicitante_id !== $solicitante->id) {
             throw new AccionNoPermitida('Este viaje no es tuyo.');
+        }
+        if ($viaje->tipo === TipoViaje::Largo) {
+            throw new AccionNoPermitida(self::LARGO_SOLO_ENCARGADO);
         }
 
         DB::transaction(function () use ($viaje, $motivo) {
@@ -230,6 +243,16 @@ class ServicioViaje
 
     private function asignarDirecto(Viaje $viaje, Usuario $chofer, bool $soloSinChofer): Viaje
     {
+        // Un viaje largo cambia de chofer conservando su vehículo, con las validaciones de los viajes largos.
+        if ($viaje->tipo === TipoViaje::Largo) {
+            if ($soloSinChofer) {
+                throw new ReglaNegocio('El viaje ya tiene chofer o terminó; no se puede asignar.');
+            }
+            $vehiculo = $viaje->vehiculo ?? throw new ReglaNegocio('El viaje largo no tiene vehículo asignado.');
+
+            return $this->largos->reasignar($viaje, $chofer, $vehiculo);
+        }
+
         $esReserva = DB::transaction(function () use ($viaje, $chofer, $soloSinChofer) {
             // Mismo orden de bloqueo que Asignador (viaje, luego chofer): compite en igualdad con
             // cualquier otra asignación a ese chofer.
@@ -301,7 +324,7 @@ class ServicioViaje
     /** ¿El panel ofrece "Reasignar" para este viaje? (se vuelve a verificar con la fila bloqueada) */
     public static function reasignable(Viaje $viaje): bool
     {
-        return in_array($viaje->estado, $viaje->tipo === TipoViaje::Reserva
+        return in_array($viaje->estado, $viaje->tipo->esAgendado()
             ? self::REASIGNABLES_RESERVA
             : self::REASIGNABLES_INMEDIATO, true);
     }
@@ -328,6 +351,9 @@ class ServicioViaje
 
             if ($viaje->chofer_id !== $chofer->id) {
                 throw new AccionNoPermitida('Este viaje no es tuyo.');
+            }
+            if ($viaje->tipo === TipoViaje::Largo) {
+                throw new AccionNoPermitida(self::LARGO_SOLO_ENCARGADO);
             }
             if ($viaje->obligatorio) {
                 throw new AccionNoPermitida('Los viajes obligatorios solo puede cancelarlos un administrador.');

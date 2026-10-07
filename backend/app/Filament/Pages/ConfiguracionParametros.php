@@ -53,6 +53,8 @@ class ConfiguracionParametros extends Page implements HasTable
         'gps_turno_seg' => 'Intervalo de GPS en turno (segundos)',
         'gps_viaje_seg' => 'Intervalo de GPS en viaje (segundos)',
         'retencion_recorrido_dias' => 'Días que se guarda el recorrido de un viaje',
+        'horario_laboral_inicio' => 'Hora de inicio del horario laboral (0 a 23)',
+        'horario_laboral_fin' => 'Hora de fin del horario laboral (0 a 23)',
     ];
 
     public function content(Schema $schema): Schema

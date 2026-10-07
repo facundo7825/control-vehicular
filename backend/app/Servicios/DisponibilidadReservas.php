@@ -45,8 +45,8 @@ class DisponibilidadReservas
     }
 
     /**
-     * El chofer está libre para [inicio, inicio + duración] si ninguna de sus reservas tomadas
-     * (aceptadas o ya en marcha) se superpone con esa franja más el colchón. No exige turno abierto,
+     * El chofer está libre para [inicio, inicio + duración] si ninguna de sus reservas o viajes largos tomados
+     * (aceptados o ya en marcha) se superpone con esa franja más el colchón. No exige turno abierto,
      * pero con un turno en cierre pendiente (fichó la salida durante un viaje) no toma reservas nuevas.
      *
      * Con $bloquear, las reservas se leen con FOR UPDATE: dentro de una transacción de asignación
@@ -63,7 +63,7 @@ class DisponibilidadReservas
         $porDefecto = $this->parametros->entero('duracion_reserva_por_defecto_min');
 
         return Viaje::where('chofer_id', $choferId)
-            ->where('tipo', TipoViaje::Reserva)
+            ->whereIn('tipo', TipoViaje::agendados())
             ->whereIn('estado', EstadoViaje::conChofer())
             ->when($excluirViajeId, fn ($q) => $q->whereKeyNot($excluirViajeId))
             // Con el índice forzado, FOR UPDATE bloquea solo filas de este chofer. Sin él, en tablas chicas
@@ -72,6 +72,29 @@ class DisponibilidadReservas
             ->get()
             ->doesntContain(fn (Viaje $r) => self::seSuperponen(
                 $inicio, $duracionMin, $r->programado_para, $r->duracion_estimada_min ?? $porDefecto, $colchon,
+            ));
+    }
+
+    /**
+     * El vehículo está libre para [inicio, inicio + duración] si no está en otro viaje largo tomado (aceptado o
+     * en marcha) que se superponga con esa franja más el colchón. Las reservas toman el vehículo del turno al
+     * salir, así que no cuentan.
+     *
+     * Con $bloquear, igual que estaDisponible: lectura con FOR UPDATE, solo sobre las filas de ese vehículo.
+     */
+    public function vehiculoDisponible(int $vehiculoId, Carbon $inicio, int $duracionMin, ?int $excluirViajeId = null, bool $bloquear = false): bool
+    {
+        $colchon = $this->parametros->entero('colchon_reservas_min');
+        $porDefecto = $this->parametros->entero('duracion_reserva_por_defecto_min');
+
+        return Viaje::where('vehiculo_id', $vehiculoId)
+            ->where('tipo', TipoViaje::Largo)
+            ->whereIn('estado', EstadoViaje::conChofer())
+            ->when($excluirViajeId, fn ($q) => $q->whereKeyNot($excluirViajeId))
+            ->when($bloquear, fn ($q) => $q->forceIndex('viajes_vehiculo_id_estado_index')->lockForUpdate())
+            ->get()
+            ->doesntContain(fn (Viaje $v) => self::seSuperponen(
+                $inicio, $duracionMin, $v->programado_para, $v->duracion_estimada_min ?? $porDefecto, $colchon,
             ));
     }
 

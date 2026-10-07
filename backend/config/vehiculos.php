@@ -107,5 +107,9 @@ return [
         'gps_turno_seg' => 10,
         'gps_viaje_seg' => 5,
         'retencion_recorrido_dias' => 90,
+        // Horario laboral (hora local, en horas enteras): un viaje largo que empezó antes o terminó después
+        // se marca "Fuera del horario laboral" en el panel.
+        'horario_laboral_inicio' => 7,
+        'horario_laboral_fin' => 18,
     ],
 ];

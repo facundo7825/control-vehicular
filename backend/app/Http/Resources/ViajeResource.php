@@ -22,6 +22,8 @@ class ViajeResource extends JsonResource
             'motivo' => $this->motivo,
             'programado_para' => $this->programado_para?->toIso8601String(),
             'duracion_estimada_min' => $this->duracion_estimada_min,
+            'regreso_estimado' => $this->regreso_estimado?->toIso8601String(),
+            'pasajeros' => $this->pasajeros,
             'chofer' => $this->chofer
                 ? ['id' => $this->chofer->id, 'nombre' => $this->chofer->nombre, 'telefono' => $this->chofer->telefono]
                 : null,

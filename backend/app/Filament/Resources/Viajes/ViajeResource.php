@@ -94,7 +94,8 @@ class ViajeResource extends Resource
                             ->required(),
                         ToggleButtons::make('tipo')
                             ->label('Tipo')
-                            ->options(collect(TipoViaje::cases())->mapWithKeys(fn (TipoViaje $t) => [$t->value => $t->getLabel()])->all())
+                            // Los viajes largos se cargan con su propio formulario (con chofer, vehículo y regreso).
+                            ->options(collect([TipoViaje::Inmediato, TipoViaje::Reserva])->mapWithKeys(fn (TipoViaje $t) => [$t->value => $t->getLabel()])->all())
                             ->inline()
                             ->default(TipoViaje::Inmediato->value)
                             ->required()
@@ -392,13 +393,14 @@ class ViajeResource extends Resource
     }
 
     /**
-     * Choferes a los que el admin puede reasignar el viaje: libres ahora (inmediato) o con la franja libre (reserva).
+     * Choferes a los que el admin puede reasignar el viaje: libres ahora (inmediato) o con la franja libre (reserva
+     * o viaje largo).
      *
      * @return array<int, string>
      */
     public static function choferesElegibles(Viaje $viaje): array
     {
-        $elegibles = $viaje->tipo === TipoViaje::Reserva
+        $elegibles = $viaje->tipo->esAgendado()
             ? self::choferesConFranjaLibre(
                 $viaje->programado_para,
                 $viaje->duracion_estimada_min ?? app(Parametros::class)->entero('duracion_reserva_por_defecto_min'),

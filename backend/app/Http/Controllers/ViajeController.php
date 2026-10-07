@@ -44,13 +44,13 @@ class ViajeController extends Controller
             ->setStatusCode(201);
     }
 
-    /** "Mis viajes" del solicitante: próximas reservas e historial (spec 7, solicitante 6). */
+    /** "Mis viajes" del solicitante: próximas reservas y viajes largos, e historial (spec 7, solicitante 6). */
     public function index(Request $request): JsonResponse
     {
         $id = $request->user()->id;
 
         $proximas = Viaje::where('solicitante_id', $id)
-            ->where('tipo', TipoViaje::Reserva)
+            ->whereIn('tipo', TipoViaje::agendados())
             ->whereIn('estado', EstadoViaje::enProgreso())
             ->with(self::RELACIONES)
             ->orderBy('programado_para')
@@ -83,11 +83,11 @@ class ViajeController extends Controller
                 ->whereHas('viaje', fn ($q) => $q->where('tipo', TipoViaje::Inmediato))
                 ->first();
         } else {
-            // Inmediatos en progreso, o reservas que ya comenzaron (el chofer salió).
+            // Inmediatos en progreso, o reservas y viajes largos que ya comenzaron (el chofer salió).
             $viaje = Viaje::where('solicitante_id', $usuario->id)
                 ->where(fn ($q) => $q
                     ->where(fn ($i) => $i->where('tipo', TipoViaje::Inmediato)->whereIn('estado', EstadoViaje::enProgreso()))
-                    ->orWhere(fn ($r) => $r->where('tipo', TipoViaje::Reserva)
+                    ->orWhere(fn ($r) => $r->whereIn('tipo', TipoViaje::agendados())
                         ->whereIn('estado', [EstadoViaje::EnCamino, EstadoViaje::Llego, EstadoViaje::EnCurso])))
                 ->latest('id')
                 ->first();

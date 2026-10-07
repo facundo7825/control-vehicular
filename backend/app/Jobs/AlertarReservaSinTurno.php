@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Enums\TipoViaje;
 use App\Models\Alerta;
 use App\Models\Viaje;
 use App\Notificaciones\Notificador;
@@ -25,16 +26,17 @@ class AlertarReservaSinTurno implements ShouldQueue
         }
 
         $cuando = $viaje->horaProgramadaLocal();
+        $cual = $viaje->tipo === TipoViaje::Largo ? 'un viaje largo' : 'una reserva';
 
         Alerta::create([
             'tipo' => Alerta::RESERVA_SIN_TURNO,
             'viaje_id' => $viaje->id,
             'chofer_id' => $viaje->chofer_id,
-            'mensaje' => "{$viaje->chofer->nombre} no inició turno y tiene una reserva el $cuando.",
+            'mensaje' => "{$viaje->chofer->nombre} no inició turno y tiene $cual el $cuando.",
         ]);
 
         $push->enviar($viaje->chofer, 'Iniciá tu turno',
-            "Tenés una reserva el $cuando y todavía no iniciaste turno.",
+            "Tenés $cual el $cuando y todavía no iniciaste turno.",
             ['tipo' => 'alerta_reserva', 'viaje_id' => $viaje->id]);
     }
 }
