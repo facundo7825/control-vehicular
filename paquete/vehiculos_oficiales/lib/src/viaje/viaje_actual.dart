@@ -295,7 +295,11 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
     if (!ref.mounted) return;
     final base = _bases.remove(viajeId);
     final actual = state.value;
-    if (base != null && actual != null && actual.viaje?.id == viajeId) {
+    final mostrado = actual?.viaje;
+    // Si ya se ve cancelado o reasignado (llegó el evento antes que el rechazo), eso ya es lo real: no se vuelve
+    // un instante a lo anterior.
+    final yaEsReal = mostrado != null && (mostrado.estado == EstadoViaje.cancelado || !_esSuyo(mostrado));
+    if (base != null && actual != null && mostrado?.id == viajeId && !yaEsReal) {
       // El "finalizado" local no era final: si de verdad terminó, la consulta lo vuelve a marcar.
       _finales.remove(viajeId);
       _fijar(actual.conViaje(base));

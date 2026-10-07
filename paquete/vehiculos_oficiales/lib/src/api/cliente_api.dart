@@ -9,15 +9,20 @@ import 'errores_api.dart';
 /// HTTP contra `/api` del backend. Agrega `Accept: application/json` (sin él Laravel responde un 401
 /// como redirección al login) y el token Sanctum, y traduce las respuestas de error a [ErrorApi].
 class ClienteApi {
-  ClienteApi({required Uri baseApi, required this.alRecibir401, HttpClientAdapter? adaptador})
-    : _dio = Dio(
-        BaseOptions(
-          baseUrl: baseApi.toString(),
-          connectTimeout: const Duration(seconds: 10),
-          receiveTimeout: const Duration(seconds: 20),
-          headers: {'Accept': 'application/json'},
-        ),
-      ) {
+  ClienteApi({
+    required Uri baseApi,
+    required this.alRecibir401,
+    HttpClientAdapter? adaptador,
+    Stopwatch Function()? cronometro,
+  }) : _cronometro = cronometro ?? Stopwatch.new,
+       _dio = Dio(
+         BaseOptions(
+           baseUrl: baseApi.toString(),
+           connectTimeout: const Duration(seconds: 10),
+           receiveTimeout: const Duration(seconds: 20),
+           headers: {'Accept': 'application/json'},
+         ),
+       ) {
     if (adaptador != null) _dio.httpClientAdapter = adaptador;
   }
 
@@ -32,6 +37,22 @@ class ClienteApi {
   /// Reloj del servidor menos reloj del dispositivo, según el encabezado `Date` de la última respuesta
   /// que lo trajo (cero hasta entonces). Lo usa `RelojServidor` para las cuentas regresivas.
   Duration desfaseReloj = Duration.zero;
+
+  /// Un cronómetro monotónico (en los tests, uno que sigue al reloj falso).
+  final Stopwatch Function() _cronometro;
+
+  /// El `Date` de la última respuesta que lo trajo y el tiempo transcurrido desde entonces.
+  DateTime? _horaServidor;
+  Stopwatch? _desdeHoraServidor;
+
+  /// Hora del servidor: el último `Date` más lo que pasó desde esa respuesta, medido con un cronómetro
+  /// monotónico. Un cambio de la hora del teléfono mientras tanto (sin señal, el reloj se corrige o el chofer lo
+  /// toca) no la mueve. Nula hasta la primera respuesta con `Date`.
+  DateTime? horaServidor() {
+    final base = _horaServidor;
+    final desde = _desdeHoraServidor;
+    return base == null || desde == null ? null : base.add(desde.elapsed);
+  }
 
   Future<Object?> get(String ruta, {Map<String, dynamic>? query}) =>
       _enviar(() => _dio.get<Object?>(ruta, queryParameters: query, options: _opciones()));
@@ -77,7 +98,10 @@ class ClienteApi {
     try {
       final fecha = r.headers['date']?.firstOrNull;
       if (fecha == null) return;
-      desfaseReloj = parseHttpDate(fecha).difference(clock.now().toUtc());
+      final servidor = parseHttpDate(fecha);
+      desfaseReloj = servidor.difference(clock.now().toUtc());
+      _horaServidor = servidor;
+      _desdeHoraServidor = _cronometro()..start();
     } catch (e) {
       // Se conserva el desfase anterior.
       debugPrint('vehiculos_oficiales: encabezado Date ignorado (${e.runtimeType}).');

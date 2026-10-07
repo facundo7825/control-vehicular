@@ -67,7 +67,7 @@ abstract interface class AlmacenAcciones {
   Future<void> guardar(int usuarioId, List<AccionViaje> acciones);
 
   /// Al cerrarse la sesión (401), junto con la cola de ubicaciones.
-  Future<void> borrar();
+  Future<void> borrar(int usuarioId);
 }
 
 /// Un archivo JSON junto a la cola de ubicaciones (ver [AlmacenColaArchivo]: mismo directorio de caché, fuera
@@ -76,7 +76,8 @@ abstract interface class AlmacenAcciones {
 class AlmacenAccionesArchivo implements AlmacenAcciones {
   AlmacenAccionesArchivo(this._directorio);
 
-  static const nombreArchivo = 'cola_acciones.json';
+  /// Un archivo por chofer: `cola_acciones_<usuario>.json`.
+  static const nombreArchivo = 'cola_acciones';
 
   final Future<Directory> Function() _directorio;
 
@@ -84,7 +85,7 @@ class AlmacenAccionesArchivo implements AlmacenAcciones {
 
   @override
   Future<List<AccionViaje>> leer(int usuarioId) => _enOrden(() async {
-    final archivo = await _archivo();
+    final archivo = await _archivo(usuarioId);
     if (!await archivo.exists()) return <AccionViaje>[];
     try {
       final j = leerMapa(jsonDecode(await archivo.readAsString()));
@@ -103,7 +104,7 @@ class AlmacenAccionesArchivo implements AlmacenAcciones {
       'acciones': [for (final a in acciones) a.toJson()],
     });
     return _enOrden(() async {
-      final archivo = await _archivo();
+      final archivo = await _archivo(usuarioId);
       await archivo.parent.create(recursive: true);
       final temporal = File('${archivo.path}.tmp');
       await temporal.writeAsString(contenido, flush: true);
@@ -112,15 +113,15 @@ class AlmacenAccionesArchivo implements AlmacenAcciones {
   }
 
   @override
-  Future<void> borrar() => _enOrden(() async {
-    final archivo = await _archivo();
+  Future<void> borrar(int usuarioId) => _enOrden(() async {
+    final archivo = await _archivo(usuarioId);
     for (final f in [archivo, File('${archivo.path}.tmp')]) {
       if (await f.exists()) await f.delete();
     }
   });
 
-  Future<File> _archivo() async =>
-      File('${(await _directorio()).path}/${AlmacenColaArchivo.subdirectorio}/$nombreArchivo');
+  Future<File> _archivo(int usuarioId) async =>
+      File('${(await _directorio()).path}/${AlmacenColaArchivo.subdirectorio}/${nombreArchivo}_$usuarioId.json');
 
   static Future<T> _enOrden<T>(Future<T> Function() operacion) {
     final resultado = _anterior.then((_) => operacion());
@@ -140,7 +141,7 @@ class AlmacenAccionesNulo implements AlmacenAcciones {
   Future<void> guardar(int usuarioId, List<AccionViaje> acciones) async {}
 
   @override
-  Future<void> borrar() async {}
+  Future<void> borrar(int usuarioId) async {}
 }
 
 final almacenAccionesProvider = Provider<AlmacenAcciones>(
@@ -170,15 +171,32 @@ class AvisoAccionNotifier extends Notifier<AvisoAccion?> {
   void avisar(String mensaje) => state = AvisoAccion((state?.numero ?? 0) + 1, mensaje);
 }
 
-final accionesSinSalirProvider = NotifierProvider<AccionesSinSalirNotifier, bool>(AccionesSinSalirNotifier.new);
+/// Cómo vienen saliendo las acciones del viaje.
+enum EnvioAcciones {
+  /// Salen normalmente (o no se intentó todavía): con señal no se avisa nada.
+  normal,
 
-/// El último intento de mandar una acción falló por la red (o el servidor caído): el aviso "Sin señal: N
-/// acciones…" se muestra desde entonces (o con el socket caído), no mientras sale normalmente con señal.
-class AccionesSinSalirNotifier extends Notifier<bool> {
+  /// El último intento falló por la red: "Sin señal: N acciones se enviarán al reconectar".
+  sinSenal,
+
+  /// La misma acción falló [ColaAccionesNotifier.maxErroresServidor] veces seguidas con un error del servidor
+  /// (5xx): no es la señal, hay que avisar ("No se pudo enviar el viaje: avisá al encargado"). Se sigue
+  /// reintentando.
+  errorServidor,
+}
+
+/// Lo que se le dice al chofer cuando el servidor rechaza una y otra vez el envío.
+const noSePudoEnviarViaje = 'No se pudo enviar el viaje: avisá al encargado';
+
+final envioAccionesProvider = NotifierProvider<EnvioAccionesNotifier, EnvioAcciones>(EnvioAccionesNotifier.new);
+
+/// Ver [EnvioAcciones]: el aviso de acciones pendientes se muestra solo después de un intento fallido (o con el
+/// socket caído), no mientras salen normalmente con señal.
+class EnvioAccionesNotifier extends Notifier<EnvioAcciones> {
   @override
-  bool build() => false;
+  EnvioAcciones build() => EnvioAcciones.normal;
 
-  void fijar(bool fallo) => state = fallo;
+  void fijar(EnvioAcciones estado) => state = estado;
 }
 
 final colaAccionesProvider = AsyncNotifierProvider<ColaAccionesNotifier, List<AccionViaje>>(ColaAccionesNotifier.new);
@@ -200,6 +218,18 @@ final colaAccionesProvider = AsyncNotifierProvider<ColaAccionesNotifier, List<Ac
 /// respuesta de cada una. La cola de GPS no se manda mientras haya acciones (ver `EmisorUbicacion.retener`).
 class ColaAccionesNotifier extends AsyncNotifier<List<AccionViaje>> {
   static const intervaloReintento = Duration(seconds: 30);
+
+  /// Errores del servidor seguidos en la misma acción a partir de los cuales se avisa
+  /// ([EnvioAcciones.errorServidor]).
+  static const maxErroresServidor = 3;
+
+  /// La acción que viene fallando con errores del servidor, y cuántas veces seguidas.
+  String? _conErrorServidor;
+  int _erroresServidor = 0;
+
+  void _fijarEnvio(EnvioAcciones estado) {
+    ref.read(envioAccionesProvider.notifier).fijar(estado);
+  }
 
   late int _usuarioId;
   Timer? _reintento;
@@ -303,9 +333,17 @@ class ColaAccionesNotifier extends AsyncNotifier<List<AccionViaje>> {
       } on ErrorApi catch (e) {
         if (!ref.mounted) return;
         switch (e) {
-          // Sin red, el servidor caído o la sesión vencida: se reintenta más tarde.
-          case SinConexion() || ErrorServidor() || ServicioNoDisponible() || SesionInvalida():
-            ref.read(accionesSinSalirProvider.notifier).fijar(true);
+          // El servidor responde con error: se reintenta, pero si la misma acción falla así varias veces
+          // seguidas no es la señal y se avisa.
+          case ErrorServidor() || ServicioNoDisponible():
+            final seguidos = _erroresServidor = accion.id == _conErrorServidor ? _erroresServidor + 1 : 1;
+            _conErrorServidor = accion.id;
+            _fijarEnvio(seguidos >= maxErroresServidor ? EnvioAcciones.errorServidor : EnvioAcciones.sinSenal);
+            return;
+          // Sin red o la sesión vencida: se reintenta más tarde.
+          case SinConexion() || SesionInvalida():
+            _conErrorServidor = null;
+            _fijarEnvio(EnvioAcciones.sinSenal);
             return;
           case Conflicto() || ErrorNegocio() || AccesoDenegado() || NoEncontrado():
             await _descartar(accion.viajeId, e);
@@ -313,7 +351,8 @@ class ColaAccionesNotifier extends AsyncNotifier<List<AccionViaje>> {
         }
       }
       if (!ref.mounted) return;
-      ref.read(accionesSinSalirProvider.notifier).fijar(false);
+      _conErrorServidor = null;
+      _fijarEnvio(EnvioAcciones.normal);
       if (_esperando.contains(accion.id)) _respuestas[accion.id] = viaje;
       await _fijar([
         for (final a in _pendientes)
@@ -350,7 +389,7 @@ class ColaAccionesNotifier extends AsyncNotifier<List<AccionViaje>> {
   Future<void> _fijar(List<AccionViaje> acciones) async {
     state = AsyncData(List.unmodifiable(acciones));
     _ajustarReintento(acciones);
-    if (acciones.isEmpty) ref.read(accionesSinSalirProvider.notifier).fijar(false);
+    if (acciones.isEmpty) _fijarEnvio(EnvioAcciones.normal);
     try {
       await ref.read(almacenAccionesProvider).guardar(_usuarioId, acciones);
     } catch (e) {

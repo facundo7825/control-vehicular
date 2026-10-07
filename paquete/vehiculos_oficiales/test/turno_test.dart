@@ -347,7 +347,7 @@ void main() {
   });
 
   test('un 422 "Iniciá un turno…" del envío detiene el rastreo y vuelve a preguntar el turno', () {
-    fakeAsync((async) {
+    enHoraDeLosPuntos((async) {
       api.turno = turnoDePrueba();
       final c = crear();
       async.flushMicrotasks();
@@ -681,7 +681,7 @@ void main() {
     });
 
     test('lo guardado de otro turno no se mezcla: se manda aparte (puede ser de un viaje)', () {
-      fakeAsync((async) {
+      enHoraDeLosPuntos((async) {
         api.turno = turnoDePrueba();
         almacen
           ..turnoId = 99

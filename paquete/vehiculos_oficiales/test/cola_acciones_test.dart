@@ -195,6 +195,32 @@ void main() {
       });
     });
 
+    test('si el viaje ya se ve cancelado, el rechazo no lo hace volver un instante al estado anterior', () {
+      fakeAsync((async) {
+        api.actual = ViajeActual(viaje: viaje(estado: 'en_camino', conChofer: true));
+        final c = crear();
+        async.flushMicrotasks();
+        api.errorAvance = const SinConexion();
+        viajeActual(c).avanzar(EstadoViaje.llego);
+        async.flushMicrotasks();
+        // El evento del socket llega primero.
+        tr.emitir('chofer.2', Eventos.viajeActualizado, jsonViaje(viaje(estado: 'cancelado', conChofer: true)));
+        expect(estado(c), EstadoViaje.cancelado);
+        final estados = <EstadoViaje?>[];
+        c.listen(viajeActualProvider, (_, s) => estados.add(s.value?.viaje?.estado));
+
+        api
+          ..errorAvance = null
+          ..erroresAvance.add(const Conflicto('El viaje fue cancelado mientras estabas sin señal.'))
+          ..actual = ViajeActual.vacio;
+        reconectar();
+        async.flushMicrotasks();
+
+        expect(estados, everyElement(EstadoViaje.cancelado));
+        expect(estado(c), EstadoViaje.cancelado);
+      });
+    });
+
     test('un 422 (p. ej. la hora no es válida) también descarta y vuelve al estado real', () {
       fakeAsync((async) {
         api.actual = ViajeActual(viaje: viaje(estado: 'en_curso', conChofer: true));
@@ -267,6 +293,47 @@ void main() {
         async.flushMicrotasks();
 
         expect(pendientes(c), isEmpty);
+      });
+    });
+
+    test('3 errores del servidor seguidos en la misma acción: se sigue reintentando, pero se pide avisar', () {
+      fakeAsync((async) {
+        api.actual = ViajeActual(viaje: viaje(estado: 'en_curso', conChofer: true));
+        final c = crear();
+        async.flushMicrotasks();
+        api.errorAvance = const ErrorServidor();
+
+        viajeActual(c).avanzar(EstadoViaje.finalizado);
+        async.flushMicrotasks();
+        expect(c.read(envioAccionesProvider), EnvioAcciones.sinSenal);
+        expect(c.read(motivoEsperaFinalizarProvider), esperandoSenalParaFinalizar);
+        async.elapse(ColaAccionesNotifier.intervaloReintento);
+        expect(c.read(envioAccionesProvider), EnvioAcciones.sinSenal);
+        async.elapse(ColaAccionesNotifier.intervaloReintento);
+        expect(c.read(envioAccionesProvider), EnvioAcciones.errorServidor);
+        expect(c.read(motivoEsperaFinalizarProvider), noSePudoEnviarViaje);
+
+        api.errorAvance = null;
+        async.elapse(ColaAccionesNotifier.intervaloReintento);
+        expect(pendientes(c), isEmpty);
+        expect(c.read(envioAccionesProvider), EnvioAcciones.normal);
+        expect(c.read(motivoEsperaFinalizarProvider), isNull);
+      });
+    });
+
+    test('sin señal en el medio no cuentan como seguidos', () {
+      fakeAsync((async) {
+        api.actual = ViajeActual(viaje: viaje(estado: 'en_curso', conChofer: true));
+        final c = crear();
+        async.flushMicrotasks();
+        api.erroresAvance.addAll(const [ErrorServidor(), ErrorServidor(), SinConexion(), ErrorServidor()]);
+        api.errorAvance = const SinConexion();
+
+        viajeActual(c).avanzar(EstadoViaje.finalizado);
+        async.flushMicrotasks();
+        async.elapse(ColaAccionesNotifier.intervaloReintento * 3);
+
+        expect(c.read(envioAccionesProvider), EnvioAcciones.sinSenal);
       });
     });
 
@@ -387,7 +454,7 @@ void main() {
     });
 
     test('con un "Finalizar" pendiente y más de 500 puntos, si el turno se cierra al reconectar, se manda todo', () {
-      fakeAsync((async) {
+      enHoraDeLosPuntos((async) {
         api
           ..turno = turnoDePrueba()
           ..actual = ViajeActual(viaje: viaje(estado: 'en_curso', conChofer: true));
@@ -425,7 +492,7 @@ void main() {
     });
 
     test('sin señal al cerrarse el turno los puntos quedan guardados y salen al abrir de nuevo, aun sin turno', () {
-      fakeAsync((async) {
+      enHoraDeLosPuntos((async) {
         api.turno = turnoDePrueba();
         final antes = crear(conTurno: true);
         async.flushMicrotasks();
@@ -470,12 +537,11 @@ void main() {
         expect(api.lotes.map(segundos), [
           [100],
         ]);
-        expect(colaGps.usuarioId, chofer.id, reason: 'lo de otro chofer se descarta al guardar lo propio');
       });
     });
 
     test('lo que queda sin turno se reintenta solo cada 30 s', () {
-      fakeAsync((async) {
+      enHoraDeLosPuntos((async) {
         sinTurno
           ..turnoId = 0
           ..puntos = [punto(0)];
@@ -492,8 +558,21 @@ void main() {
       });
     });
 
-    test('los lotes que el servidor no ubica en ningún viaje (sin turno) se descartan, los demás salen', () {
+    test('los puntos sin turno de más de 24 h no se mandan ni se guardan', () {
       fakeAsync((async) {
+        sinTurno
+          ..turnoId = 0
+          ..puntos = [punto(0), punto(10)];
+        crear(conTurno: true);
+        async.flushMicrotasks();
+
+        expect(api.lotes, isEmpty);
+        expect(sinTurno.guardado, isFalse);
+      }, initialTime: DateTime.utc(2026, 10, 2, 12, 5)); // 24 h y 5 min después
+    });
+
+    test('los lotes que el servidor no ubica en ningún viaje (sin turno) se descartan, los demás salen', () {
+      enHoraDeLosPuntos((async) {
         sinTurno
           ..turnoId = 0
           ..puntos = [for (var i = 0; i < 700; i++) punto(i)];
@@ -689,11 +768,11 @@ void main() {
         for (final a in acciones) (a.id, a.viajeId, a.estado, a.momento),
       ]);
       expect(await almacenArchivo.leer(3), isEmpty);
-      expect(File('${dir.path}/${AlmacenColaArchivo.subdirectorio}/cola_acciones.json').existsSync(), isTrue);
+      expect(File('${dir.path}/${AlmacenColaArchivo.subdirectorio}/cola_acciones_2.json').existsSync(), isTrue);
     });
 
     test('un archivo ilegible se lee como vacío', () async {
-      final archivo = File('${dir.path}/${AlmacenColaArchivo.subdirectorio}/cola_acciones.json')
+      final archivo = File('${dir.path}/${AlmacenColaArchivo.subdirectorio}/cola_acciones_2.json')
         ..createSync(recursive: true)
         ..writeAsStringSync('{"usuario_id":2,"acciones":[{"id_ac');
       expect(archivo.existsSync(), isTrue);

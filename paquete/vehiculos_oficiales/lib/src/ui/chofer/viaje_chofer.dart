@@ -68,12 +68,14 @@ class BannerAccionesPendientes extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final n = ref.watch(colaAccionesProvider.select((s) => s.value?.length ?? 0));
     // Con señal las acciones salen enseguida: el aviso aparece solo si un envío falló o sin socket.
-    final sinSenal =
-        ref.watch(accionesSinSalirProvider) || ref.watch(estadoConexionProvider) != EstadoConexion.conectado;
-    if (n == 0 || !sinSenal) return const SizedBox.shrink();
+    final envio = ref.watch(envioAccionesProvider);
+    final sinSocket = ref.watch(estadoConexionProvider) != EstadoConexion.conectado;
+    if (n == 0 || (envio == EnvioAcciones.normal && !sinSocket)) return const SizedBox.shrink();
+    // El servidor rechaza una y otra vez el envío: no es la señal.
+    final errorServidor = envio == EnvioAcciones.errorServidor;
     return MaterialBanner(
-      leading: const Icon(Icons.cloud_upload_outlined),
-      content: Text(textoAccionesPendientes(n)),
+      leading: Icon(errorServidor ? Icons.error_outline : Icons.cloud_upload_outlined),
+      content: Text(errorServidor ? noSePudoEnviarViaje : textoAccionesPendientes(n)),
       actions: const [SizedBox.shrink()],
     );
   }

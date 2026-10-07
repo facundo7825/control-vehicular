@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:clock/clock.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:vehiculos_oficiales/src/avisos/notificaciones_locales.dart';
@@ -59,6 +60,9 @@ class EntornoPrueba {
   AlmacenJson viajeGuardado = AlmacenJsonMemoria();
   int sesionesInvalidas = 0;
 
+  /// Veces que la sesión pidió purgar lo pendiente viejo (en los tests no hay disco).
+  int purgas = 0;
+
   /// Nunca los plugins de audio y notificaciones.
   final sonidos = ReproductorFalso();
   final notificaciones = NotificacionesFalsas();
@@ -78,10 +82,13 @@ class EntornoPrueba {
   /// Sin el entorno, que lo agrega `ModuloVehiculos`.
   List<Override> overridesDeModulo([List<Override> extra = const []]) => [
     adaptadorHttpProvider.overrideWithValue(http),
+    // El reloj falso de fakeAsync también mueve el cronómetro de la hora del servidor.
+    cronometroProvider.overrideWithValue(() => clock.stopwatch()),
     almacenTokenProvider.overrideWithValue(almacen),
     almacenColaProvider.overrideWithValue(almacenCola),
     almacenAccionesProvider.overrideWithValue(almacenAcciones),
     almacenSinTurnoProvider.overrideWithValue(almacenSinTurno),
+    purgarPendientesViejosProvider.overrideWithValue(() async => purgas++),
     almacenTurnoGuardadoProvider.overrideWithValue(turnoGuardado),
     almacenViajeGuardadoProvider.overrideWithValue(viajeGuardado),
     // Sin disco para las teselas (ni path_provider): el mapa de prueba no las usa.

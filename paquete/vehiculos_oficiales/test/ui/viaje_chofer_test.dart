@@ -229,6 +229,25 @@ void main() {
       expect(enviados.reversed, ['llego', 'en_curso']);
     });
 
+    testWidgets('si el servidor falla 3 veces seguidas con el mismo paso, se pide avisar al encargado', (tester) async {
+      await abrir(
+        tester,
+        viajeJson(estado: 'en_camino'),
+        (e) => e.http.responder('POST', 'viajes/1/estado', 500, '{"message":"Server Error"}'),
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Llegué'));
+      await esperar(tester);
+      expect(find.text('Sin señal: 1 acción se enviará al reconectar'), findsOneWidget);
+
+      for (var i = 0; i < 2; i++) {
+        await tester.pump(const Duration(seconds: 30));
+        await esperar(tester);
+      }
+
+      expect(find.text('No se pudo enviar el viaje: avisá al encargado'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Iniciar viaje'), findsOneWidget);
+    });
+
     testWidgets('con señal no aparece el aviso mientras el paso sale', (tester) async {
       await abrir(tester, viajeJson(estado: 'en_camino'));
       final respuesta = e.http.demorar('POST', 'viajes/1/estado');

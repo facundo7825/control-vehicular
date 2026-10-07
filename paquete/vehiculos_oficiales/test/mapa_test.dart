@@ -885,6 +885,22 @@ void main() {
         expect(await almacen.exists(CacheOptions.defaultCacheKeyBuilder(url: servidor.pedidas.single)), isTrue);
       });
 
+      test('una tesela que ya está en el caché no se vuelve a leer del disco', () async {
+        final contado = _AlmacenContado();
+        almacen = contado;
+        final contenedor = ProviderContainer.test(
+          overrides: overrides(configuracion: const AsyncData(_configuracionPropia)),
+        );
+        final descargador = contenedor.read(descargadorTeselasProvider)!;
+        await descargador.descargar(const Tesela(14, 5223, 9460));
+        final lecturas = contado.lecturas;
+
+        await descargador.descargar(const Tesela(14, 5223, 9460));
+
+        expect(contado.lecturas, lecturas);
+        expect(servidor.pedidas, hasLength(1));
+      });
+
       test('en un servidor TMS la fila va invertida, como la pide el mapa', () async {
         const tms = Configuracion(
           gpsTurnoSeg: 10,
@@ -933,4 +949,15 @@ void main() {
       });
     });
   });
+}
+
+/// Cuenta las lecturas completas de una tesela (`get`).
+class _AlmacenContado extends MemCacheStore {
+  int lecturas = 0;
+
+  @override
+  Future<CacheResponse?> get(String key) {
+    lecturas++;
+    return super.get(key);
+  }
 }

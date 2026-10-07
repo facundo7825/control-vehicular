@@ -23,7 +23,8 @@ abstract interface class AlmacenCola {
   /// Reemplaza lo guardado por [puntos] del turno [turnoId] de [usuarioId].
   Future<void> guardar(int usuarioId, int turnoId, List<PuntoGps> puntos);
 
-  Future<void> borrar();
+  /// Lo guardado por [usuarioId] (lo de otros choferes queda: ver [purgarPendientesViejos]).
+  Future<void> borrar(int usuarioId);
 }
 
 /// Un archivo JSON ([subdirectorio]/[nombreArchivo]) dentro del directorio que devuelve [_directorio]. En
@@ -45,11 +46,12 @@ class AlmacenColaArchivo implements AlmacenCola {
   AlmacenColaArchivo(this._directorio, {this.nombre = nombreArchivo});
 
   static const subdirectorio = 'vehiculos_oficiales';
-  static const nombreArchivo = 'cola_ubicaciones.json';
+  static const nombreArchivo = 'cola_ubicaciones';
 
   final Future<Directory> Function() _directorio;
 
-  /// El archivo: [nombreArchivo] para la cola del turno, otro para los puntos de turnos ya cerrados.
+  /// El archivo es `<nombre>_<usuario>.json`, uno por chofer (lo de uno nunca pisa lo de otro): [nombreArchivo]
+  /// para la cola del turno, otro para los puntos de turnos ya cerrados.
   final String nombre;
 
   /// Compartida por todas las instancias: en producción todas usan el mismo archivo.
@@ -64,7 +66,7 @@ class AlmacenColaArchivo implements AlmacenCola {
   /// Un archivo sin `usuario_id` (de una versión anterior) no se sabe de quién es: se ignora.
   @override
   Future<({int turnoId, List<PuntoGps> puntos})?> leerCualquiera(int usuarioId) => _enOrden(() async {
-    final archivo = await _archivo();
+    final archivo = await _archivo(usuarioId);
     if (!await archivo.exists()) return null;
     try {
       final j = leerMapa(jsonDecode(await archivo.readAsString()));
@@ -85,7 +87,7 @@ class AlmacenColaArchivo implements AlmacenCola {
       'puntos': [for (final p in puntos) _aDisco(p)],
     });
     return _enOrden(() async {
-      final archivo = await _archivo();
+      final archivo = await _archivo(usuarioId);
       await archivo.parent.create(recursive: true);
       final temporal = _temporal(archivo);
       await temporal.writeAsString(contenido, flush: true);
@@ -95,14 +97,15 @@ class AlmacenColaArchivo implements AlmacenCola {
 
   /// También el temporal que pudo quedar de una escritura cortada o fallida.
   @override
-  Future<void> borrar() => _enOrden(() async {
-    final archivo = await _archivo();
+  Future<void> borrar(int usuarioId) => _enOrden(() async {
+    final archivo = await _archivo(usuarioId);
     for (final f in [archivo, _temporal(archivo)]) {
       if (await f.exists()) await f.delete();
     }
   });
 
-  Future<File> _archivo() async => File('${(await _directorio()).path}/$subdirectorio/$nombre');
+  Future<File> _archivo(int usuarioId) async =>
+      File('${(await _directorio()).path}/$subdirectorio/${nombre}_$usuarioId.json');
 
   static File _temporal(File archivo) => File('${archivo.path}.tmp');
 
@@ -150,7 +153,7 @@ class AlmacenColaNula implements AlmacenCola {
   Future<void> guardar(int usuarioId, int turnoId, List<PuntoGps> puntos) async {}
 
   @override
-  Future<void> borrar() async {}
+  Future<void> borrar(int usuarioId) async {}
 }
 
 final almacenColaProvider = Provider<AlmacenCola>(
@@ -162,5 +165,39 @@ final almacenColaProvider = Provider<AlmacenCola>(
 final almacenSinTurnoProvider = Provider<AlmacenCola>(
   (ref) => kIsWeb
       ? const AlmacenColaNula()
-      : AlmacenColaArchivo(getApplicationCacheDirectory, nombre: 'ubicaciones_sin_turno.json'),
+      : AlmacenColaArchivo(getApplicationCacheDirectory, nombre: 'ubicaciones_sin_turno'),
+);
+
+/// Lo pendiente de cada chofer (colas de ubicaciones y de acciones) que no se tocó en más de [edad] ya no le
+/// sirve al servidor (descarta los puntos y las acciones de más de 24 h): se borra, también lo de otros
+/// choferes que usaron el teléfono, así no queda su recorrido en el dispositivo (spec 10). Devuelve cuántos
+/// archivos borró. Nunca lanza.
+Future<int> purgarPendientesViejos(Directory base, {Duration edad = const Duration(hours: 24), DateTime? ahora}) async {
+  final carpeta = Directory('${base.path}/${AlmacenColaArchivo.subdirectorio}');
+  final limite = (ahora ?? DateTime.now()).subtract(edad);
+  // También los de una versión anterior, sin el chofer en el nombre (ya nadie los lee).
+  final deUnChofer = RegExp(r'^(cola_ubicaciones|ubicaciones_sin_turno|cola_acciones)(_\d+)?\.json(\.tmp)?$');
+  var borrados = 0;
+  try {
+    if (!await carpeta.exists()) return 0;
+    await for (final entidad in carpeta.list(followLinks: false)) {
+      if (entidad is! File || !deUnChofer.hasMatch(entidad.uri.pathSegments.last)) continue;
+      try {
+        if ((await entidad.stat()).modified.isBefore(limite)) {
+          await entidad.delete();
+          borrados++;
+        }
+      } catch (_) {
+        // Se está escribiendo o ya no está: queda para la próxima.
+      }
+    }
+  } catch (e) {
+    debugPrint('vehiculos_oficiales: no se pudo revisar lo pendiente guardado (${e.runtimeType}).');
+  }
+  return borrados;
+}
+
+/// Lo llama la sesión al quedar lista. En web no hay disco.
+final purgarPendientesViejosProvider = Provider<Future<void> Function()>(
+  (ref) => kIsWeb ? () async {} : () async => purgarPendientesViejos(await getApplicationCacheDirectory()),
 );

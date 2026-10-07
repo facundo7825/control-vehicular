@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -74,11 +75,15 @@ class UbicacionesAtrasadasNotifier extends Notifier<bool> {
 /// Por qué "Finalizar turno" espera (decisión 3 del plan sin señal).
 const esperandoSenalParaFinalizar = 'Esperando señal para enviar el viaje';
 
-/// "Finalizar turno" espera mientras haya acciones del viaje o puntos del GPS sin enviar: sin turno, el
-/// servidor ya no puede ubicar el recorrido que falta.
-final finalizarEsperaSenalProvider = Provider<bool>(
-  (ref) => hayAcciones(ref.watch(colaAccionesProvider)) || ref.watch(ubicacionesAtrasadasProvider),
-);
+/// Por qué "Finalizar turno" espera, o nulo si no espera. Mientras haya acciones del viaje o puntos del GPS sin
+/// enviar: sin turno, el servidor ya no puede ubicar el recorrido que falta. Si el servidor rechaza una y otra
+/// vez la acción ([EnvioAcciones.errorServidor]) no es la señal: se pide avisar al encargado.
+final motivoEsperaFinalizarProvider = Provider<String?>((ref) {
+  final acciones = hayAcciones(ref.watch(colaAccionesProvider));
+  if (acciones && ref.watch(envioAccionesProvider) == EnvioAcciones.errorServidor) return noSePudoEnviarViaje;
+  if (acciones || ref.watch(ubicacionesAtrasadasProvider)) return esperandoSenalParaFinalizar;
+  return null;
+});
 
 /// Hay acciones del viaje sin enviar (o todavía no se sabe: la cola se está leyendo del disco).
 bool hayAcciones(AsyncValue<List<AccionViaje>> cola) => !cola.hasError && !(cola.value?.isEmpty ?? false);
@@ -144,6 +149,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
   Future<void> _leerSinTurno() async {
     try {
       _puntosSinTurno.cargar(await ref.read(almacenSinTurnoProvider).leer(_yo, 0));
+      if (_descartarSinTurnoViejos()) await _guardarSinTurno();
     } catch (e) {
       debugPrint('vehiculos_oficiales: no se pudieron leer las ubicaciones sin turno (${e.runtimeType}).');
     }
@@ -383,7 +389,9 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
     if (hayAcciones(ref.read(colaAccionesProvider))) {
       await ref.read(colaAccionesProvider.notifier).sincronizar();
       if (!ref.mounted) return;
-      if (hayAcciones(ref.read(colaAccionesProvider))) throw const SinConexion('$esperandoSenalParaFinalizar.');
+      if (hayAcciones(ref.read(colaAccionesProvider))) {
+        throw SinConexion('${ref.read(motivoEsperaFinalizarProvider) ?? esperandoSenalParaFinalizar}.');
+      }
     }
     final vaciado = await _rastreador?.vaciar();
     if (!ref.mounted) return;
@@ -468,6 +476,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
   /// Agrega [puntos] a los de turnos cerrados, los guarda y empieza a mandarlos.
   Future<void> _agregarSinTurno(List<PuntoGps> puntos) async {
     _puntosSinTurno.cargar(puntos);
+    _descartarSinTurnoViejos();
     await _guardarSinTurno();
     unawaited(_enviarSinTurno());
   }
@@ -477,6 +486,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
   /// primer plano, al abrir y cuando salen las acciones. Nunca lanza.
   Future<void> _enviarSinTurno() async {
     final emisor = _emisorSinTurno;
+    if (_descartarSinTurnoViejos()) await _guardarSinTurno();
     if (emisor == null || _puntosSinTurno.largo == 0) return;
     if (_enviandoSinTurno) {
       _otraVezSinTurno = true; // p. ej. salieron las acciones mientras este envío estaba retenido
@@ -508,12 +518,20 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
     }
   }
 
+  /// El servidor no acepta puntos de más de 24 h: no se guardan ni se mandan.
+  /// Devuelve si sacó alguno.
+  bool _descartarSinTurnoViejos() {
+    final antes = _puntosSinTurno.largo;
+    _puntosSinTurno.descartarAnteriores(clock.now().toUtc().subtract(const Duration(hours: 24)));
+    return _puntosSinTurno.largo != antes;
+  }
+
   /// Nunca lanza.
   Future<void> _guardarSinTurno() async {
     final almacen = ref.read(almacenSinTurnoProvider);
     final puntos = _puntosSinTurno.puntos;
     try {
-      await (puntos.isEmpty ? almacen.borrar() : almacen.guardar(_yo, 0, puntos));
+      await (puntos.isEmpty ? almacen.borrar(_yo) : almacen.guardar(_yo, 0, puntos));
     } catch (e) {
       debugPrint('vehiculos_oficiales: no se pudieron guardar las ubicaciones sin turno (${e.runtimeType}).');
     }
@@ -527,7 +545,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
       final guardado = await almacen.leerCualquiera(_yo);
       if (!ref.mounted || guardado == null || guardado.turnoId == turnoAbierto) return;
       if (guardado.puntos.isNotEmpty) await _agregarSinTurno(guardado.puntos);
-      await almacen.borrar();
+      await almacen.borrar(_yo);
     } catch (e) {
       debugPrint('vehiculos_oficiales: no se pudo leer la cola de ubicaciones guardada (${e.runtimeType}).');
     }
@@ -550,7 +568,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
     final almacen = ref.read(almacenColaProvider);
     try {
       final puntos = await almacen.leer(_yo, turnoId);
-      if (puntos.isEmpty) await almacen.borrar();
+      if (puntos.isEmpty) await almacen.borrar(_yo);
       return puntos;
     } catch (e) {
       debugPrint('vehiculos_oficiales: no se pudo leer la cola de ubicaciones guardada (${e.runtimeType}).');
@@ -561,7 +579,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
   /// Nunca lanza: un error de disco no puede cortar el cierre del turno.
   Future<void> _borrarCola() async {
     try {
-      await ref.read(almacenColaProvider).borrar();
+      await ref.read(almacenColaProvider).borrar(_yo);
     } catch (e) {
       debugPrint('vehiculos_oficiales: no se pudo borrar la cola de ubicaciones guardada (${e.runtimeType}).');
     }

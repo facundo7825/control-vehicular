@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:dio_cache_interceptor/dio_cache_interceptor.dart' show CacheOptions, CacheStore;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_map_cache/flutter_map_cache.dart';
@@ -47,16 +48,19 @@ final descargadorTeselasProvider = Provider.autoDispose<DescargadorTeselas?>((re
   final fondo = ref.watch(mapaFondoProvider);
   final teselas = ref.watch(teselasConCacheProvider);
   if (fondo == null || teselas == null || fondo.url.contains('tile.openstreetmap.org')) return null;
-  return _DescargadorOsm(teselas, fondo);
+  final almacen = ref.watch(almacenTeselasProvider);
+  if (almacen == null) return null;
+  return _DescargadorOsm(teselas, almacen, fondo);
 });
 
 class _DescargadorOsm implements DescargadorTeselas {
-  _DescargadorOsm(this._teselas, MapaFondo fondo)
+  _DescargadorOsm(this._teselas, this._almacen, MapaFondo fondo)
     : zoomMaximo = fondo.maxZoom,
       // Solo para armar las direcciones como las arma el mapa (TMS, subdominios): no se dibuja.
       _capa = TileLayer(urlTemplate: fondo.url, tms: fondo.tms, maxNativeZoom: fondo.maxZoom);
 
   final CachedTileProvider _teselas;
+  final CacheStore _almacen;
   final TileLayer _capa;
 
   @override
@@ -65,6 +69,8 @@ class _DescargadorOsm implements DescargadorTeselas {
   @override
   Future<void> descargar(Tesela tesela) async {
     final url = _teselas.getTileUrl(TileCoordinates(tesela.x, tesela.y, tesela.z), _capa);
+    // Ya guardada: no hace falta leerla entera del disco (es lo que haría el caché del cliente).
+    if (await _almacen.exists(CacheOptions.defaultCacheKeyBuilder(url: Uri.parse(url)))) return;
     // Por el mismo cliente que el mapa: la respuesta queda en su caché (o sale de ahí sin pedirla).
     await _teselas.dio.get<List<int>>(
       url,

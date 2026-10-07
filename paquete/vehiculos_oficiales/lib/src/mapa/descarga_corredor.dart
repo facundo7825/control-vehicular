@@ -9,6 +9,8 @@ import '../modelos/modelos.dart';
 import '../sesion/sesion.dart';
 import '../viaje/viaje_actual.dart';
 import 'corredor_teselas.dart';
+import '../tiempo_real/tiempo_real.dart';
+import '../tiempo_real/tiempo_real_provider.dart';
 import 'mapa_osm.dart' show descargadorTeselasProvider;
 import 'ruta.dart';
 
@@ -61,6 +63,17 @@ class DescargaCorredorNotifier extends Notifier<DescargaCorredor?> {
     final descargador = ref.watch(descargadorTeselasProvider);
     if (descargador == null) return null;
     final ruta = ref.watch(rutaProvider(largo.tramo)).value;
+    // Al reconectar: el recorrido que no llegó se vuelve a pedir, y una descarga que se dejó por falta de señal
+    // se retoma (lo ya bajado sale del caché sin pedirlo otra vez).
+    ref.listen(estadoConexionProvider, (antes, ahora) {
+      if (ahora != EstadoConexion.conectado || antes == EstadoConexion.conectado) return;
+      final actual = stateOrNull;
+      if (ruta == null || ruta.puntos.isEmpty) {
+        ref.invalidate(rutaProvider(largo.tramo));
+      } else if (actual != null && actual.terminada && actual.bajadas < actual.total) {
+        ref.invalidateSelf();
+      }
+    });
     if (ruta == null || ruta.puntos.isEmpty) return null;
 
     final teselas = teselasDelCorredor(

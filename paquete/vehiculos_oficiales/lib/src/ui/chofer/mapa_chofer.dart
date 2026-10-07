@@ -68,7 +68,7 @@ class _MapaChoferState extends ConsumerState<MapaChofer> {
     // La agenda llega ordenada por fecha: la primera reserva confirmada es la próxima.
     final proxima = ref.watch(agendaProvider).value?.reservas.firstOrNull;
     // Sin turno, el servidor ya no podría ubicar los pasos y el recorrido que faltan enviar.
-    final esperaSenal = ref.watch(finalizarEsperaSenalProvider);
+    final esperaSenal = ref.watch(motivoEsperaFinalizarProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -146,10 +146,10 @@ class _MapaChoferState extends ConsumerState<MapaChofer> {
                   if (aqui == null && !posicion.sinGps) const Text('Buscando tu ubicación…'),
                   const SizedBox(height: 16),
                   OutlinedButton(
-                    onPressed: esperaSenal ? null : () => _finalizar(context),
+                    onPressed: esperaSenal != null ? null : () => _finalizar(context),
                     child: const Text('Finalizar turno'),
                   ),
-                  if (esperaSenal) const Text(esperandoSenalParaFinalizar, textAlign: TextAlign.center),
+                  if (esperaSenal != null) Text(esperaSenal, textAlign: TextAlign.center),
                 ],
               ),
             ),

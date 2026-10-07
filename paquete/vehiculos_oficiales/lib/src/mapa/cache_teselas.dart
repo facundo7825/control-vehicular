@@ -53,7 +53,7 @@ class AlmacenTeselasArchivo extends CacheStore {
   final Duration maxEdad;
 
   late final Future<Directory> _carpeta = _directorio().then((d) => Directory('${d.path}/$subdirectorio'));
-  late final Future<FileCacheStore> _almacen = _carpeta.then((c) => FileCacheStore(c.path));
+  late final Future<FileCacheStore> _almacen = _carpeta.then((c) => _ArchivosTeselas(c.path));
 
   Future<int> recortar() async => recortarDirectorio(await _carpeta, maxBytes: maxBytes, maxEdad: maxEdad);
 
@@ -121,4 +121,59 @@ Future<int> recortarDirectorio(
     }
   }
   return borrados;
+}
+
+/// [FileCacheStore] sin lo que hace al crearse (`clean(staleOnly: true)`: lista con `listSync` y lee **cada**
+/// tesela guardada para ver si venció, sin esperar ni capturar errores) y con listados asíncronos que no lanzan.
+/// El vencimiento por edad y el tamaño máximo los maneja [recortarDirectorio]; leer, guardar y borrar una
+/// tesela son los del paquete.
+class _ArchivosTeselas extends FileCacheStore {
+  _ArchivosTeselas(this._raiz) : super(_raiz) {
+    _creado = true;
+  }
+
+  final String _raiz;
+
+  /// Falso mientras corre el constructor del paquete (que llama a [clean]).
+  bool _creado = false;
+
+  @override
+  Future<void> clean({CachePriority priorityOrBelow = CachePriority.high, bool staleOnly = false}) async {
+    if (!_creado) return;
+    for (final clave in await _claves()) {
+      await delete(clave, staleOnly: staleOnly);
+    }
+  }
+
+  @override
+  Future<List<CacheResponse>> getFromPath(RegExp pathPattern, {Map<String, String?>? queryParams}) async {
+    final respuestas = <CacheResponse>[];
+    for (final clave in await _claves()) {
+      final r = await get(clave);
+      if (r != null && pathExists(r.url, pathPattern, queryParams: queryParams)) respuestas.add(r);
+    }
+    return respuestas;
+  }
+
+  @override
+  Future<void> deleteFromPath(RegExp pathPattern, {Map<String, String?>? queryParams}) async {
+    for (final r in await getFromPath(pathPattern, queryParams: queryParams)) {
+      await delete(r.key);
+    }
+  }
+
+  /// Las claves (nombres de archivo) de todas las prioridades. Nunca lanza.
+  Future<List<String>> _claves() async {
+    final claves = <String>[];
+    try {
+      final raiz = Directory(_raiz);
+      if (!await raiz.exists()) return claves;
+      await for (final entidad in raiz.list(recursive: true, followLinks: false)) {
+        if (entidad is File) claves.add(entidad.uri.pathSegments.last);
+      }
+    } catch (e) {
+      debugPrint('vehiculos_oficiales: no se pudo listar el caché del mapa (${e.runtimeType}).');
+    }
+    return claves;
+  }
 }

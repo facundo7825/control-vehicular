@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:vehiculos_oficiales/src/api/errores_api.dart';
 import 'package:vehiculos_oficiales/src/chofer/almacen_cola.dart';
 import 'package:vehiculos_oficiales/src/chofer/cola_acciones.dart';
@@ -215,8 +216,9 @@ class AlmacenColaMemoria implements AlmacenCola {
   }
 
   @override
-  Future<void> borrar() async {
+  Future<void> borrar(int usuarioId) async {
     if (error != null) throw error!;
+    if (usuarioId != this.usuarioId) return; // el archivo de otro chofer no se toca
     borrados++;
     turnoId = null;
     puntos = [];
@@ -247,9 +249,10 @@ class AlmacenAccionesMemoria implements AlmacenAcciones {
   }
 
   @override
-  Future<void> borrar() async {
+  Future<void> borrar(int usuarioId) async {
     if (error != null) throw error!;
-    usuarioId = null;
+    if (usuarioId != this.usuarioId) return;
+    this.usuarioId = null;
     acciones = [];
   }
 }
@@ -267,3 +270,8 @@ class AlmacenJsonMemoria implements AlmacenJson {
   @override
   Future<void> borrar() async => datos = null;
 }
+
+/// [fakeAsync] con el reloj en la hora de [punto] (las 12:00 del 1/10/2026): los puntos de los tests no tienen
+/// más de 24 h, que el servidor ya no acepta y la app descarta.
+void enHoraDeLosPuntos(void Function(FakeAsync async) prueba) =>
+    fakeAsync(prueba, initialTime: DateTime.utc(2026, 10, 1, 12, 30));

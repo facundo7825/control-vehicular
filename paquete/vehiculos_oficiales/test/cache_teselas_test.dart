@@ -84,6 +84,25 @@ void main() {
       expect(await almacen.exists('clave'), isFalse);
     });
 
+    test('al abrir no lee ni borra las teselas guardadas (el recorte por edad y tamaño es aparte)', () async {
+      // Una que no se puede leer: el FileCacheStore del paquete la leería (y la borraría) al crearse.
+      final rara = await archivo('vehiculos_oficiales/teselas/normal/rara', 3, ahora);
+      final almacen = AlmacenTeselasArchivo(() async => temporal);
+
+      expect(await almacen.exists('otra'), isFalse);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(await rara.exists(), isTrue);
+    });
+
+    test('getFromPath y clean listan sin bloquear y no fallan sin carpeta', () async {
+      final almacen = AlmacenTeselasArchivo(() async => Directory('${temporal.path}/no-existe'));
+
+      expect(await almacen.getFromPath(RegExp('.*')), isEmpty);
+      await almacen.clean();
+      await almacen.deleteFromPath(RegExp('.*'));
+    });
+
     test('el máximo es de unos 200 MB', () {
       expect(maxBytesTeselas, 200 * 1024 * 1024);
     });

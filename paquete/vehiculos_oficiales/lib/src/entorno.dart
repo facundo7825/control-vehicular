@@ -30,11 +30,16 @@ final avisoSesionProvider = Provider<AvisoSesionInvalida>(
   (ref) => AvisoSesionInvalida(ref.watch(entornoProvider).onSesionInvalida),
 );
 
+/// Cronómetro monotónico para la hora del servidor (ver `ClienteApi.horaServidor`). Los tests lo reemplazan
+/// por uno que sigue al reloj falso.
+final cronometroProvider = Provider<Stopwatch Function()>((ref) => Stopwatch.new);
+
 final clienteApiProvider = Provider<ClienteApi>(
   (ref) => ClienteApi(
     baseApi: ref.watch(entornoProvider).config.apiUri,
     alRecibir401: () => ref.read(avisoSesionProvider).avisar(),
     adaptador: ref.watch(adaptadorHttpProvider),
+    cronometro: ref.watch(cronometroProvider),
   ),
 );
 
