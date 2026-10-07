@@ -1,6 +1,7 @@
 <?php
 
 use App\Enums\EstadoViaje;
+use App\Enums\TipoViaje;
 use App\Filament\Pages\Reportes;
 use App\Mapas\Distancia;
 use App\Models\PuntoRecorrido;
@@ -117,6 +118,29 @@ it('promedia la llegada de aceptado a llegó en los viajes inmediatos', function
     expect(app(ReportesPanel::class)->porChofer('2026-10-01', '2026-10-31')[0]['llegada_promedio_min'])->toBe(8.0);
 });
 
+it('suma las horas reales de los viajes largos finalizados en el rango', function () {
+    $chofer = Usuario::factory()->chofer()->create(['nombre' => 'Ana Chofer']);
+    $largo = fn (string $inicio, int $minutos, array $attrs = []) => Viaje::factory()->create([
+        'tipo' => TipoViaje::Largo, 'chofer_id' => $chofer->id, 'estado' => EstadoViaje::Finalizado,
+        'programado_para' => Carbon::parse($inicio)->subMinutes(30),
+        'iniciado_en' => Carbon::parse($inicio), 'finalizado_en' => Carbon::parse($inicio)->addMinutes($minutos),
+        'metros_recorridos' => 0, ...$attrs,
+    ]);
+    $largo('2026-10-10 10:00:00', 600);
+    $largo('2026-10-12 10:00:00', 270);
+    // Fuera del rango y un inmediato: no suman.
+    $largo('2026-09-10 10:00:00', 600);
+    $largo('2026-10-11 10:00:00', 120, ['tipo' => TipoViaje::Inmediato, 'programado_para' => null]);
+
+    expect(app(ReportesPanel::class)->porChofer('2026-10-01', '2026-10-31')[0])
+        ->horas_largos->toBe(14.5)
+        ->finalizados->toBe(3);
+
+    Livewire::test(Reportes::class)
+        ->assertSee('Horas en viajes largos')
+        ->assertSee('14,5');
+});
+
 it('usa por defecto el mes actual en días locales', function () {
     // 01/11 01:00 UTC es todavía el 31/10 en Buenos Aires.
     $this->travelTo(Carbon::parse('2026-11-01 01:00:00'));
@@ -218,8 +242,8 @@ it('exporta un xlsx con una hoja por chofer y otra por vehículo', function () {
 
     expect(array_keys($hojas))->toBe(['Choferes', 'Vehículos'])
         ->and($hojas['Choferes'])->toEqual([
-            ['Chofer', 'Viajes finalizados', 'Viajes cancelados', 'Km recorridos', 'Horas de turno', 'Llegada promedio (min)'],
-            ['Ana Chofer', 1, 0, $km, 2, 6],
+            ['Chofer', 'Viajes finalizados', 'Viajes cancelados', 'Km recorridos', 'Horas de turno', 'Horas en viajes largos', 'Llegada promedio (min)'],
+            ['Ana Chofer', 1, 0, $km, 2, 0, 6],
         ])
         ->and($hojas['Vehículos'])->toEqual([
             ['Patente', 'Vehículo', 'Viajes finalizados', 'Km recorridos', 'Horas en turno'],

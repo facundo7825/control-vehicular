@@ -30,6 +30,7 @@
                             <th class="fi-ta-header-cell fi-align-end">Cancelados</th>
                             <th class="fi-ta-header-cell fi-align-end">Km recorridos</th>
                             <th class="fi-ta-header-cell fi-align-end">Horas de turno</th>
+                            <th class="fi-ta-header-cell fi-align-end">Horas en viajes largos</th>
                             <th class="fi-ta-header-cell fi-align-end">Llegada promedio (min)</th>
                         </tr>
                     </thead>
@@ -41,6 +42,7 @@
                                 <td class="fi-ta-cell" style="{{ $numero }}">{{ $fila['cancelados'] }}</td>
                                 <td class="fi-ta-cell" style="{{ $numero }}">{{ $this->numero($fila['km'], 2) }}</td>
                                 <td class="fi-ta-cell" style="{{ $numero }}">{{ $this->numero($fila['horas_turno']) }}</td>
+                                <td class="fi-ta-cell" style="{{ $numero }}">{{ $this->numero($fila['horas_largos']) }}</td>
                                 <td class="fi-ta-cell" style="{{ $numero }}">{{ $this->numero($fila['llegada_promedio_min']) }}</td>
                             </tr>
                         @endforeach

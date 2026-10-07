@@ -14,12 +14,16 @@ use App\Filament\Resources\Viajes\Pages\ViewViaje;
 use App\Filament\Resources\Viajes\RelationManagers\OfertasRelationManager;
 use App\Mapas\BuscadorLugares;
 use App\Models\Usuario;
+use App\Models\Vehiculo;
 use App\Models\Viaje;
 use App\Servicios\CalculadorEstadoChofer;
 use App\Servicios\DisponibilidadReservas;
+use App\Servicios\HorarioLaboral;
 use App\Servicios\Parametros;
+use App\Servicios\RotacionViajesLargos;
 use App\Servicios\ServicioReservas;
 use App\Servicios\ServicioViaje;
+use App\Servicios\ServicioViajesLargos;
 use BackedEnum;
 use Carbon\Exceptions\InvalidFormatException;
 use Filament\Actions\Action;
@@ -65,7 +69,8 @@ class ViajeResource extends Resource
     protected static ?int $navigationSort = 10;
 
     /**
-     * "Nuevo viaje" (solo creación): el admin pide un viaje o una reserva para otra persona. Las mismas reglas
+     * "Nuevo viaje" (solo creación): el admin pide un viaje o una reserva para otra persona, o carga un viaje largo
+     * (salida, regreso, pasajeros, el chofer al que le toca por rotación y un vehículo libre). Las mismas reglas
      * que la API (ViajeController::store y ReservaController::store); lo demás lo validan los servicios.
      */
     public static function form(Schema $schema): Schema
@@ -94,25 +99,35 @@ class ViajeResource extends Resource
                             ->required(),
                         ToggleButtons::make('tipo')
                             ->label('Tipo')
-                            // Los viajes largos se cargan con su propio formulario (con chofer, vehículo y regreso).
-                            ->options(collect([TipoViaje::Inmediato, TipoViaje::Reserva])->mapWithKeys(fn (TipoViaje $t) => [$t->value => $t->getLabel()])->all())
+                            ->options(collect(TipoViaje::cases())->mapWithKeys(fn (TipoViaje $t) => [$t->value => $t->getLabel()])->all())
                             ->inline()
                             ->default(TipoViaje::Inmediato->value)
                             ->required()
                             ->live()
-                            ->afterStateUpdated(function (Set $set, ?string $state): void {
+                            ->afterStateUpdated(function (Get $get, Set $set, ?string $state): void {
                                 $set('modo', $state === TipoViaje::Reserva->value
                                     ? ModoViaje::CualquieraDisponible->value
                                     : ModoViaje::MasCercano->value);
                                 $set('chofer_id', null);
+                                $set('vehiculo_id', null);
+                                self::sugerirParaViajeLargo($get, $set);
                             }),
                         DateTimePicker::make('programado_para')
-                            ->label('Programado para (hora local)')
+                            ->label(fn (Get $get): string => self::esLargo($get) ? 'Salida (hora local)' : 'Programado para (hora local)')
                             // Sin zona: el valor es hora local, como la que manda la app (HoraLocal::interpretar).
                             ->seconds(false)
-                            ->visible(fn (Get $get): bool => $get('tipo') === TipoViaje::Reserva->value)
+                            ->visible(fn (Get $get): bool => $get('tipo') === TipoViaje::Reserva->value || self::esLargo($get))
                             ->required()
-                            ->live(onBlur: true),
+                            ->live(onBlur: true)
+                            ->afterStateUpdated(fn (Get $get, Set $set) => self::sugerirParaViajeLargo($get, $set)),
+                        DateTimePicker::make('regreso_estimado')
+                            ->label('Regreso estimado (hora local)')
+                            ->seconds(false)
+                            ->helperText('Posterior a la salida; un viaje largo puede durar como mucho '.ServicioViajesLargos::MAX_DIAS.' días.')
+                            ->visible(fn (Get $get): bool => self::esLargo($get))
+                            ->required()
+                            ->live(onBlur: true)
+                            ->afterStateUpdated(fn (Get $get, Set $set) => self::sugerirParaViajeLargo($get, $set)),
                         Select::make('modo')
                             ->label('Modo')
                             ->options(fn (Get $get): array => collect($get('tipo') === TipoViaje::Reserva->value
@@ -122,17 +137,38 @@ class ViajeResource extends Resource
                                 ->all())
                             ->default(ModoViaje::MasCercano->value)
                             ->selectablePlaceholder(false)
+                            // Un viaje largo se asigna directo: el chofer se elige siempre.
+                            ->visible(fn (Get $get): bool => ! self::esLargo($get))
                             ->required()
                             ->live(),
                         Select::make('chofer_id')
                             ->label('Chofer')
-                            ->options(fn (Get $get): array => self::choferesParaNuevoViaje($get))
+                            ->options(fn (Get $get): array => self::esLargo($get)
+                                ? self::choferesParaViajeLargo($get)
+                                : self::choferesParaNuevoViaje($get))
                             ->searchable()
-                            ->visible(fn (Get $get): bool => $get('modo') === ModoViaje::Especifico->value)
-                            ->helperText(fn (Get $get): string => $get('tipo') === TipoViaje::Reserva->value
-                                ? 'Choferes con la franja libre en su agenda (elegí antes la hora, el origen y el destino).'
-                                : 'Choferes libres ahora.')
+                            ->visible(fn (Get $get): bool => self::esLargo($get) || $get('modo') === ModoViaje::Especifico->value)
+                            ->helperText(fn (Get $get): string => match (true) {
+                                self::esLargo($get) => 'Primero el que hace más tiempo que no hace un viaje largo (rotación). Solo choferes con la franja libre.',
+                                $get('tipo') === TipoViaje::Reserva->value => 'Choferes con la franja libre en su agenda (elegí antes la hora, el origen y el destino).',
+                                default => 'Choferes libres ahora.',
+                            })
+                            ->required()
+                            ->live()
+                            ->afterStateUpdated(fn (Get $get, Set $set) => self::sugerirVehiculo($get, $set)),
+                        Select::make('vehiculo_id')
+                            ->label('Vehículo')
+                            ->options(fn (Get $get): array => self::vehiculosParaViajeLargo($get))
+                            ->searchable()
+                            ->visible(fn (Get $get): bool => self::esLargo($get))
+                            ->helperText('El habitual del chofer primero; después los que no están en otro viaje largo en la franja.')
                             ->required(),
+                        TextInput::make('pasajeros')
+                            ->label('Pasajeros')
+                            ->helperText('Otras personas que viajan además del solicitante.')
+                            ->maxLength(255)
+                            ->visible(fn (Get $get): bool => self::esLargo($get))
+                            ->columnSpanFull(),
                         TextInput::make('motivo')
                             ->label('Motivo')
                             ->maxLength(255)
@@ -268,6 +304,139 @@ class ViajeResource extends Resource
         });
     }
 
+    private static function esLargo(Get $get): bool
+    {
+        return $get('tipo') === TipoViaje::Largo->value;
+    }
+
+    /**
+     * Salida y regreso de un viaje largo (ServicioViajesLargos::franja), o null si todavía no son válidos.
+     *
+     * @return array{0: Carbon, 1: Carbon}|null
+     */
+    private static function franjaViajeLargo(Get $get): ?array
+    {
+        $salida = $get('programado_para');
+        $regreso = $get('regreso_estimado');
+        if (! is_string($salida) || ! is_string($regreso) || blank($salida) || blank($regreso)) {
+            return null;
+        }
+
+        try {
+            return app(ServicioViajesLargos::class)->franja($salida, $regreso);
+        } catch (ReglaNegocio|InvalidFormatException) {
+            return null;
+        }
+    }
+
+    /**
+     * Choferes con la franja libre, en el orden de la rotación (el primero es al que le toca), con su último
+     * viaje largo: "Ana — Último viaje largo: 12/09 (Tinogasta)" o "… Nunca".
+     *
+     * @return array<int, string>
+     */
+    private static function choferesParaViajeLargo(Get $get): array
+    {
+        $franja = self::franjaViajeLargo($get);
+        if ($franja === null) {
+            return [];
+        }
+        [$salida, $regreso] = $franja;
+        $desde = $salida->toIso8601String();
+        $hasta = $regreso->toIso8601String();
+
+        // Como en las reservas: las opciones se piden varias veces por request; se calculan una vez por franja.
+        return once(function () use ($desde, $hasta): array {
+            return app(RotacionViajesLargos::class)
+                ->ordenados(Carbon::parse($desde), Carbon::parse($hasta))
+                ->mapWithKeys(fn (array $f) => [
+                    $f['chofer']->id => "{$f['chofer']->nombre} — Último viaje largo: ".RotacionViajesLargos::etiquetaUltimo($f['ultimo']),
+                ])
+                ->all();
+        });
+    }
+
+    /**
+     * Vehículos activos que no están en otro viaje largo en la franja; el habitual del chofer elegido, primero.
+     *
+     * @return array<int, string>
+     */
+    private static function vehiculosParaViajeLargo(Get $get): array
+    {
+        $franja = self::franjaViajeLargo($get);
+        if ($franja === null) {
+            return [];
+        }
+        [$salida, $regreso] = $franja;
+        $desde = $salida->toIso8601String();
+        $minutos = (int) $salida->diffInMinutes($regreso);
+
+        $libres = once(function () use ($desde, $minutos): array {
+            $disponibilidad = app(DisponibilidadReservas::class);
+
+            return Vehiculo::where('activo', true)
+                ->orderBy('patente')
+                ->get()
+                ->filter(fn (Vehiculo $v) => $disponibilidad->vehiculoDisponible($v->id, Carbon::parse($desde), $minutos))
+                ->mapWithKeys(fn (Vehiculo $v) => [$v->id => trim("{$v->patente} — {$v->marca} {$v->modelo}")])
+                ->all();
+        });
+
+        $habitual = self::vehiculoHabitual($get('chofer_id'));
+        if ($habitual !== null && isset($libres[$habitual])) {
+            return [$habitual => "{$libres[$habitual]} (habitual)"] + $libres;
+        }
+
+        return $libres;
+    }
+
+    private static function vehiculoHabitual(mixed $choferId): ?int
+    {
+        return filled($choferId) ? Usuario::whereKey($choferId)->value('vehiculo_habitual_id') : null;
+    }
+
+    /**
+     * Viaje largo: al cambiar la franja se preselecciona al chofer al que le toca, salvo que el elegido siga libre.
+     */
+    private static function sugerirParaViajeLargo(Get $get, Set $set): void
+    {
+        if (! self::esLargo($get)) {
+            return;
+        }
+
+        $choferes = self::choferesParaViajeLargo($get);
+        $elegido = $get('chofer_id');
+
+        if (filled($elegido) && isset($choferes[$elegido])) {
+            // El mismo chofer: se conserva el vehículo si sigue libre.
+            if (filled($get('vehiculo_id')) && ! isset(self::vehiculosParaViajeLargo($get)[$get('vehiculo_id')])) {
+                $set('vehiculo_id', null);
+            }
+
+            return;
+        }
+
+        $set('chofer_id', array_key_first($choferes));
+        self::sugerirVehiculo($get, $set);
+    }
+
+    /** Viaje largo: al elegir el chofer se preselecciona su vehículo habitual, si está libre en la franja. */
+    private static function sugerirVehiculo(Get $get, Set $set): void
+    {
+        if (! self::esLargo($get)) {
+            return;
+        }
+
+        $vehiculos = self::vehiculosParaViajeLargo($get);
+        $habitual = self::vehiculoHabitual($get('chofer_id'));
+
+        if ($habitual !== null && isset($vehiculos[$habitual])) {
+            $set('vehiculo_id', $habitual);
+        } elseif (! isset($vehiculos[$get('vehiculo_id')])) {
+            $set('vehiculo_id', null);
+        }
+    }
+
     public static function infolist(Schema $schema): Schema
     {
         $fecha = fn (string $campo, string $etiqueta) => TextEntry::make($campo)
@@ -294,6 +463,21 @@ class ViajeResource extends Resource
                         TextEntry::make('destino_direccion')->label('Destino')
                             ->state(fn (Viaje $record): string => self::describirLugar($record, 'destino')),
                         TextEntry::make('duracion_estimada_min')->label('Duración estimada')->suffix(' min')->placeholder('—'),
+                        TextEntry::make('pasajeros')->placeholder('—')
+                            ->visible(fn (Viaje $record): bool => $record->tipo === TipoViaje::Largo),
+                    ]),
+                Section::make('Viaje largo')
+                    ->columns(3)
+                    ->visible(fn (Viaje $record): bool => $record->tipo === TipoViaje::Largo)
+                    ->schema([
+                        $fecha('regreso_estimado', 'Regreso estimado'),
+                        TextEntry::make('duracion_real')->label('Duración real')->placeholder('—')
+                            ->state(fn (Viaje $record): ?string => self::formatearDuracion(app(HorarioLaboral::class)->duracionRealMin($record))),
+                        TextEntry::make('fuera_de_horario')->label('Horario')
+                            ->badge()
+                            ->color('warning')
+                            ->state('Fuera del horario laboral')
+                            ->visible(fn (Viaje $record): bool => app(HorarioLaboral::class)->fueraDeHorario($record)),
                     ]),
                 Section::make('Línea de tiempo')
                     ->columns(4)
@@ -462,6 +646,18 @@ class ViajeResource extends Resource
 
                 Notification::make()->success()->title('Chofer asignado')->send();
             });
+    }
+
+    /** "15 h 30 min" (o "45 min"); null sin dato. */
+    private static function formatearDuracion(?int $minutos): ?string
+    {
+        if ($minutos === null) {
+            return null;
+        }
+
+        return $minutos < 60
+            ? "$minutos min"
+            : sprintf('%d h %02d min', intdiv($minutos, 60), $minutos % 60);
     }
 
     /** Dirección de un punto, o "Ubicación marcada en el mapa" si todavía no tiene. */
