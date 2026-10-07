@@ -10,6 +10,7 @@ use App\Models\Alerta;
 use App\Models\OfertaViaje;
 use App\Models\Usuario;
 use App\Models\Viaje;
+use Carbon\CarbonInterface;
 use Illuminate\Support\Facades\DB;
 
 /** Única puerta para cambiar el estado de un viaje (spec 5.1). */
@@ -55,9 +56,10 @@ class MaquinaEstadosViaje
             || ($comoAdmin && in_array($hacia, self::SOLO_ADMIN[$desde->value] ?? [], true));
     }
 
-    public function transicionar(Viaje $viaje, E $hacia, array $atributos = []): bool
+    /** @param  CarbonInterface|null  $momento  cuándo ocurrió (la hora real del chofer); sin él, ahora */
+    public function transicionar(Viaje $viaje, E $hacia, array $atributos = [], ?CarbonInterface $momento = null): bool
     {
-        return $this->aplicar($viaje, $hacia, $atributos, estricto: true);
+        return $this->aplicar($viaje, $hacia, $atributos, estricto: true, momento: $momento);
     }
 
     /** Como transicionar, pero devuelve false (sin lanzar) si el estado actual ya no lo permite. */
@@ -108,9 +110,11 @@ class MaquinaEstadosViaje
         }, attempts: 3);
     }
 
-    private function aplicar(Viaje $viaje, E $hacia, array $atributos, bool $estricto, bool $comoAdmin = false, ?array $desde = null): bool
-    {
-        return DB::transaction(function () use ($viaje, $hacia, $atributos, $estricto, $comoAdmin, $desde) {
+    private function aplicar(
+        Viaje $viaje, E $hacia, array $atributos, bool $estricto, bool $comoAdmin = false, ?array $desde = null,
+        ?CarbonInterface $momento = null,
+    ): bool {
+        return DB::transaction(function () use ($viaje, $hacia, $atributos, $estricto, $comoAdmin, $desde, $momento) {
             $this->sincronizarConFilaBloqueada($viaje);
 
             if ($desde !== null && ! in_array($viaje->estado, $desde, true)) {
@@ -128,7 +132,7 @@ class MaquinaEstadosViaje
                 throw new TransicionInvalida("El viaje no puede pasar de {$viaje->estado->value} a {$hacia->value}.");
             }
 
-            $this->guardar($viaje, $hacia, $atributos, porAdmin: $comoAdmin);
+            $this->guardar($viaje, $hacia, $atributos, porAdmin: $comoAdmin, momento: $momento);
 
             return true;
         }, attempts: 3);
@@ -145,7 +149,7 @@ class MaquinaEstadosViaje
         $viaje->setRelations([]);
     }
 
-    private function guardar(Viaje $viaje, E $hacia, array $atributos, bool $porAdmin = false): void
+    private function guardar(Viaje $viaje, E $hacia, array $atributos, bool $porAdmin = false, ?CarbonInterface $momento = null): void
     {
         $desde = $viaje->estado;
         $choferAnterior = $viaje->chofer_id;
@@ -158,7 +162,7 @@ class MaquinaEstadosViaje
         $viaje->fill($atributos);
         $viaje->estado = $hacia;
         if ($marca = self::MARCAS[$hacia->value] ?? null) {
-            $viaje->{$marca} = now();
+            $viaje->{$marca} = $momento ?? now();
         }
         if ($hacia === E::Finalizado) {
             // Se calcula una sola vez (los puntos de un viaje): el mapa y los reportes solo suman la columna.

@@ -13,6 +13,7 @@ use App\Filament\Resources\Viajes\Pages\ListViajes;
 use App\Filament\Resources\Viajes\Pages\ViewViaje;
 use App\Filament\Resources\Viajes\RelationManagers\OfertasRelationManager;
 use App\Mapas\BuscadorLugares;
+use App\Models\AccionViaje;
 use App\Models\Usuario;
 use App\Models\Vehiculo;
 use App\Models\Viaje;
@@ -24,6 +25,7 @@ use App\Servicios\RotacionViajesLargos;
 use App\Servicios\ServicioReservas;
 use App\Servicios\ServicioViaje;
 use App\Servicios\ServicioViajesLargos;
+use App\Support\HoraLocal;
 use BackedEnum;
 use Carbon\Exceptions\InvalidFormatException;
 use Filament\Actions\Action;
@@ -518,9 +520,12 @@ class ViajeResource extends Resource
                         $fecha('created_at', 'Pedido'),
                         $fecha('programado_para', 'Programado para'),
                         $fecha('aceptado_en', 'Aceptado'),
-                        $fecha('llego_en', 'Llegó'),
-                        $fecha('iniciado_en', 'Inició'),
-                        $fecha('finalizado_en', 'Finalizó'),
+                        $fecha('llego_en', 'Llegó')
+                            ->suffix(fn (Viaje $record): ?string => self::marcaSinSenal($record, EstadoViaje::Llego, $record->llego_en)),
+                        $fecha('iniciado_en', 'Inició')
+                            ->suffix(fn (Viaje $record): ?string => self::marcaSinSenal($record, EstadoViaje::EnCurso, $record->iniciado_en)),
+                        $fecha('finalizado_en', 'Finalizó')
+                            ->suffix(fn (Viaje $record): ?string => self::marcaSinSenal($record, EstadoViaje::Finalizado, $record->finalizado_en)),
                         $fecha('cancelado_en', 'Cancelado'),
                         TextEntry::make('cancelado_por')->label('Canceló')->placeholder('—'),
                         TextEntry::make('motivo_cancelacion')->label('Motivo de cancelación')->placeholder('—')->columnSpanFull(),
@@ -703,6 +708,23 @@ class ViajeResource extends Resource
     public static function describirLugar(Viaje $viaje, string $punto): string
     {
         return $viaje->{"{$punto}_direccion"} ?? self::SIN_DIRECCION;
+    }
+
+    /**
+     * " (registrado sin señal, enviado HH:MM)" si la acción del chofer que dejó esta hora en el viaje llegó al
+     * servidor más tarde (la tocó sin señal). Se busca por la hora guardada: la última acción con ese momento.
+     */
+    private static function marcaSinSenal(Viaje $viaje, EstadoViaje $estado, ?Carbon $valor): ?string
+    {
+        if (! $valor) {
+            return null;
+        }
+        $accion = $viaje->acciones->sortByDesc('id')
+            ->first(fn (AccionViaje $a): bool => $a->estado === $estado && $a->momento->equalTo($valor));
+
+        return $accion?->llegoSinSenal()
+            ? ' (registrado sin señal, enviado '.HoraLocal::formatear($accion->aplicada_en, 'H:i').')'
+            : null;
     }
 
     private static function describirPunto(Viaje $viaje, string $orden): ?string

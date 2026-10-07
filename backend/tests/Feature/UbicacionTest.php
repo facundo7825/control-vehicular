@@ -147,7 +147,7 @@ it('si el viaje se finaliza mientras llegan puntos, recalcula los metros guardad
     // El chofer finaliza justo después de que el servidor encontró el viaje en curso y antes de guardar los puntos.
     $finalizado = false;
     DB::listen(function ($consulta) use (&$finalizado, $viaje) {
-        if (! $finalizado && str_contains($consulta->sql, 'from "viajes"') && $consulta->bindings === [$viaje->chofer_id, 'en_curso']
+        if (! $finalizado && str_contains($consulta->sql, 'from "viajes"') && str_contains($consulta->sql, '"iniciado_en" <=')
             && ! str_contains($consulta->sql, 'for update')) {
             $finalizado = true;
             app(MaquinaEstadosViaje::class)->transicionar(Viaje::find($viaje->id), EstadoViaje::Finalizado);

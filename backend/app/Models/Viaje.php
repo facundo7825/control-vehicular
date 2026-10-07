@@ -62,6 +62,11 @@ class Viaje extends Model
         return $this->hasMany(PuntoRecorrido::class);
     }
 
+    public function acciones(): HasMany
+    {
+        return $this->hasMany(AccionViaje::class);
+    }
+
     /**
      * Viajes que ocupan al chofer ahora. Los ya iniciados cuentan siempre, incluida una reserva en camino
      * antes de su hora. Los aceptados cuentan salvo que sean reservas todavía a futuro.

@@ -12,6 +12,7 @@ use App\Models\PuntoRecorrido;
 use App\Models\Viaje;
 use App\Servicios\Parametros;
 use App\Servicios\ServicioViaje;
+use App\Support\HoraLocal;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -158,11 +159,20 @@ class ViajeController extends Controller
 
     public function avanzar(Request $request, Viaje $viaje): ViajeResource
     {
-        $datos = $request->validate(['estado' => ['required', 'in:en_camino,llego,en_curso,finalizado']]);
+        $datos = $request->validate([
+            'estado' => ['required', 'in:en_camino,llego,en_curso,finalizado'],
+            // Cuándo lo tocó el chofer (la app lo guarda si no hay señal) y su id, para no aplicarla dos veces.
+            'momento' => ['nullable', 'date'],
+            'id_accion' => ['nullable', 'uuid'],
+        ]);
 
-        return new ViajeResource(
-            $this->viajes->avanzar($viaje, $request->user(), EstadoViaje::from($datos['estado'])),
-        );
+        return new ViajeResource($this->viajes->avanzar(
+            $viaje,
+            $request->user(),
+            EstadoViaje::from($datos['estado']),
+            isset($datos['momento']) ? HoraLocal::interpretar($datos['momento']) : null,
+            $datos['id_accion'] ?? null,
+        ));
     }
 
     public function cancelar(Request $request, Viaje $viaje): ViajeResource
