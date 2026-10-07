@@ -447,6 +447,41 @@ void main() {
       expect(borrador().lugarOrigen!.direccion, isNull);
     });
 
+    test('una búsqueda descartada (se eligió otro origen) no deja "Buscando la dirección…" trabado', () async {
+      api
+        ..direcciones[_aqui] = 'Sarmiento 520'
+        ..demorarDireccion[_aqui] = Completer();
+      await notifier().ubicar();
+      notifier()
+        ..marcarAhora(PuntoPedido.origen)
+        ..elegirLugar(_tribunales); // el origen pasa a ser la sugerencia
+      api.demorarDireccion[_aqui]!.complete();
+      await pumpEventQueue();
+
+      await notifier().ubicar(comoOrigen: true); // "Usar mi ubicación", el mismo punto
+      await pumpEventQueue();
+
+      expect(borrador().descripcion(PuntoPedido.origen), 'Tu ubicación actual');
+      expect(borrador().detalleOrigen, 'Sarmiento 520');
+    });
+
+    test('si la búsqueda descartada no encontró nada, "Usar mi ubicación" la vuelve a pedir', () async {
+      api.demorarDireccion[_aqui] = Completer();
+      await notifier().ubicar();
+      notifier()
+        ..marcarAhora(PuntoPedido.origen)
+        ..elegirLugar(_tribunales);
+      api.demorarDireccion[_aqui]!.complete();
+      await pumpEventQueue();
+      api.direcciones[_aqui] = 'Sarmiento 520';
+
+      await notifier().ubicar(comoOrigen: true);
+      await pumpEventQueue();
+
+      expect(api.consultasDireccion, [_aqui, _aqui]);
+      expect(borrador().detalleOrigen, 'Sarmiento 520');
+    });
+
     test('si no hay dirección (falla o sin conexión) se sigue sin ella: ni coordenadas ni dirección', () async {
       await notifier().ubicar();
       notifier().marcar(tocado);

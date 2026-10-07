@@ -223,11 +223,22 @@ class BorradorPedidoNotifier extends Notifier<BorradorPedido> {
   }
 
   /// Después del origen se pasa al destino; después del destino, al origen si falta y no hay ubicación.
+  /// Una búsqueda de dirección en curso para el punto anterior deja de contar (si el punto nuevo la
+  /// necesita, [marcar] pide otra).
+  ///
+  /// La dirección de origen escrita se conserva al pasar de "mi ubicación" a un origen elegido a mano: lo
+  /// escrito siempre gana y solo lo borra la persona (o volver a "mi ubicación" desde un origen a mano).
   void fijar(PuntoPedido punto, Coordenada c) => state = punto == PuntoPedido.origen
-      ? state.copiar(origen: c, origenEsMiUbicacion: false, marcando: PuntoPedido.destino)
+      ? state.copiar(
+          origen: c,
+          origenEsMiUbicacion: false,
+          marcando: PuntoPedido.destino,
+          direccionPendienteOrigen: () => null,
+        )
       : state.copiar(
           destino: c,
           marcando: state.origen == null && state.ubicacion == EstadoUbicacion.noDisponible ? PuntoPedido.origen : null,
+          direccionPendienteDestino: () => null,
         );
 
   /// Sugerencia de la búsqueda: fija [punto] (por defecto, el que se está marcando) con su dirección y
@@ -368,14 +379,13 @@ class BorradorPedidoNotifier extends Notifier<BorradorPedido> {
       encontrada = encontrada.substring(0, largoMaximoDireccion);
     }
     if (encontrada != null && miUbicacion) _miUbicacionConocida = (c, encontrada);
-    if (!vigente()) return;
-
+    // La búsqueda de c terminó aunque se descarte: el aviso no queda trabado (y se puede volver a pedir).
     if (esOrigen && state.direccionPendienteOrigen == c) {
       state = state.copiar(direccionPendienteOrigen: () => null);
     } else if (!esOrigen && state.direccionPendienteDestino == c) {
       state = state.copiar(direccionPendienteDestino: () => null);
     }
-    if (encontrada == null) return;
+    if (!vigente() || encontrada == null) return;
     if (miUbicacion) {
       state = state.copiar(direccionMiUbicacion: () => encontrada);
     } else if (_direccionDe(punto).trim().isEmpty) {

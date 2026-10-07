@@ -84,7 +84,11 @@ class ApiVehiculos {
       final j = leerMapa(await cliente.get('lugares/inverso', query: {'lat': punto.lat, 'lng': punto.lng}));
       final direccion = (j['direccion'] as String?)?.trim();
       return direccion == null || direccion.isEmpty ? null : direccion;
-    } catch (_) {
+    } catch (e) {
+      // Solo el tipo del error (nunca las coordenadas); los errores de la API ya son esperables.
+      if (kDebugMode && e is! ErrorApi) {
+        debugPrint('vehiculos_oficiales: no se pudo leer la dirección (${e.runtimeType}).');
+      }
       return null;
     }
   }
