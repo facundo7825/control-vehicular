@@ -205,9 +205,11 @@ class Despachador
     {
         $oferta = DB::transaction(function () use ($viaje, $chofer, $criterio) {
             $v = Viaje::whereKey($viaje->id)->lockForUpdate()->firstOrFail();
-            Usuario::whereKey($chofer->id)->lockForUpdate()->first();
+            $c = Usuario::whereKey($chofer->id)->lockForUpdate()->first();
 
+            // El chofer se lee bajo el bloqueo: si lo desactivaron después de elegirlo, no se le ofrece.
             if ($v->estado !== EstadoViaje::Buscando
+                || ! $c?->activo
                 || $this->estados->estado($chofer) !== EstadoChofer::Libre
                 || $this->tieneOfertaPendiente($chofer->id)) {
                 return null;

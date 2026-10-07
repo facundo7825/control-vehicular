@@ -48,7 +48,7 @@ class ServicioViaje
         $modo = ModoViaje::from($datos['modo']);
         $chofer = null;
         if ($modo === ModoViaje::Especifico) {
-            $chofer = Usuario::where('rol', RolUsuario::Chofer)->find($datos['chofer_id'])
+            $chofer = Usuario::where('rol', RolUsuario::Chofer)->where('activo', true)->find($datos['chofer_id'])
                 ?? throw new ReglaNegocio('El chofer elegido no existe.');
             if ($this->estados->estado($chofer) !== EstadoChofer::Libre) {
                 throw new ReglaNegocio('El chofer elegido no está disponible.');

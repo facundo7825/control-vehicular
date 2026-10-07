@@ -317,3 +317,32 @@ describe('reservas', function () {
         expect(OfertaViaje::sole())->chofer_id->toBe($elegido->id)->criterio->toBe(CriterioOferta::ElegidoPorSolicitante);
     });
 });
+
+describe('chofer desactivado después de elegirlo', function () {
+    // El chofer en memoria sigue activo (como si se hubiera elegido antes); en la base ya está desactivado.
+    function desactivadoEnLaBase(): Usuario
+    {
+        $chofer = choferEnTurno(-34.601, -58.381);
+        Usuario::whereKey($chofer->id)->update(['activo' => false]);
+
+        return $chofer;
+    }
+
+    it('no se le ofrece el viaje', function () {
+        $chofer = desactivadoEnLaBase();
+        $viaje = viajeDe(Usuario::factory()->create());
+
+        app(Despachador::class)->pedirA($viaje, $chofer);
+
+        expect(OfertaViaje::count())->toBe(0)
+            ->and($viaje->fresh()->estado)->toBe(EstadoViaje::SinChofer);
+    });
+
+    it('no se le asigna un viaje obligatorio', function () {
+        $chofer = desactivadoEnLaBase();
+        $viaje = viajeDe(Usuario::factory()->create(), ['obligatorio' => true]);
+
+        expect(app(Asignador::class)->asignar($viaje, $chofer))->toBeFalse()
+            ->and($viaje->fresh())->estado->toBe(EstadoViaje::Buscando)->chofer_id->toBeNull();
+    });
+});

@@ -108,9 +108,13 @@ class Asignador
     {
         $asignado = DB::transaction(function () use ($viaje, $chofer) {
             $bloqueado = Viaje::whereKey($viaje->id)->lockForUpdate()->firstOrFail();
-            Usuario::whereKey($chofer->id)->lockForUpdate()->first();
+            $c = Usuario::whereKey($chofer->id)->lockForUpdate()->first();
 
             if (! in_array($bloqueado->estado, [EstadoViaje::Buscando, EstadoViaje::Ofrecido], true)) {
+                return false;
+            }
+            // Leído bajo el bloqueo: si lo desactivaron después de elegirlo, ya no recibe el viaje.
+            if (! $c?->activo) {
                 return false;
             }
             if ($this->estados->estado($chofer) !== EstadoChofer::Libre) {
