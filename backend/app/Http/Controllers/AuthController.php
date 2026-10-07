@@ -26,7 +26,7 @@ class AuthController extends Controller
         }
 
         // Si el PJ no informa la dependencia, queda la que cargó el encargado en el panel.
-        $dependenciaId = $id->dependencia !== null ? Dependencia::buscarOCrear($id->dependencia)->id : null;
+        $dependenciaId = $id->dependencia !== null ? Dependencia::buscarOCrear($id->dependencia)?->id : null;
 
         $usuario = Usuario::updateOrCreate(
             ['id_externo' => $id->idExterno],
