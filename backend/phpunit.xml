@@ -42,6 +42,7 @@
         <env name="LUGARES_PROVINCIA" value=""/>
         <env name="LUGARES_LIMITE_POR_MINUTO" value="30"/>
         <env name="RUTAS_OSRM_URL" value="https://router.project-osrm.org"/>
+        <env name="IDENTIDAD_CAMPO_DEPENDENCIA" value=""/>
         <env name="ASISTENCIA_CLAVE" value=""/>
         <env name="ASISTENCIA_LIMITE_POR_MINUTO" value="300"/>
         <env name="ASISTENCIA_ENTRADA_MAX_HORAS" value="12"/>

@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Identidad\IdentidadNoDisponible;
 use App\Identidad\ProveedorIdentidad;
+use App\Models\Dependencia;
 use App\Models\Usuario;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -24,10 +25,15 @@ class AuthController extends Controller
             return response()->json(['message' => 'Sesión inválida.'], 401);
         }
 
+        // Si el PJ no informa la dependencia, queda la que cargó el encargado en el panel.
+        $dependenciaId = $id->dependencia !== null ? Dependencia::buscarOCrear($id->dependencia)->id : null;
+
         $usuario = Usuario::updateOrCreate(
             ['id_externo' => $id->idExterno],
-            array_filter(['nombre' => $id->nombre, 'cargo' => $id->cargo, 'telefono' => $id->telefono],
-                fn ($v) => $v !== null),
+            array_filter([
+                'nombre' => $id->nombre, 'cargo' => $id->cargo, 'telefono' => $id->telefono,
+                'dependencia_id' => $dependenciaId,
+            ], fn ($v) => $v !== null),
         )->refresh();
 
         if (! $usuario->activo) {

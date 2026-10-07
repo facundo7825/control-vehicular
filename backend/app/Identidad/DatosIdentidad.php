@@ -9,5 +9,7 @@ final readonly class DatosIdentidad
         public string $nombre,
         public ?string $cargo,
         public ?string $telefono = null,
+        // Solo si se configuró IDENTIDAD_CAMPO_DEPENDENCIA; null: no la informa.
+        public ?string $dependencia = null,
     ) {}
 }

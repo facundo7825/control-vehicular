@@ -9,6 +9,7 @@ use Filament\Models\Contracts\HasName;
 use Filament\Panel;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
@@ -20,7 +21,7 @@ class Usuario extends Authenticatable implements FilamentUser, HasName
 
     protected $table = 'usuarios';
 
-    protected $fillable = ['id_externo', 'nombre', 'cargo', 'rol', 'telefono', 'token_push', 'activo', 'email', 'password', 'vehiculo_habitual_id'];
+    protected $fillable = ['id_externo', 'nombre', 'cargo', 'rol', 'telefono', 'token_push', 'activo', 'email', 'password', 'vehiculo_habitual_id', 'dependencia_id', 'chofer_asignado_id'];
 
     protected $hidden = ['token_push', 'password', 'remember_token'];
 
@@ -33,6 +34,24 @@ class Usuario extends Authenticatable implements FilamentUser, HasName
     public function vehiculoHabitual(): BelongsTo
     {
         return $this->belongsTo(Vehiculo::class, 'vehiculo_habitual_id');
+    }
+
+    /** Dependencia del solicitante: sus choferes son los segundos en recibir el viaje. */
+    public function dependencia(): BelongsTo
+    {
+        return $this->belongsTo(Dependencia::class);
+    }
+
+    /** Chofer asignado a esta persona: el primero en recibir sus viajes. Debe tener rol chofer. */
+    public function choferAsignado(): BelongsTo
+    {
+        return $this->belongsTo(Usuario::class, 'chofer_asignado_id');
+    }
+
+    /** Para un chofer: las dependencias que atiende. */
+    public function dependenciasQueAtiende(): BelongsToMany
+    {
+        return $this->belongsToMany(Dependencia::class, 'chofer_dependencia', 'chofer_id', 'dependencia_id');
     }
 
     public function turnos(): HasMany
