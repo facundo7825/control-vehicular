@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:vehiculos_oficiales/src/chofer/cola_acciones.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
 
 import '../fixtures/payloads.dart' as p;
@@ -132,5 +133,47 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Fichaste la salida: se cierra al terminar el viaje.'), findsOneWidget);
+  });
+
+  group('sin señal', () {
+    OutlinedButton finalizar(WidgetTester tester) =>
+        tester.widget<OutlinedButton>(find.widgetWithText(OutlinedButton, 'Finalizar turno'));
+
+    testWidgets('con pasos del viaje sin enviar lo avisa y "Finalizar turno" espera la señal', (tester) async {
+      final e = entornoChofer()
+        ..almacenAcciones = (AlmacenAccionesMemoria()
+          ..usuarioId = 2
+          ..acciones = [
+            AccionViaje(id: nuevoIdAccion(), viajeId: 5, estado: EstadoViaje.finalizado, momento: DateTime.utc(2026)),
+          ])
+        ..http.sinRed('POST', 'viajes/5/estado');
+      await montarChofer(tester, e, ubicador: gps);
+
+      expect(find.text('Sin señal: 1 acción se enviará al reconectar'), findsOneWidget);
+      expect(finalizar(tester).onPressed, isNull);
+      expect(find.text('Esperando señal para enviar el viaje'), findsOneWidget);
+    });
+
+    testWidgets('con puntos del GPS sin enviar "Finalizar turno" espera; cuando salen se habilita', (tester) async {
+      final e = entornoChofer()
+        ..http.limpiar('POST', 'ubicacion')
+        ..http.sinRed('POST', 'ubicacion');
+      await montarChofer(tester, e, ubicador: gps);
+      expect(finalizar(tester).onPressed, isNotNull);
+
+      gps.emitir(punto(0));
+      await tester.pump(const Duration(seconds: 10));
+      await tester.pump();
+      expect(finalizar(tester).onPressed, isNull);
+      expect(find.text('Esperando señal para enviar el viaje'), findsOneWidget);
+
+      e.http
+        ..limpiar('POST', 'ubicacion')
+        ..responder('POST', 'ubicacion', 204);
+      await tester.pump(const Duration(seconds: 10));
+      await tester.pump();
+      expect(finalizar(tester).onPressed, isNotNull);
+      expect(find.text('Esperando señal para enviar el viaje'), findsNothing);
+    });
   });
 }

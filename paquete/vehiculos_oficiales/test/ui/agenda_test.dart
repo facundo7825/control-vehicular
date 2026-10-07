@@ -141,7 +141,7 @@ void main() {
     await tester.tap(find.text('Voy en camino'));
     await esperar(tester);
 
-    expect(jsonDecode(e.http.pedidos.last.cuerpo), {'estado': 'en_camino'});
+    expect(jsonDecode(e.http.pedidos.last.cuerpo), containsPair('estado', 'en_camino'));
     expect(find.byType(ViajeChofer), findsOneWidget);
     expect(find.text('Llegué'), findsOneWidget);
   });

@@ -164,6 +164,35 @@ class Viaje {
 
   bool get esLargo => tipo == TipoViaje.largo;
 
+  /// El mismo viaje en [nuevo], con la hora de ese paso en [momento]: lo que la app muestra mientras la acción
+  /// del chofer todavía no llegó al servidor (sin señal).
+  Viaje avanzadoA(EstadoViaje nuevo, DateTime momento) => Viaje(
+    id: id,
+    tipo: tipo,
+    modo: modo,
+    estado: nuevo,
+    obligatorio: obligatorio,
+    origen: origen,
+    destino: destino,
+    motivo: motivo,
+    programadoPara: programadoPara,
+    duracionEstimadaMin: duracionEstimadaMin,
+    chofer: chofer,
+    vehiculo: vehiculo,
+    solicitante: solicitante,
+    aceptadoEn: aceptadoEn,
+    llegoEn: nuevo == EstadoViaje.llego ? momento : llegoEn,
+    iniciadoEn: nuevo == EstadoViaje.enCurso ? momento : iniciadoEn,
+    finalizadoEn: nuevo == EstadoViaje.finalizado ? momento : finalizadoEn,
+    canceladoEn: canceladoEn,
+    pedidoEn: pedidoEn,
+    canceladoPor: canceladoPor,
+    motivoCancelacion: motivoCancelacion,
+    metrosRecorridos: metrosRecorridos,
+    regresoEstimado: regresoEstimado,
+    pasajeros: pasajeros,
+  );
+
   /// Un viaje largo lo asigna y lo cambia el encargado: el solicitante no lo cancela desde la app.
   bool get cancelablePorSolicitante => !esLargo && estado.cancelablePorSolicitante;
 }

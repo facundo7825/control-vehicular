@@ -41,6 +41,7 @@ class RastreadorTurno {
     this.sinPosicionTras,
     this.guardar,
     this.intervaloGuardado = const Duration(seconds: 5),
+    this.alCambiarAtraso,
   });
 
   final Ubicador ubicador;
@@ -68,6 +69,11 @@ class RastreadorTurno {
   /// confirmado y con [guardarPendiente]. Sus errores se loguean y no cortan el rastreo.
   final Future<void> Function(List<PuntoGps> puntos)? guardar;
   final Duration intervaloGuardado;
+
+  /// Hay puntos que no se pudieron mandar (sin señal, o retenidos mientras hay acciones del viaje sin enviar),
+  /// o ya salieron. Se llama solo cuando cambia, después de cada envío.
+  final void Function(bool atrasados)? alCambiarAtraso;
+  bool _atrasados = false;
 
   StreamSubscription<PuntoGps>? _gps;
   Timer? _envio;
@@ -109,6 +115,8 @@ class RastreadorTurno {
     _enViaje = enViaje;
     _abrirGps();
     _programarEnvio();
+    // Lo que quedó guardado de antes no salió: está atrasado hasta el primer envío.
+    if (cola.largo > 0) _informarAtraso(ResultadoEnvio.reintentar);
   }
 
   /// Con un viaje activo el envío pasa a [intervaloViaje]; sin viaje, a [intervaloTurno]. El GPS no se toca.
@@ -175,6 +183,7 @@ class RastreadorTurno {
     try {
       final resultado = await emisor.enviar();
       if (!_activo) return;
+      _informarAtraso(resultado);
       if (resultado == ResultadoEnvio.enviado) _guardar();
       if (resultado == ResultadoEnvio.sinTurno) {
         detener();
@@ -189,8 +198,24 @@ class RastreadorTurno {
   /// Un intento de mandar todo lo pendiente (antes de finalizar el turno).
   Future<ResultadoEnvio> vaciar() async {
     final resultado = await emisor.vaciarTodo();
+    if (_activo) _informarAtraso(resultado);
     if (_activo) _guardar(); // si después no se puede cerrar el turno, lo guardado refleja lo que salió
     return resultado;
+  }
+
+  /// Un envío ya, sin esperar al timer: lo pide el turno cuando salieron las acciones del viaje.
+  void enviarAhora() {
+    if (_activo) unawaited(_enviar());
+  }
+
+  void _informarAtraso(ResultadoEnvio resultado) {
+    final atrasados = switch (resultado) {
+      ResultadoEnvio.reintentar || ResultadoEnvio.retenido => cola.largo > 0,
+      ResultadoEnvio.enviado || ResultadoEnvio.sinCambios || ResultadoEnvio.sinTurno => false,
+    };
+    if (atrasados == _atrasados) return;
+    _atrasados = atrasados;
+    alCambiarAtraso?.call(atrasados);
   }
 
   /// Guarda ya los puntos encolados que todavía no se guardaron (al cerrar el módulo con el turno abierto).
@@ -234,6 +259,7 @@ class RastreadorTurno {
     _cancelar(_gps);
     _gps = null;
     _ultimoEncolado = null;
+    _atrasados = false;
     cola.vaciar();
   }
 

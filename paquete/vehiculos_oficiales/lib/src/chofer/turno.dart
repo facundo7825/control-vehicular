@@ -11,6 +11,7 @@ import '../sesion/sesion.dart';
 import '../ubicacion/ubicador.dart';
 import '../viaje/viaje_actual.dart';
 import 'almacen_cola.dart';
+import 'cola_acciones.dart';
 import 'cola_ubicaciones.dart';
 import 'emisor_ubicacion.dart';
 import 'rastreador_turno.dart';
@@ -54,6 +55,30 @@ class PosicionPropiaNotifier extends Notifier<PosicionPropia> {
 
   void limpiar() => state = const PosicionPropia();
 }
+
+final ubicacionesAtrasadasProvider = NotifierProvider<UbicacionesAtrasadasNotifier, bool>(
+  UbicacionesAtrasadasNotifier.new,
+);
+
+/// Hay puntos del GPS del turno que no se pudieron mandar (ver `RastreadorTurno.alCambiarAtraso`).
+class UbicacionesAtrasadasNotifier extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void fijar(bool atrasadas) => state = atrasadas;
+}
+
+/// Por qué "Finalizar turno" espera (decisión 3 del plan sin señal).
+const esperandoSenalParaFinalizar = 'Esperando señal para enviar el viaje';
+
+/// "Finalizar turno" espera mientras haya acciones del viaje o puntos del GPS sin enviar: sin turno, el
+/// servidor ya no puede ubicar el recorrido que falta.
+final finalizarEsperaSenalProvider = Provider<bool>(
+  (ref) => hayAcciones(ref.watch(colaAccionesProvider)) || ref.watch(ubicacionesAtrasadasProvider),
+);
+
+/// Hay acciones del viaje sin enviar (o todavía no se sabe: la cola se está leyendo del disco).
+bool hayAcciones(AsyncValue<List<AccionViaje>> cola) => !(cola.value?.isEmpty ?? false);
 
 /// Un viaje activo (aceptado a en curso) del chofer [choferId] cambia el ritmo de envío (spec 5.7). Uno
 /// que se reasignó a otro chofer, o que terminó y sigue en pantalla, no cuenta.
@@ -120,6 +145,11 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
       viajeActualProvider.select((s) => viajeActivo(s.value?.viaje, yo)),
       (_, activo) => _rastreador?.enViaje(activo),
     );
+    // Los puntos esperan a las acciones del viaje (ver `EmisorUbicacion.retener`): cuando salió la última, se
+    // mandan enseguida.
+    ref.listen(colaAccionesProvider.select((s) => !hayAcciones(s)), (antes, vacia) {
+      if (vacia && antes == false) _rastreador?.enviarAhora();
+    });
 
     final turno = await ref.read(apiProvider).turnoActual();
     // Se cerró el módulo (o se recargó el turno) mientras tanto: no se pide permiso ni se abre el GPS.
@@ -151,6 +181,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
     if (_retomarAlVolver && turno != null && _rastreador == null) unawaited(_retomar(turno));
     _retomarAlVolver = false;
     unawaited(refrescar());
+    unawaited(ref.read(colaAccionesProvider.notifier).sincronizar());
   }
 
   /// Retoma [turno] ya si la app está en primer plano; si no, al volver.
@@ -282,7 +313,15 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
   /// antes de cerrar el turno.") llega a la pantalla y el turno y el rastreo siguen como estaban. Si al
   /// vaciar la cola el backend ya dice que no hay turno (lo cerró un administrador), no se pide cerrarlo:
   /// se deja de rastrear y se vuelve a preguntar el turno.
+  ///
+  /// Con acciones del viaje sin enviar no se cierra: se intenta mandarlas y, si no salen, lanza [SinConexion]
+  /// ("Esperando señal para enviar el viaje.").
   Future<void> finalizar() async {
+    if (hayAcciones(ref.read(colaAccionesProvider))) {
+      await ref.read(colaAccionesProvider.notifier).sincronizar();
+      if (!ref.mounted) return;
+      if (hayAcciones(ref.read(colaAccionesProvider))) throw const SinConexion('$esperandoSenalParaFinalizar.');
+    }
     final vaciado = await _rastreador?.vaciar();
     if (!ref.mounted) return;
     if (vaciado == ResultadoEnvio.sinTurno) return _alQuedarSinTurno();
@@ -321,10 +360,17 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
     final posicion = ref.read(posicionPropiaProvider.notifier);
     final almacen = ref.read(almacenColaProvider);
     final aviso = ref.read(avisoSesionProvider);
+    final atraso = ref.read(ubicacionesAtrasadasProvider.notifier);
     _rastreador = RastreadorTurno(
       ubicador: ref.read(ubicadorProvider),
       cola: cola,
-      emisor: EmisorUbicacion(api: ref.read(apiProvider), cola: cola),
+      // Primero las acciones del viaje: así el servidor ya conoce el intervalo del viaje al recibir los puntos.
+      emisor: EmisorUbicacion(
+        api: ref.read(apiProvider),
+        cola: cola,
+        retener: () => ref.mounted && hayAcciones(ref.read(colaAccionesProvider)),
+      ),
+      alCambiarAtraso: atraso.fijar,
       intervaloTurno: Duration(seconds: conf.gpsTurnoSeg),
       intervaloViaje: Duration(seconds: conf.gpsViajeSeg),
       alPunto: posicion.punto,
@@ -344,6 +390,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
     _rastreador?.detener();
     _rastreador = null;
     ref.read(posicionPropiaProvider.notifier).limpiar();
+    ref.read(ubicacionesAtrasadasProvider.notifier).fijar(false);
     unawaited(_borrarCola());
   }
 

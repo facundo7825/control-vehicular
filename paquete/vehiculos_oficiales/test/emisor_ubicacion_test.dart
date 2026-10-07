@@ -54,6 +54,21 @@ void main() {
     expect(cola.largo, 0);
   });
 
+  test('mientras haya acciones del viaje sin enviar no manda nada (el servidor necesita antes el viaje)', () async {
+    var retener = true;
+    emisor = EmisorUbicacion(api: api, cola: cola, retener: () => retener);
+    cola.agregar(punto(0));
+
+    expect(await emisor.enviar(), ResultadoEnvio.retenido);
+    expect(await emisor.vaciarTodo(), ResultadoEnvio.retenido);
+    expect(api.lotes, isEmpty);
+    expect(cola.largo, 1);
+
+    retener = false;
+    expect(await emisor.enviar(), ResultadoEnvio.enviado);
+    expect(segundos(api.lotes.single), [0]);
+  });
+
   test('más de 500 puntos salen en lotes de 500; vaciarTodo manda hasta vaciar', () async {
     for (var s = 0; s < 1203; s++) {
       cola.agregar(punto(s));

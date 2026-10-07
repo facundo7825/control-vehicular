@@ -3,12 +3,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../api/errores_api.dart';
+import '../../chofer/cola_acciones.dart';
 import '../../chofer/guia_ruta.dart';
 import '../../chofer/pasos_viaje.dart';
 import '../../chofer/turno.dart';
 import '../../mapa/mapa.dart';
 import '../../modelos/modelos.dart';
 import '../../sesion/sesion.dart';
+import '../../tiempo_real/tiempo_real.dart';
+import '../../tiempo_real/tiempo_real_provider.dart';
 import '../../viaje/viaje_actual.dart';
 import '../comunes/comunes.dart';
 import '../modulo_app.dart';
@@ -48,9 +51,27 @@ class ViajeChofer extends ConsumerWidget {
       body: Column(
         children: [
           const BannerConexion(),
+          const BannerAccionesPendientes(),
           Expanded(child: contenido),
         ],
       ),
+    );
+  }
+}
+
+/// "Sin señal: 2 acciones se enviarán al reconectar", mientras haya pasos del viaje sin enviar (decisión 3
+/// del plan sin señal). También en el mapa del chofer.
+class BannerAccionesPendientes extends ConsumerWidget {
+  const BannerAccionesPendientes({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final n = ref.watch(colaAccionesProvider.select((s) => s.value?.length ?? 0));
+    if (n == 0) return const SizedBox.shrink();
+    return MaterialBanner(
+      leading: const Icon(Icons.cloud_upload_outlined),
+      content: Text(textoAccionesPendientes(n)),
+      actions: const [SizedBox.shrink()],
     );
   }
 }
@@ -233,16 +254,18 @@ class _EnCursoState extends ConsumerState<_EnCurso> {
 }
 
 /// Arriba del mapa: la flecha de la próxima maniobra, la indicación (o "Recalculando…") y lo que falta
-/// ("4,1 km · 9 min").
-class _CartelGuia extends StatelessWidget {
+/// ("4,1 km · 9 min"). Fuera del recorrido y sin señal no se puede recalcular: lo dice (sigue el recorrido que
+/// ya tenía).
+class _CartelGuia extends ConsumerWidget {
   const _CartelGuia({required this.guia});
 
   final GuiaRuta guia;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final tema = Theme.of(context);
     final colores = tema.colorScheme;
+    final sinSenal = ref.watch(estadoConexionProvider) != EstadoConexion.conectado;
     return Card(
       color: colores.primaryContainer,
       elevation: 4,
@@ -250,7 +273,11 @@ class _CartelGuia extends StatelessWidget {
         padding: const EdgeInsets.all(12),
         child: Row(
           children: [
-            Icon(guia.fueraDeRuta ? Icons.sync : iconoManiobra(guia.tipo), size: 40, color: colores.onPrimaryContainer),
+            Icon(
+              guia.fueraDeRuta ? (sinSenal ? Icons.cloud_off : Icons.sync) : iconoManiobra(guia.tipo),
+              size: 40,
+              color: colores.onPrimaryContainer,
+            ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -259,7 +286,9 @@ class _CartelGuia extends StatelessWidget {
                 children: [
                   Text(
                     // Fuera del recorrido la indicación ya no sirve: se avisa hasta que llegue el nuevo.
-                    guia.fueraDeRuta ? 'Recalculando…' : guia.texto,
+                    guia.fueraDeRuta
+                        ? (sinSenal ? 'Sin señal: recorrido sin actualizar' : 'Recalculando…')
+                        : guia.texto,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: tema.textTheme.titleMedium?.copyWith(color: colores.onPrimaryContainer),

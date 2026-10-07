@@ -109,6 +109,8 @@ class ClienteApi {
         return AccesoDenegado(mensaje ?? 'No tenés permiso para esta acción.');
       case 404:
         return NoEncontrado(mensaje ?? 'No se encontró lo que buscabas.');
+      case 409:
+        return Conflicto(mensaje ?? 'El viaje cambió mientras tanto.');
       case 422:
         return ErrorNegocio(mensaje ?? 'No se pudo completar la acción.', errores: _errores(cuerpo));
       case 503:

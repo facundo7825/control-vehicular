@@ -5,7 +5,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/api_vehiculos.dart';
 import '../api/errores_api.dart';
+import '../api/reloj_servidor.dart';
 import '../avisos/notificaciones_locales.dart';
+import '../chofer/cola_acciones.dart';
 import '../entorno.dart';
 import '../modelos/modelos.dart';
 import '../sesion/sesion.dart';
@@ -84,6 +86,9 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
       unawaited(_canalViaje?.cancel());
     });
 
+    // Las acciones que quedaron sin enviar (la app se cerró sin señal) se aplican sobre la primera consulta.
+    if (_usuario.esChofer) await ref.read(colaAccionesProvider.future);
+    if (!ref.mounted) return const SeguimientoViaje();
     final inicial = await _consultar(null);
     // Descartado mientras consultaba: el onDispose ya corrió y no cancelaría un canal abierto ahora.
     if (!ref.mounted) return inicial;
@@ -178,21 +183,75 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
     }
   }
 
-  /// Paso siguiente del chofer (spec 5.5): `en_camino`, `llego`, `en_curso` o `finalizado`. Los errores
-  /// (422 de una reserva que todavía no puede empezar, 403 si el viaje ya no es suyo) llegan a la pantalla.
+  /// Paso siguiente del chofer (spec 5.5): `en_camino`, `llego`, `en_curso` o `finalizado`. Funciona sin señal
+  /// (decisión 3 del plan sin señal): cada paso es una acción de la cola ([ColaAccionesNotifier]), con la hora
+  /// en que se tocó.
+  ///
+  /// "Llegué", "Iniciar viaje" y "Finalizar" se ven al instante y salen por detrás: si el servidor los
+  /// rechaza, el viaje vuelve a su estado real y el mensaje llega por [avisoAccionProvider]. "Voy en camino"
+  /// espera la respuesta ([salirHaciaReserva]).
   Future<void> avanzar(EstadoViaje hacia) async {
     final actual = state.value?.viaje;
-    if (actual == null) return;
-    final v = await ref.read(apiProvider).avanzarViaje(actual.id, hacia);
-    if (ref.mounted) _aplicarViaje(v);
+    if (actual == null || actual.estado.terminado) return;
+    if (hacia == EstadoViaje.enCamino) return salirHaciaReserva(actual);
+    final accion = _accion(actual.id, hacia);
+    _bases.putIfAbsent(actual.id, () => actual);
+    _aplicarViaje(actual.avanzadoA(hacia, accion.momento));
+    await ref.read(colaAccionesProvider.notifier).agregar(accion);
   }
 
-  /// Chofer: "Voy en camino" hacia una reserva confirmada de la agenda (spec 5.4, paso 7). Con la respuesta
-  /// la reserva pasa a ser el viaje actual. El 422 ("Podés salir hacia esta reserva a partir de las 11:15.")
-  /// llega a la pantalla.
-  Future<void> salirHaciaReserva(Viaje reserva) async {
-    final v = await ref.read(apiProvider).avanzarViaje(reserva.id, EstadoViaje.enCamino);
-    if (ref.mounted) _aplicarViaje(v);
+  /// Chofer: "Voy en camino" hacia [viaje] (también una reserva confirmada de la agenda, spec 5.4, paso 7):
+  /// con la respuesta pasa a ser el viaje actual. Se espera la respuesta porque el servidor decide si ya se
+  /// puede salir: el 422 ("Podés salir hacia esta reserva a partir de las 11:15.") o el 403 llegan a la
+  /// pantalla. Sin señal avanza igual y la acción queda en la cola.
+  Future<void> salirHaciaReserva(Viaje viaje) async {
+    final accion = _accion(viaje.id, EstadoViaje.enCamino);
+    // La respuesta ya se aplicó (accionEnviada).
+    final respuesta = await ref.read(colaAccionesProvider.notifier).agregarYEsperar(accion);
+    if (respuesta != null || !ref.mounted) return;
+    _bases.putIfAbsent(viaje.id, () => viaje);
+    _aplicarViaje(viaje.avanzadoA(EstadoViaje.enCamino, accion.momento));
+  }
+
+  AccionViaje _accion(int viajeId, EstadoViaje estado) => AccionViaje(
+    id: nuevoIdAccion(),
+    viajeId: viajeId,
+    estado: estado,
+    momento: ref.read(relojServidorProvider).ahora(),
+  );
+
+  /// Lo último que dijo el servidor de cada viaje con acciones sin enviar: a eso vuelve si las rechaza.
+  final _bases = <int, Viaje>{};
+
+  /// Las acciones del chofer que todavía no llegaron al servidor.
+  List<AccionViaje> _pendientes() =>
+      _usuario.esChofer ? ref.read(colaAccionesProvider).value ?? const <AccionViaje>[] : const <AccionViaje>[];
+
+  /// La cola mandó una acción y esta es la respuesta. Si el chofer ya avanzó más (otra acción pendiente),
+  /// la respuesta no lo hace retroceder (`_atrasado`).
+  void accionEnviada(Viaje v) {
+    if (!ref.mounted) return;
+    if (_pendientes().any((a) => a.viajeId == v.id)) {
+      _bases[v.id] = v;
+    } else {
+      _bases.remove(v.id);
+    }
+    _aplicarViaje(v);
+  }
+
+  /// El servidor rechazó una acción de [viajeId] (cancelado o reasignado mientras tanto, una hora que no
+  /// vale…) y la cola descartó las de ese viaje: se vuelve a lo último que dijo el servidor y se consulta
+  /// cómo está ahora. Nunca lanza.
+  Future<void> accionRechazada(int viajeId) async {
+    if (!ref.mounted) return;
+    final base = _bases.remove(viajeId);
+    final actual = state.value;
+    if (base != null && actual != null && actual.viaje?.id == viajeId) {
+      // El "finalizado" local no era final: si de verdad terminó, la consulta lo vuelve a marcar.
+      _finales.remove(viajeId);
+      _fijar(actual.conViaje(base));
+    }
+    await _refrescarSinFallar();
   }
 
   /// Chofer: acepta la oferta pendiente (spec 5.1). Con la respuesta queda el viaje y se va la oferta. Si
@@ -257,6 +316,17 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
     // Un viaje que ya se vio cancelado o finalizado no vuelve a estar activo: la consulta atrasada se ignora.
     var viaje = actual.viaje != null && _revive(actual.viaje!) ? null : actual.viaje;
 
+    // Chofer con acciones sin enviar: el servidor todavía no las conoce y se vuelven a aplicar encima. Si no
+    // lo devuelve (p. ej. un "finalizado" local), sigue lo que ya se mostraba.
+    if (!ref.mounted) return SeguimientoViaje(viaje: viaje, oferta: actual.oferta);
+    final pendientes = _pendientes();
+    if (viaje case final v? when pendientes.any((a) => a.viajeId == v.id)) {
+      _bases[v.id] = v;
+      viaje = _superponer(v, pendientes);
+    } else if (viaje == null && previo != null && pendientes.any((a) => a.viajeId == previo.id)) {
+      viaje = previo;
+    }
+
     // `viajes/actual` no devuelve viajes terminados: si el que se seguía desapareció mientras no había
     // socket, se busca en el historial para mostrar cómo terminó (p. ej. sin_chofer).
     if (viaje == null && previo != null && !previo.estado.terminado && !_usuario.esChofer) {
@@ -296,6 +366,17 @@ class ViajeActualNotifier extends AsyncNotifier<SeguimientoViaje> {
       }
     }
     return SeguimientoViaje(viaje: viaje, oferta: actual.oferta, ubicacionChofer: ubicacion);
+  }
+
+  /// [v] (del servidor) con las acciones pendientes de ese viaje aplicadas, en orden. Uno cancelado o
+  /// reasignado en el servidor se muestra así: la cola va a recibir el rechazo.
+  Viaje _superponer(Viaje v, List<AccionViaje> pendientes) {
+    var resultado = v;
+    for (final a in pendientes.where((a) => a.viajeId == v.id)) {
+      if (resultado.estado.terminado || !_esSuyo(resultado)) break;
+      if (_avance(a.estado) > _avance(resultado.estado)) resultado = resultado.avanzadoA(a.estado, a.momento);
+    }
+    return resultado;
   }
 
   /// Chofer: el viaje es suyo (lo tiene asignado).

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:vehiculos_oficiales/src/api/errores_api.dart';
 import 'package:vehiculos_oficiales/src/chofer/almacen_cola.dart';
+import 'package:vehiculos_oficiales/src/chofer/cola_acciones.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
 
 import '../fixtures/payloads.dart' as p;
@@ -53,6 +54,15 @@ class ApiChofer extends ApiFalsa {
   Viaje? respuestaAvance;
   ErrorApi? errorAvance;
   final avances = <(int, EstadoViaje)>[];
+
+  /// El `id_accion` y el `momento` de cada avance, en el mismo orden que [avances].
+  final acciones = <({String? idAccion, DateTime? momento})>[];
+
+  /// Errores de los próximos avances, en orden (antes que [errorAvance]).
+  final erroresAvance = <ErrorApi>[];
+
+  /// Si no es nulo, `avanzarViaje` espera a que el test lo complete.
+  Completer<void>? demoraAvance;
   Viaje? respuestaCancelar;
   Agenda agendaRespuesta = Agenda.vacia;
   ErrorApi? errorAgenda;
@@ -129,9 +139,12 @@ class ApiChofer extends ApiFalsa {
   }
 
   @override
-  Future<Viaje> avanzarViaje(int viajeId, EstadoViaje estado) async {
+  Future<Viaje> avanzarViaje(int viajeId, EstadoViaje estado, {DateTime? momento, String? idAccion}) async {
     llamadas.add('avanzar:$viajeId:${estado.valor}');
     avances.add((viajeId, estado));
+    acciones.add((idAccion: idAccion, momento: momento));
+    if (demoraAvance != null) await demoraAvance!.future;
+    if (erroresAvance.isNotEmpty) throw erroresAvance.removeAt(0);
     if (errorAvance != null) throw errorAvance!;
     return respuestaAvance ??
         Viaje.fromJson(
@@ -190,5 +203,29 @@ class AlmacenColaMemoria implements AlmacenCola {
     borrados++;
     turnoId = null;
     puntos = [];
+  }
+}
+
+/// [AlmacenAcciones] en memoria: lo que quedaría en el archivo (sobrevive a un contenedor descartado, como el
+/// archivo a la app cerrada).
+class AlmacenAccionesMemoria implements AlmacenAcciones {
+  /// Usuario de lo guardado; nulo si no hay nada guardado.
+  int? usuarioId;
+  List<AccionViaje> acciones = [];
+
+  /// Si no es nulo, todas las operaciones lo lanzan.
+  Object? error;
+
+  @override
+  Future<List<AccionViaje>> leer(int usuarioId) async {
+    if (error != null) throw error!;
+    return usuarioId == this.usuarioId ? List.of(acciones) : [];
+  }
+
+  @override
+  Future<void> guardar(int usuarioId, List<AccionViaje> acciones) async {
+    if (error != null) throw error!;
+    this.usuarioId = usuarioId;
+    this.acciones = List.of(acciones);
   }
 }

@@ -32,6 +32,12 @@ class ErrorNegocio extends ErrorApi {
   final Map<String, List<String>> errores;
 }
 
+/// 409: la acción llegó tarde y el viaje cambió mientras tanto (p. ej. "El viaje fue cancelado mientras
+/// estabas sin señal."). No cambió nada en el servidor.
+class Conflicto extends ErrorApi {
+  const Conflicto([super.mensaje = 'El viaje cambió mientras tanto.']);
+}
+
 /// 503: el endpoint de identidad del PJ no responde (solo en `POST /auth/intercambio`).
 class ServicioNoDisponible extends ErrorApi {
   const ServicioNoDisponible([super.mensaje = 'Servicio de identidad no disponible.']);

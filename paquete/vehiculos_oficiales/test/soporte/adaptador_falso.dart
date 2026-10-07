@@ -34,6 +34,9 @@ class AdaptadorFalso implements HttpClientAdapter {
 
   void sinRed(String metodo, String ruta) => (_respuestas['$metodo $ruta'] ??= []).add((-1, null));
 
+  /// Olvida las respuestas encoladas para esa ruta (p. ej. vuelve la señal).
+  void limpiar(String metodo, String ruta) => _respuestas.remove('$metodo $ruta');
+
   /// Los pedidos a esa ruta quedan esperando hasta que el test complete el `Completer` con (estado, cuerpo).
   Completer<(int, String?)> demorar(String metodo, String ruta) => _demorados['$metodo $ruta'] = Completer();
 
