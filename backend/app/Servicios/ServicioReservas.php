@@ -23,6 +23,7 @@ class ServicioReservas
         private Asignador $asignador,
         private Despachador $despachador,
         private Parametros $parametros,
+        private CompletadorDirecciones $direcciones,
     ) {}
 
     /**
@@ -73,6 +74,9 @@ class ServicioReservas
         $candidatos = $this->candidatos($modo, isset($datos['chofer_id']) ? (int) $datos['chofer_id'] : null, $inicio, $duracion);
         $obligatorio = CargoPrioritario::esObligatorio($solicitante->cargo);
 
+        // Antes de la transacción: la consulta de las direcciones que faltan no retiene ningún lock.
+        $datos = $this->direcciones->completar($datos);
+
         // Una sola transacción: si entre la consulta y la asignación otra reserva ganó la franja
         // de todos los candidatos, se revierte y no queda ningún viaje creado.
         $viaje = DB::transaction(function () use ($solicitante, $datos, $modo, $inicio, $duracion, $obligatorio, $candidatos) {
@@ -107,6 +111,8 @@ class ServicioReservas
                 ? 'El chofer elegido no está disponible en ese horario.'
                 : 'No hay choferes disponibles en ese horario.');
         }, attempts: 3);
+
+        $this->direcciones->reintentarSiFalta($viaje);
 
         return $viaje->refresh()->load(['chofer', 'vehiculo', 'solicitante']);
     }

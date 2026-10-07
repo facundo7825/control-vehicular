@@ -16,12 +16,15 @@ class ViajeActualizado implements ShouldBroadcast, ShouldDispatchAfterCommit
     /**
      * @param  array<int, int>  $choferesConOferta  choferes que tenían una oferta pendiente del viaje
      * @param  bool  $porAdmin  el cambio lo hizo un administrador desde el panel (cancelación o reasignación)
+     * @param  bool  $soloDatos  no cambió el estado (por ejemplo, se completó una dirección): solo se transmite,
+     *                           sin avisos push ni cierre de turno
      */
     public function __construct(
         public Viaje $viaje,
         public ?int $choferAnteriorId = null,
         public array $choferesConOferta = [],
         public bool $porAdmin = false,
+        public bool $soloDatos = false,
     ) {}
 
     /** @return array<int, PrivateChannel> */

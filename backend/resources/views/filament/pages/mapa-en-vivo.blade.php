@@ -118,6 +118,8 @@
         };
 
         // globos:logica-pura (inicio) — sin DOM ni mapa; se prueba aparte con node.
+        // Un punto sin dirección nunca muestra sus coordenadas.
+        const SIN_DIRECCION = 'Ubicación marcada en el mapa';
         const escapar = (texto) => String(texto ?? '').replace(/[&<>"']/g, (c) => ({
             '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
         })[c]);
@@ -146,7 +148,7 @@
                     + `<strong>Viaje #${escapar(c.viaje.id)}</strong> · ${escapar(c.viaje.estado_etiqueta)}`
                     + ` · <a href="${escapar(c.viaje.url)}">Ver viaje</a><br>`
                     + `Solicitante: ${escapar(c.viaje.solicitante ?? '—')}<br>`
-                    + `Hacia ${c.viaje.hacia === 'destino' ? 'el destino' : 'el origen'}: ${escapar(c.viaje.hacia_direccion ?? 'sin dirección')}<br>`
+                    + `Hacia ${c.viaje.hacia === 'destino' ? 'el destino' : 'el origen'}: ${escapar(c.viaje.hacia_direccion ?? SIN_DIRECCION)}<br>`
                     + `${escapar(textoLlegada(c.viaje))}<br>`
                     + `<button type="button" data-resaltar-viaje="${escapar(c.viaje.id)}" style="text-decoration: underline;">Ver recorrido</button>`;
             }
@@ -163,7 +165,7 @@
         const globoViaje = (v, punto, letra) => `<strong>Viaje #${escapar(v.id)}</strong> · ${escapar(v.estado_etiqueta)}`
             + `${v.url ? ` · <a href="${escapar(v.url)}">Ver viaje</a>` : ''}<br>`
             + `Chofer: ${escapar(v.chofer)}<br>`
-            + `${letra === 'O' ? 'Origen' : 'Destino'}: ${escapar(punto.direccion ?? 'sin dirección')}`;
+            + `${letra === 'O' ? 'Origen' : 'Destino'}: ${escapar(punto.direccion ?? SIN_DIRECCION)}`;
 
         // Resaltado de un viaje: ese más grueso y opaco, los demás atenuados; sin resaltado, todos normales.
         const OPACIDAD_VIAJE_ATENUADO = 0.25;
@@ -633,7 +635,7 @@
                         limites.extend(punto);
                         delViaje.extend(punto);
                         const marcador = new google.maps.Marker({
-                            map: mapa, position: punto, icon, title: `${titulo} · ${nombre}: ${punto.direccion ?? 'sin dirección'}`,
+                            map: mapa, position: punto, icon, title: `${titulo} · ${nombre}: ${punto.direccion ?? SIN_DIRECCION}`,
                         });
                         // Tocar el origen o el destino resalta el viaje y muestra su globo.
                         marcador.addListener('click', () => {

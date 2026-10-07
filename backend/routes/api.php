@@ -29,6 +29,7 @@ Route::middleware(['auth:sanctum', 'activo'])->group(function () {
     Route::get('/configuracion', ConfiguracionController::class);
     Route::get('/choferes', MapaController::class);
     Route::get('/lugares', LugaresController::class)->middleware('throttle:lugares');
+    Route::get('/lugares/inverso', [LugaresController::class, 'inverso'])->middleware('throttle:lugares');
     Route::get('/ruta', RutaController::class)->middleware('throttle:rutas');
     Route::get('/viajes/actual', [ViajeController::class, 'actual']);
     Route::get('/viajes/{viaje}', [ViajeController::class, 'show'])->whereNumber('viaje');

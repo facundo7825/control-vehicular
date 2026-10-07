@@ -19,6 +19,10 @@ class CerrarTurnoPendiente
 
     public function handle(ViajeActualizado $e): void
     {
+        if ($e->soloDatos) {
+            return;
+        }
+
         $choferes = array_unique(array_filter([$e->viaje->chofer_id, $e->choferAnteriorId]));
 
         foreach ($choferes as $choferId) {

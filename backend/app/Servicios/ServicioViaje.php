@@ -29,6 +29,7 @@ class ServicioViaje
         private Parametros $parametros,
         private DisponibilidadReservas $disponibilidad,
         private AvisosReserva $avisosReserva,
+        private CompletadorDirecciones $direcciones,
     ) {}
 
     /** Un inmediato se puede reasignar hasta que empieza el viaje con el pasajero (spec 5.6). */
@@ -53,6 +54,9 @@ class ServicioViaje
                 throw new ReglaNegocio('El chofer elegido no está disponible.');
             }
         }
+
+        // Antes de la transacción: la consulta de las direcciones que faltan no retiene ningún lock.
+        $datos = $this->direcciones->completar($datos);
 
         $viaje = DB::transaction(function () use ($solicitante, $datos, $modo) {
             // Bloquea al solicitante para que un doble toque o un reintento no creen dos viajes.
@@ -81,6 +85,8 @@ class ServicioViaje
                 'estado' => EstadoViaje::Buscando,
             ]);
         }, attempts: 3);
+
+        $this->direcciones->reintentarSiFalta($viaje);
 
         $chofer
             ? $this->despachador->pedirA($viaje, $chofer)

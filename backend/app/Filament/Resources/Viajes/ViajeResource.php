@@ -51,6 +51,9 @@ use Illuminate\Support\Carbon;
 /** Viajes y reservas (spec 8.5): listado con filtros y detalle con línea de tiempo, ofertas y recorrido. */
 class ViajeResource extends Resource
 {
+    /** Texto de un punto sin dirección: nunca se muestran coordenadas. */
+    public const SIN_DIRECCION = 'Ubicación marcada en el mapa';
+
     protected static ?string $model = Viaje::class;
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedTicket;
@@ -286,9 +289,9 @@ class ViajeResource extends Resource
                         TextEntry::make('vehiculo.patente')->label('Vehículo')->placeholder('—'),
                         TextEntry::make('motivo')->placeholder('—'),
                         TextEntry::make('origen_direccion')->label('Origen')
-                            ->state(fn (Viaje $record): string => $record->origen_direccion ?? "{$record->origen_lat}, {$record->origen_lng}"),
+                            ->state(fn (Viaje $record): string => self::describirLugar($record, 'origen')),
                         TextEntry::make('destino_direccion')->label('Destino')
-                            ->state(fn (Viaje $record): string => $record->destino_direccion ?? "{$record->destino_lat}, {$record->destino_lng}"),
+                            ->state(fn (Viaje $record): string => self::describirLugar($record, 'destino')),
                         TextEntry::make('duracion_estimada_min')->label('Duración estimada')->suffix(' min')->placeholder('—'),
                     ]),
                 Section::make('Línea de tiempo')
@@ -320,7 +323,7 @@ class ViajeResource extends Resource
     public static function table(Table $table): Table
     {
         $zona = config('vehiculos.zona_horaria');
-        // Dirección acortada (completa en el tooltip); sin dirección, las coordenadas.
+        // Dirección acortada (completa en el tooltip); sin dirección, "Ubicación marcada en el mapa".
         $direccion = fn (string $punto, string $etiqueta) => TextColumn::make("{$punto}_direccion")
             ->label($etiqueta)
             ->state(fn (Viaje $record): string => self::describirLugar($record, $punto))
@@ -459,10 +462,10 @@ class ViajeResource extends Resource
             });
     }
 
-    /** Dirección de un punto, o sus coordenadas si no tiene. */
+    /** Dirección de un punto, o "Ubicación marcada en el mapa" si todavía no tiene. */
     public static function describirLugar(Viaje $viaje, string $punto): string
     {
-        return $viaje->{"{$punto}_direccion"} ?? "{$viaje->{"{$punto}_lat"}}, {$viaje->{"{$punto}_lng"}}";
+        return $viaje->{"{$punto}_direccion"} ?? self::SIN_DIRECCION;
     }
 
     private static function describirPunto(Viaje $viaje, string $orden): ?string
@@ -470,7 +473,7 @@ class ViajeResource extends Resource
         $punto = $viaje->recorrido()->orderBy('registrado_en', $orden)->first();
 
         return $punto
-            ? $punto->registrado_en->setTimezone(config('vehiculos.zona_horaria'))->format('H:i:s')." ({$punto->lat}, {$punto->lng})"
+            ? $punto->registrado_en->setTimezone(config('vehiculos.zona_horaria'))->format('H:i:s')
             : null;
     }
 

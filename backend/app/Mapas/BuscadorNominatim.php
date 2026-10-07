@@ -23,8 +23,11 @@ use Illuminate\Support\Facades\Log;
  * devuelve [] sin cortar: no se retiene el único worker de `artisan serve`.
  *
  * Privacidad: la ubicación se redondea a 1 decimal (~11 km) antes de enviarla o usarla en la clave del cache.
+ *
+ * También hace la geocodificación inversa (`/reverse`) con el mismo servidor, User-Agent, espera, corte y cache
+ * (24 h por punto redondeado a 4 decimales, ~11 m), pero con 2 s en total por punto, contando la espera.
  */
-class BuscadorNominatim implements BuscadorLugares
+class BuscadorNominatim implements BuscadorLugares, GeocodificadorInverso
 {
     public const URL_PUBLICA = 'https://nominatim.openstreetmap.org';
 
@@ -41,6 +44,12 @@ class BuscadorNominatim implements BuscadorLugares
     private const SEGUNDOS_CORTE = 60;
 
     private const TIMEOUT_SEG = 3;
+
+    /** Tiempo total de una geocodificación inversa, con la espera del servidor público incluida. */
+    private const PLAZO_INVERSO_SEG = 2.0;
+
+    /** Si queda menos que esto del plazo, no se llega a consultar. */
+    private const TIMEOUT_MINIMO_SEG = 0.2;
 
     /** Medio lado, en grados (~22 km), de la caja con la que se sesga la búsqueda. */
     private const MARGEN_GRADOS = 0.2;
@@ -101,7 +110,7 @@ class BuscadorNominatim implements BuscadorLugares
             return [];
         }
 
-        $lugares = $this->consultar($texto, $lat, $lng);
+        $lugares = $this->consultar('/search', $this->parametrosBusqueda($texto, $lat, $lng), fn (array $filas) => $this->mapear($filas));
         if ($lugares !== null) {
             Cache::put($clave, $lugares, self::SEGUNDOS_CACHE);
         }
@@ -109,8 +118,71 @@ class BuscadorNominatim implements BuscadorLugares
         return $lugares ?? [];
     }
 
-    /** @return ?list<array{nombre: string, direccion: string, lat: float, lng: float}> null si falló. */
-    private function consultar(string $texto, ?float $lat, ?float $lng): ?array
+    public function direccion(float $lat, float $lng): ?string
+    {
+        $hasta = microtime(true) + self::PLAZO_INVERSO_SEG;
+        $lat = round($lat, 4);
+        $lng = round($lng, 4);
+        $clave = 'lugares:nominatim:inverso:'.md5("$lat,$lng|".$this->url);
+
+        // Se guarda envuelta: un punto sin dirección (`direccion` null) también sale del cache.
+        $guardado = Cache::get($clave);
+        if (is_array($guardado)) {
+            return $guardado['direccion'];
+        }
+        if (Cache::has(self::CLAVE_CORTE)) {
+            return null;
+        }
+
+        $resultado = $this->consultar('/reverse', [
+            'format' => 'jsonv2',
+            'lat' => $lat,
+            'lon' => $lng,
+            'zoom' => 18,
+            'addressdetails' => 1,
+            'accept-language' => 'es',
+        ], fn (array $fila) => ['direccion' => self::armarDireccion($fila)], $hasta);
+        if ($resultado !== null) {
+            Cache::put($clave, $resultado, self::SEGUNDOS_CACHE);
+        }
+
+        return $resultado['direccion'] ?? null;
+    }
+
+    /**
+     * Dirección legible de una respuesta de `/reverse`: "calle altura, localidad" ("Sarmiento 520, San Fernando
+     * del Valle de Catamarca"); sin localidad, el barrio. Sin altura, "calle, localidad". Sin calle, el nombre del
+     * lugar o la localidad. Null si no hay nada de eso (por ejemplo `{"error": "Unable to geocode"}`).
+     */
+    public static function armarDireccion(array $fila): ?string
+    {
+        $partes = is_array($fila['address'] ?? null) ? $fila['address'] : [];
+        $primera = function (array $claves) use ($partes): ?string {
+            foreach ($claves as $c) {
+                $valor = is_scalar($partes[$c] ?? null) ? trim((string) $partes[$c]) : '';
+                if ($valor !== '') {
+                    return $valor;
+                }
+            }
+
+            return null;
+        };
+
+        $calle = $primera(['road', 'pedestrian']);
+        $altura = $primera(['house_number']);
+        $zona = $primera(['city', 'town', 'village']) ?? $primera(['neighbourhood', 'suburb']);
+        $nombre = is_scalar($fila['name'] ?? null) ? trim((string) $fila['name']) : '';
+
+        $direccion = match (true) {
+            $calle !== null => implode(', ', array_filter([$altura !== null ? "$calle $altura" : $calle, $zona])),
+            $nombre !== '' => $nombre,
+            default => $zona,
+        };
+
+        return $direccion === null ? null : mb_substr($direccion, 0, 255);
+    }
+
+    private function parametrosBusqueda(string $texto, ?float $lat, ?float $lng): array
     {
         $params = [
             'q' => $texto,
@@ -129,12 +201,26 @@ class BuscadorNominatim implements BuscadorLugares
             ));
         }
 
+        return $params;
+    }
+
+    /**
+     * Un pedido al servidor, con la espera y el lock del público.
+     *
+     * @template T of array
+     *
+     * @param  Closure(array): T  $mapear  convierte el JSON de una respuesta exitosa.
+     * @param  ?float  $hasta  plazo total (microtime): sin él, 3 s de timeout para el pedido.
+     * @return ?T null si falló.
+     */
+    private function consultar(string $ruta, array $params, Closure $mapear, ?float $hasta = null): ?array
+    {
         try {
             if (! $this->publica) {
-                return $this->pedir($params);
+                return $this->pedir($ruta, $params, $mapear, $hasta);
             }
 
-            return Cache::lock('lugares:nominatim:lock', 15)->block(1, function () use ($params) {
+            return Cache::lock('lugares:nominatim:lock', 15)->block(1, function () use ($ruta, $params, $mapear, $hasta) {
                 if (Cache::has(self::CLAVE_CORTE)) {
                     return null;
                 }
@@ -145,7 +231,7 @@ class BuscadorNominatim implements BuscadorLugares
                 }
 
                 try {
-                    return $this->pedir($params);
+                    return $this->pedir($ruta, $params, $mapear, $hasta);
                 } finally {
                     Cache::put(self::CLAVE_ULTIMO, microtime(true), 60);
                 }
@@ -157,13 +243,18 @@ class BuscadorNominatim implements BuscadorLugares
         }
     }
 
-    /** @return ?list<array{nombre: string, direccion: string, lat: float, lng: float}> null si falló (y corta). */
-    private function pedir(array $params): ?array
+    /** @return ?array null si falló (y corta) o si ya no queda plazo (sin cortar). */
+    private function pedir(string $ruta, array $params, Closure $mapear, ?float $hasta): ?array
     {
+        $timeout = $hasta === null ? self::TIMEOUT_SEG : min(self::TIMEOUT_SEG, round($hasta - microtime(true), 2));
+        if ($timeout < self::TIMEOUT_MINIMO_SEG) {
+            return null;
+        }
+
         try {
-            $r = Http::timeout(self::TIMEOUT_SEG)->withUserAgent($this->userAgent)->get($this->url.'/search', $params);
+            $r = Http::timeout($timeout)->withUserAgent($this->userAgent)->get($this->url.$ruta, $params);
         } catch (ConnectionException $e) {
-            // Nunca el mensaje: lleva la URL, con el texto buscado y la zona.
+            // Nunca el mensaje: lleva la URL, con el texto buscado o el punto.
             Log::warning('Nominatim sin conexión', ['error' => $e::class]);
             $this->cortar();
 
@@ -177,7 +268,7 @@ class BuscadorNominatim implements BuscadorLugares
             return null;
         }
 
-        return $this->mapear($r->json());
+        return $mapear($r->json());
     }
 
     private function cortar(): void

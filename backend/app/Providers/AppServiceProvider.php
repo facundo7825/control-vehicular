@@ -11,6 +11,7 @@ use App\Mapas\BuscadorGeoref;
 use App\Mapas\BuscadorGoogle;
 use App\Mapas\BuscadorLugares;
 use App\Mapas\BuscadorNominatim;
+use App\Mapas\GeocodificadorInverso;
 use App\Mapas\GoogleMaps;
 use App\Mapas\RutasFalso;
 use App\Mapas\RutasGoogle;
@@ -67,6 +68,19 @@ class AppServiceProvider extends ServiceProvider
             }, BuscadorCombinado::drivers((string) config('vehiculos.lugares.driver')));
 
             return count($buscadores) === 1 ? $buscadores[0] : new BuscadorCombinado($buscadores);
+        });
+
+        // La dirección de un punto: Georef no hace inversa por calle, así que georef y las listas usan Nominatim.
+        $this->app->bind(GeocodificadorInverso::class, function () {
+            $drivers = BuscadorCombinado::drivers((string) config('vehiculos.lugares.driver'));
+
+            return match (count($drivers) === 1 ? $drivers[0] : 'nominatim') {
+                'google' => new BuscadorGoogle((string) config('vehiculos.mapas.google_api_key')),
+                'falso' => new BuscadorFalso,
+                default => new BuscadorNominatim(
+                    (string) config('vehiculos.lugares.user_agent'), null, (string) config('vehiculos.lugares.nominatim_url'),
+                ),
+            };
         });
 
         $this->app->bind(ServicioRutas::class, fn () => match (config('vehiculos.rutas.driver')) {
