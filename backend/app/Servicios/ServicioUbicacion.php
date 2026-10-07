@@ -30,7 +30,8 @@ class ServicioUbicacion
      */
     public function registrar(Usuario $chofer, array $puntos): void
     {
-        $conTurno = $chofer->turnoAbierto()->exists();
+        $turno = $chofer->turnoAbierto()->first();
+        $conTurno = $turno !== null;
 
         $puntos = collect($puntos)
             ->map(fn (array $p) => [...$p, 'momento' => HoraLocal::interpretar($p['registrado_en'])->min(now())])
@@ -43,8 +44,10 @@ class ServicioUbicacion
             throw new ReglaNegocio('Iniciá un turno para compartir tu ubicación.');
         }
 
-        if ($conTurno && $puntos->isNotEmpty()) {
-            $this->actualizarUbicacion($chofer, $puntos->last());
+        // La ubicación actual sale solo de puntos de este turno: lo atrasado de un turno anterior no es la posición en vivo.
+        $delTurno = $conTurno ? $puntos->filter(fn (array $p) => $p['momento']->gte($turno->inicio)) : collect();
+        if ($delTurno->isNotEmpty()) {
+            $this->actualizarUbicacion($chofer, $delTurno->last());
         }
 
         // Idempotente: un lote reenviado (la app no recibió el 204) no duplica puntos. El índice único
@@ -172,13 +175,15 @@ class ServicioUbicacion
 
     /**
      * Si el viaje ya estaba finalizado (puntos que llegaron tarde) o se finalizó mientras se guardaban, sus metros
-     * se guardaron sin estos puntos: se recalculan. El bloqueo espera a que termine una finalización en marcha.
+     * se guardaron sin estos puntos: se recalculan. El bloqueo espera a que termine una finalización en marcha;
+     * si esa finalización fue con una hora anterior a estos puntos (un "Finalizar" atrasado), se vuelven a recortar.
      */
     private function recalcularSiYaFinalizo(int $viajeId): void
     {
         DB::transaction(function () use ($viajeId) {
-            $estado = Viaje::whereKey($viajeId)->lockForUpdate()->value('estado');
-            if ($estado === EstadoViaje::Finalizado) {
+            $viaje = Viaje::whereKey($viajeId)->lockForUpdate()->first();
+            if ($viaje?->estado === EstadoViaje::Finalizado) {
+                $this->recortarAlFinalizar($viaje);
                 Viaje::whereKey($viajeId)->update(['metros_recorridos' => KilometrosRecorridos::metrosDe($viajeId)]);
             }
         });

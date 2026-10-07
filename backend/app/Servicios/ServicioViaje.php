@@ -129,6 +129,9 @@ class ServicioViaje
         if ($this->accionYaAplicada($idAccion, $viaje, $chofer)) {
             return $viaje->refresh()->load(['chofer', 'vehiculo', 'solicitante']);
         }
+        // Atrasada: el chofer la tocó hace más de la tolerancia (sin señal). Solo entonces los conflictos se
+        // explican como "mientras estabas sin señal" (409); una acción en el momento conserva los errores de siempre.
+        $atrasada = $momento !== null && $momento->lt(now()->subMinutes(self::TOLERANCIA_MOMENTO_MIN));
         if ($momento) {
             if ($momento->gt(now()->addMinutes(self::TOLERANCIA_MOMENTO_MIN))) {
                 throw new ReglaNegocio('La hora de la acción está en el futuro. Revisá la hora del celular.');
@@ -140,11 +143,12 @@ class ServicioViaje
         }
 
         try {
-            $this->aplicarAvance($viaje, $chofer, $hacia, $momento, $idAccion);
-        } catch (UniqueConstraintViolationException) {
-            // El mismo id_accion llegó a la vez para otro viaje (cada pedido bloqueó su viaje): vale el primero.
-            if (! $this->accionYaAplicada($idAccion, $viaje, $chofer)) {
-                throw new ReglaNegocio(self::ACCION_DE_OTRO_VIAJE);
+            $this->aplicarAvance($viaje, $chofer, $hacia, $momento, $idAccion, $atrasada);
+        } catch (UniqueConstraintViolationException $e) {
+            // El mismo id_accion llegó a la vez para otro viaje (cada pedido bloqueó su viaje): vale el primero
+            // (422 si es de otro viaje, 200 si es este). Si no hay ninguna acción con ese id, la violación es otra.
+            if ($idAccion === null || ! $this->accionYaAplicada($idAccion, $viaje, $chofer)) {
+                throw $e;
             }
         }
 
@@ -165,9 +169,10 @@ class ServicioViaje
         return true;
     }
 
-    private function aplicarAvance(Viaje $viaje, Usuario $chofer, EstadoViaje $hacia, ?Carbon $momento, ?string $idAccion): void
-    {
-        DB::transaction(function () use ($viaje, $chofer, $hacia, $momento, $idAccion) {
+    private function aplicarAvance(
+        Viaje $viaje, Usuario $chofer, EstadoViaje $hacia, ?Carbon $momento, ?string $idAccion, bool $atrasada,
+    ): void {
+        DB::transaction(function () use ($viaje, $chofer, $hacia, $momento, $idAccion, $atrasada) {
             // Mismo primer lock que la máquina de estados (el viaje): dos reenvíos de la misma acción se ordenan acá.
             $viaje->setRawAttributes(Viaje::whereKey($viaje->id)->lockForUpdate()->firstOrFail()->getAttributes(), true);
 
@@ -175,7 +180,7 @@ class ServicioViaje
                 return; // un reenvío concurrente ya la aplicó: se devuelve el viaje como está
             }
 
-            $this->validarVigencia($viaje, $chofer, $hacia, $idAccion !== null);
+            $this->validarVigencia($viaje, $chofer, $atrasada);
             if ($momento && $viaje->estado !== $hacia) {
                 $momento = $this->momentoDesdePasoAnterior($viaje, $hacia, $momento);
             }
@@ -200,10 +205,10 @@ class ServicioViaje
     }
 
     /**
-     * El viaje sigue siendo del chofer. Una acción con `id_accion` puede llegar tarde (la app la guardó sin señal):
-     * si el viaje cambió mientras tanto se responde un conflicto, sin cambiar nada, y la app descarta sus pendientes.
+     * El viaje sigue siendo del chofer. Una acción atrasada (la app la guardó sin señal) que encuentra el viaje
+     * cambiado (cancelado o reasignado) recibe un conflicto, sin cambiar nada, y la app descarta sus pendientes.
      */
-    private function validarVigencia(Viaje $viaje, Usuario $chofer, EstadoViaje $hacia, bool $diferida): void
+    private function validarVigencia(Viaje $viaje, Usuario $chofer, bool $diferida): void
     {
         if ($diferida && $viaje->estado === EstadoViaje::Cancelado) {
             throw new ConflictoViaje('El viaje fue cancelado mientras estabas sin señal.');

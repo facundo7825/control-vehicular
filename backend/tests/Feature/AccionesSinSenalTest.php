@@ -11,8 +11,10 @@ use App\Models\UbicacionChofer;
 use App\Models\Usuario;
 use App\Models\Viaje;
 use App\Servicios\KilometrosRecorridos;
+use App\Servicios\MaquinaEstadosViaje;
 use App\Servicios\ServicioTurnos;
 use App\Servicios\ServicioViaje;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
@@ -39,6 +41,34 @@ function avanzarSinSenal(Usuario $chofer, Viaje $viaje, string $estado, ?string 
     return test()->actingAs($chofer)->postJson("/api/viajes/{$viaje->id}/estado", array_filter([
         'estado' => $estado, 'momento' => $momento, 'id_accion' => $idAccion ?? (string) Str::uuid(),
     ]));
+}
+
+/**
+ * Simula otro pedido con el mismo id_accion para $suyo que registra la acción justo antes del insert de este
+ * (cada uno bloqueó su viaje). Con una sola conexión su fila se deshace junto con la transacción que falla:
+ * si $laOtraConfirma, se vuelve a insertar antes de la consulta siguiente (la otra transacción sí confirmó).
+ */
+function competirPorIdAccion(string $id, Viaje $suyo, Usuario $chofer, bool $laOtraConfirma): void
+{
+    $estado = ['dentro' => false, 'compitio' => false, 'confirmo' => false];
+    $insertar = function () use ($id, $suyo, $chofer, &$estado) {
+        $estado['dentro'] = true;
+        DB::table('acciones_viaje')->insert(['id_accion' => $id, 'viaje_id' => $suyo->id, 'chofer_id' => $chofer->id,
+            'estado' => 'llego', 'momento' => now(), 'aplicada_en' => now()]);
+        $estado['dentro'] = false;
+    };
+    DB::beforeExecuting(function (string $sql) use ($insertar, $laOtraConfirma, &$estado) {
+        if ($estado['dentro']) {
+            return;
+        }
+        if (! $estado['compitio'] && str_starts_with($sql, 'insert into "acciones_viaje"')) {
+            $estado['compitio'] = true;
+            $insertar();
+        } elseif ($laOtraConfirma && $estado['compitio'] && ! $estado['confirmo'] && str_contains($sql, 'from "acciones_viaje"')) {
+            $estado['confirmo'] = true;
+            $insertar();
+        }
+    });
 }
 
 describe('avance con la hora real', function () {
@@ -356,21 +386,99 @@ describe('ajustes de la revisión', function () {
         $otro = viajeSinSenal($chofer, ['estado' => EstadoViaje::EnCamino]);
         $id = (string) Str::uuid();
 
-        // El otro pedido registra la acción justo después de que este verificó que no existía (con su viaje bloqueado).
-        $consultas = 0;
-        DB::listen(function ($consulta) use (&$consultas, $id, $uno, $chofer) {
-            if (str_contains($consulta->sql, 'from "acciones_viaje"') && $consulta->bindings === [$id] && ++$consultas === 2) {
-                DB::table('acciones_viaje')->insert(['id_accion' => $id, 'viaje_id' => $uno->id, 'chofer_id' => $chofer->id,
-                    'estado' => 'llego', 'momento' => now(), 'aplicada_en' => now()]);
-            }
-        });
+        competirPorIdAccion($id, $uno, $chofer, laOtraConfirma: true);
 
         avanzarSinSenal($chofer, $otro, 'llego', null, $id)
             ->assertStatus(422)
             ->assertJsonPath('message', 'Esa acción ya se registró en otro viaje.');
 
-        expect($consultas)->toBeGreaterThanOrEqual(2)
-            ->and($otro->fresh()->estado)->toBe(EstadoViaje::EnCamino);
+        expect($otro->fresh()->estado)->toBe(EstadoViaje::EnCamino);
+    });
+
+    it('una violación de unicidad sin ninguna acción con ese id no se disfraza de reenvío', function () {
+        $chofer = choferEnTurno();
+        $uno = viajeSinSenal($chofer, ['estado' => EstadoViaje::EnCamino]);
+        $otro = viajeSinSenal($chofer, ['estado' => EstadoViaje::EnCamino]);
+        $id = (string) Str::uuid();
+        competirPorIdAccion($id, $uno, $chofer, laOtraConfirma: false);
+
+        expect(fn () => app(ServicioViaje::class)->avanzar($otro, $chofer, EstadoViaje::Llego, null, $id))
+            ->toThrow(UniqueConstraintViolationException::class);
+        expect($otro->fresh()->estado)->toBe(EstadoViaje::EnCamino);
+    });
+
+    it('una acción en el momento (no atrasada) conserva los errores de siempre aunque traiga id_accion', function () {
+        $chofer = choferEnTurno();
+        $ajeno = viajeSinSenal(choferEnTurno(-34.7, -58.5), ['estado' => EstadoViaje::EnCamino]);
+        $cancelado = viajeSinSenal($chofer, ['estado' => EstadoViaje::Cancelado, 'cancelado_en' => now()->subMinutes(3)]);
+
+        avanzarSinSenal($chofer, $ajeno, 'llego', now()->subSeconds(30)->toIso8601String())
+            ->assertForbidden()
+            ->assertJsonPath('message', 'Este viaje no es tuyo.');
+        avanzarSinSenal($chofer, $cancelado, 'llego', now()->toIso8601String())
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'El viaje no puede pasar de cancelado a llego.');
+        avanzarSinSenal($chofer, $cancelado, 'llego', null)->assertStatus(422);
+    });
+
+    it('la ubicación actual sale solo de los puntos del turno abierto', function () {
+        $turno = Turno::factory()->create(['inicio' => now()->subMinutes(30)]);
+        $chofer = $turno->chofer;
+        // Viaje de un turno anterior, con puntos que la app recién envía.
+        $viaje = viajeSinSenal($chofer, ['estado' => EstadoViaje::Finalizado, 'iniciado_en' => now()->subMinutes(90),
+            'finalizado_en' => now()->subMinutes(60)]);
+
+        $this->actingAs($chofer)->postJson('/api/ubicacion', ['puntos' => [
+            ['lat' => -34.60, 'lng' => -58.38, 'registrado_en' => now()->subMinutes(80)->toIso8601String()],
+            ['lat' => -34.61, 'lng' => -58.38, 'registrado_en' => now()->subMinutes(70)->toIso8601String()],
+        ]])->assertNoContent();
+
+        expect(PuntoRecorrido::where('viaje_id', $viaje->id)->count())->toBe(2)
+            ->and(UbicacionChofer::find($chofer->id))->toBeNull();
+
+        $this->actingAs($chofer)->postJson('/api/ubicacion', ['puntos' => [
+            ['lat' => -34.62, 'lng' => -58.38, 'registrado_en' => now()->subMinutes(65)->toIso8601String()],
+            ['lat' => -34.70, 'lng' => -58.40, 'registrado_en' => now()->subMinutes(5)->toIso8601String()],
+        ]])->assertNoContent();
+
+        expect(UbicacionChofer::find($chofer->id)->lat)->toBe(-34.70);
+    });
+
+    it('acepta el momento con el formato exacto de la app (UTC con micro o milisegundos)', function (string $formato) {
+        $chofer = choferEnTurno();
+        $viaje = viajeSinSenal($chofer, ['estado' => EstadoViaje::EnCamino]);
+        $momento = now()->subMinutes(5)->addMicroseconds(789123);
+
+        avanzarSinSenal($chofer, $viaje, 'llego', $momento->copy()->utc()->format($formato))->assertOk();
+
+        expect($viaje->fresh()->llego_en->equalTo($momento->copy()->startOfSecond()))->toBeTrue();
+    })->with(['micro' => 'Y-m-d\TH:i:s.u\Z', 'mili' => 'Y-m-d\TH:i:s.v\Z']);
+
+    it('si un Finalizar atrasado se aplica mientras llegan puntos, no quedan puntos después del fin', function () {
+        $turno = Turno::factory()->create();
+        $viaje = Viaje::factory()->create([
+            'chofer_id' => $turno->chofer_id, 'estado' => EstadoViaje::EnCurso, 'iniciado_en' => now()->subMinutes(20),
+        ]);
+        PuntoRecorrido::create(['viaje_id' => $viaje->id, 'lat' => -34.600, 'lng' => -58.380, 'registrado_en' => now()->subMinutes(15)]);
+        PuntoRecorrido::create(['viaje_id' => $viaje->id, 'lat' => -34.610, 'lng' => -58.380, 'registrado_en' => now()->subMinutes(12)]);
+
+        // El Finalizar (tocado a las -10) se aplica después de que el servidor vio el viaje en curso y antes del insert.
+        $finalizado = false;
+        DB::listen(function ($consulta) use (&$finalizado, $viaje) {
+            if (! $finalizado && str_contains($consulta->sql, 'from "viajes"') && $consulta->bindings === [$viaje->chofer_id, 'en_curso']
+                && ! str_contains($consulta->sql, 'for update')) {
+                $finalizado = true;
+                app(MaquinaEstadosViaje::class)->transicionar(Viaje::find($viaje->id), EstadoViaje::Finalizado, momento: now()->subMinutes(10));
+            }
+        });
+
+        $this->actingAs($turno->chofer)->postJson('/api/ubicacion', ['puntos' => [
+            ['lat' => -34.700, 'lng' => -58.380, 'registrado_en' => now()->subMinutes(5)->toIso8601String()],
+        ]])->assertNoContent();
+
+        expect($finalizado)->toBeTrue()
+            ->and(PuntoRecorrido::where('viaje_id', $viaje->id)->count())->toBe(2)
+            ->and($viaje->fresh()->metros_recorridos)->toBe((int) round(Distancia::metros(-34.600, -58.380, -34.610, -58.380)));
     });
 
     it('un punto justo en el fin de un viaje y el inicio del siguiente va al siguiente', function () {
