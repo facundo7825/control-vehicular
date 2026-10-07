@@ -1,6 +1,8 @@
 import 'dart:convert';
 
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:vehiculos_oficiales/src/chofer/turno.dart';
 import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real.dart';
 import 'package:vehiculos_oficiales/src/ui/chofer/agenda.dart';
 import 'package:vehiculos_oficiales/src/ui/chofer/viaje_chofer.dart';
@@ -161,6 +163,50 @@ void main() {
     expect(find.textContaining('Dr. Ruiz y dos asesores'), findsOneWidget);
     expect(find.text('Voy en camino'), findsOneWidget);
     expect(find.text('Rechazar'), findsOneWidget); // solo el de la solicitud; el largo no tiene
+  });
+
+  Map<String, dynamic> largoConfirmado() => p.json(c.reservaConfirmada)
+    ..['id'] = 7
+    ..['tipo'] = 'largo';
+
+  testWidgets('"Voy en camino" en un viaje largo refresca el turno: el vehículo es el del viaje', (tester) async {
+    final agenda = p.json(c.agenda)..['reservas'] = [largoConfirmado()];
+    e = entornoChofer(agenda: jsonEncode(agenda));
+    e.http
+      ..responder('GET', 'turnos/actual', 200, c.turnoConOtroVehiculo) // el 2.º pedido: el turno ya cambió
+      ..responder('POST', 'viajes/7/estado', 200, jsonEncode(largoConfirmado()..['estado'] = 'en_camino'));
+
+    await abrirAgenda(tester);
+    await tester.tap(find.text('Voy en camino'));
+    await esperar(tester);
+
+    expect(pedidosHechos(e).where((r) => r == 'GET turnos/actual'), hasLength(2));
+    final turno = ProviderScope.containerOf(tester.element(find.byType(ViajeChofer))).read(turnoProvider).value;
+    expect(turno!.vehiculo!.patente, 'AC456EF');
+  });
+
+  testWidgets('"Voy en camino" en un viaje largo sigue bien si el refresco del turno falla', (tester) async {
+    final agenda = p.json(c.agenda)..['reservas'] = [largoConfirmado()];
+    e = entornoChofer(agenda: jsonEncode(agenda));
+    e.http
+      ..sinRed('GET', 'turnos/actual')
+      ..responder('POST', 'viajes/7/estado', 200, jsonEncode(largoConfirmado()..['estado'] = 'en_camino'));
+
+    await abrirAgenda(tester);
+    await tester.tap(find.text('Voy en camino'));
+    await esperar(tester);
+
+    expect(find.byType(ViajeChofer), findsOneWidget);
+  });
+
+  testWidgets('"Voy en camino" en una reserva no refresca el turno', (tester) async {
+    e.http.responder('POST', 'viajes/2/estado', 200, jsonEncode(p.json(c.reservaConfirmada)..['estado'] = 'en_camino'));
+
+    await abrirAgenda(tester);
+    await tester.tap(find.text('Voy en camino'));
+    await esperar(tester);
+
+    expect(pedidosHechos(e).where((r) => r == 'GET turnos/actual'), hasLength(1));
   });
 
   testWidgets('un evento de un viaje largo recarga la agenda', (tester) async {
