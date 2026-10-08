@@ -153,6 +153,31 @@ void main() {
     );
   });
 
+  test('avanzar con la hora real y el id de la acción (sin señal); 409 si el viaje cambió mientras tanto', () async {
+    http.responder('POST', 'viajes/1/estado', 200, p.viajeAceptado.replaceFirst('"aceptado"', '"llego"'));
+    http.responder('POST', 'viajes/2/estado', 409, '{"message":"El viaje fue cancelado mientras estabas sin señal."}');
+
+    await api.avanzarViaje(
+      1,
+      EstadoViaje.llego,
+      // Hora local de Argentina: se manda en UTC, con su zona.
+      momento: DateTime.parse('2026-10-07T09:15:30.250-03:00'),
+      idAccion: '0b7c3f5e-8a9d-4c2b-9e1f-2a3b4c5d6e7f',
+    );
+
+    expect(cuerpo(), {
+      'estado': 'llego',
+      'momento': '2026-10-07T12:15:30.250Z',
+      'id_accion': '0b7c3f5e-8a9d-4c2b-9e1f-2a3b4c5d6e7f',
+    });
+    await expectLater(
+      api.avanzarViaje(2, EstadoViaje.llego),
+      throwsA(
+        isA<Conflicto>().having((e) => e.mensaje, 'mensaje', 'El viaje fue cancelado mientras estabas sin señal.'),
+      ),
+    );
+  });
+
   test('cancelar como chofer manda el motivo y recibe el viaje ya sin chofer', () async {
     http.responder('POST', 'viajes/1/cancelar', 200, c.viajeCanceladoPorChofer);
 

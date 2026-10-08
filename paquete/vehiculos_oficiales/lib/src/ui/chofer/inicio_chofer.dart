@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../chofer/cola_acciones.dart';
 import '../../chofer/turno.dart';
+import '../../mapa/descarga_corredor.dart';
 import '../../viaje/viaje_actual.dart';
 import '../comunes/comunes.dart';
 import '../modulo_app.dart';
@@ -27,6 +29,14 @@ class InicioChofer extends ConsumerWidget {
       if (oferta != null && oferta.id != antes?.oferta?.id) return context.go(Rutas.ofertaChofer);
       final id = ahora.viaje?.id;
       if (id != null && id != antes?.viaje?.id) context.go(Rutas.viajeChofer);
+    });
+    // Esta pantalla queda debajo de todas las del chofer: mientras esté en un viaje largo se baja el mapa del
+    // recorrido (para verlo sin señal), y se cancela al terminar el viaje o cerrar el módulo.
+    ref.listen(descargaCorredorProvider, (_, _) {});
+    // Un paso del viaje que el servidor rechazó al reconectar (p. ej. "El viaje fue cancelado mientras estabas
+    // sin señal."): se avisa desde acá, debajo de todas las pantallas del chofer.
+    ref.listen(avisoAccionProvider, (_, aviso) {
+      if (aviso != null) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(aviso.mensaje)));
     });
     final turno = ref.watch(turnoProvider);
 

@@ -86,7 +86,10 @@ void main() {
     for (final MapEntry(key: boton, value: estado) in pasos.entries) {
       await tester.tap(find.widgetWithText(FilledButton, boton));
       await esperar(tester);
-      expect(cuerpo('viajes/1/estado'), {'estado': estado});
+      expect(
+        cuerpo('viajes/1/estado'),
+        allOf(containsPair('estado', estado), contains('momento'), contains('id_accion')),
+      );
     }
 
     expect(find.text('Viaje finalizado'), findsWidgets);
@@ -192,6 +195,91 @@ void main() {
 
     expect(find.text('Podés salir hacia esta reserva a partir de las 11:15.'), findsOneWidget);
     expect(find.text('Voy en camino'), findsOneWidget);
+  });
+
+  group('sin señal', () {
+    testWidgets('los pasos avanzan al instante, se avisa cuántos faltan enviar y salen al reconectar', (tester) async {
+      await abrir(tester, viajeJson(estado: 'en_camino'), (e) => e.http.sinRed('POST', 'viajes/1/estado'));
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Llegué'));
+      await esperar(tester);
+      expect(find.widgetWithText(FilledButton, 'Iniciar viaje'), findsOneWidget);
+      expect(find.text('Sin señal: 1 acción se enviará al reconectar'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Iniciar viaje'));
+      await esperar(tester);
+      expect(find.widgetWithText(FilledButton, 'Finalizar'), findsOneWidget);
+      expect(find.text('Sin señal: 2 acciones se enviarán al reconectar'), findsOneWidget);
+
+      e.http
+        ..limpiar('POST', 'viajes/1/estado')
+        ..responder('POST', 'viajes/1/estado', 200, viajeJson(estado: 'llego'))
+        ..responder('POST', 'viajes/1/estado', 200, viajeJson(estado: 'en_curso'));
+      tr
+        ..cambiar(EstadoConexion.desconectado)
+        ..cambiar(EstadoConexion.conectado);
+      await esperar(tester);
+
+      expect(find.textContaining('se enviar'), findsNothing);
+      expect(find.widgetWithText(FilledButton, 'Finalizar'), findsOneWidget);
+      final enviados = [
+        for (final r in e.http.pedidos.where((r) => r.uri.path == '/api/viajes/1/estado').toList().reversed.take(2))
+          (jsonDecode(r.cuerpo) as Map<String, dynamic>)['estado'],
+      ];
+      expect(enviados.reversed, ['llego', 'en_curso']);
+    });
+
+    testWidgets('si el servidor falla 3 veces seguidas con el mismo paso, se pide avisar al encargado', (tester) async {
+      await abrir(
+        tester,
+        viajeJson(estado: 'en_camino'),
+        (e) => e.http.responder('POST', 'viajes/1/estado', 500, '{"message":"Server Error"}'),
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Llegué'));
+      await esperar(tester);
+      expect(find.text('Sin señal: 1 acción se enviará al reconectar'), findsOneWidget);
+
+      for (var i = 0; i < 2; i++) {
+        await tester.pump(const Duration(seconds: 30));
+        await esperar(tester);
+      }
+
+      expect(find.text('No se pudo enviar el viaje: avisá al encargado'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Iniciar viaje'), findsOneWidget);
+    });
+
+    testWidgets('con señal no aparece el aviso mientras el paso sale', (tester) async {
+      await abrir(tester, viajeJson(estado: 'en_camino'));
+      final respuesta = e.http.demorar('POST', 'viajes/1/estado');
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Llegué'));
+      await esperar(tester);
+      expect(find.widgetWithText(FilledButton, 'Iniciar viaje'), findsOneWidget);
+      expect(find.textContaining('se enviará'), findsNothing);
+
+      respuesta.complete((200, viajeJson(estado: 'llego')));
+      await esperar(tester);
+      expect(find.textContaining('se enviará'), findsNothing);
+    });
+
+    testWidgets('si al reconectar el servidor la rechaza, vuelve al estado real y se avisa', (tester) async {
+      await abrir(tester, viajeJson(estado: 'en_camino'), (e) => e.http.sinRed('POST', 'viajes/1/estado'));
+      await tester.tap(find.widgetWithText(FilledButton, 'Llegué'));
+      await esperar(tester);
+      expect(find.widgetWithText(FilledButton, 'Iniciar viaje'), findsOneWidget);
+
+      e.http
+        ..limpiar('POST', 'viajes/1/estado')
+        ..responder('POST', 'viajes/1/estado', 409, '{"message":"El viaje se reasignó mientras estabas sin señal."}');
+      tr
+        ..cambiar(EstadoConexion.desconectado)
+        ..cambiar(EstadoConexion.conectado);
+      await esperar(tester);
+
+      expect(find.text('El viaje se reasignó mientras estabas sin señal.'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Llegué'), findsOneWidget);
+      expect(find.textContaining('se enviar'), findsNothing);
+    });
   });
 
   testWidgets('cancelado por el solicitante o reasignado: lo avisa y vuelve al mapa', (tester) async {
@@ -404,6 +492,23 @@ void main() {
 
       await ir(tester, -26.8299, -65.23);
       expect(find.textContaining('doblá a la derecha por San Martín'), findsOneWidget);
+    });
+
+    testWidgets('sin señal y fuera del recorrido dice "Sin señal: recorrido sin actualizar"', (tester) async {
+      await abrir(tester, viajeJson(), (e) {
+        e.http
+          ..responder('GET', 'ruta', 200, rutaAlOrigen)
+          ..sinRed('GET', 'ruta');
+      });
+      await ir(tester, -26.83, -65.23);
+      tr.cambiar(EstadoConexion.desconectado);
+      await ir(tester, -26.829, -65.227);
+      expect(find.text('En 650 m, doblá a la derecha por San Martín'), findsOneWidget, reason: 'en el recorrido');
+      await ir(tester, -26.8285, -65.227);
+
+      expect(find.text('Sin señal: recorrido sin actualizar'), findsOneWidget);
+      expect(find.text('Recalculando…'), findsNothing);
+      expect(lineas(tester).single.puntos, hasLength(3), reason: 'sigue el recorrido que ya tenía');
     });
 
     for (final estado in ['aceptado', 'llego']) {

@@ -1,7 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:vehiculos_oficiales/src/api/errores_api.dart';
 import 'package:vehiculos_oficiales/src/chofer/almacen_cola.dart';
+import 'package:vehiculos_oficiales/src/chofer/cola_acciones.dart';
+import 'package:vehiculos_oficiales/src/chofer/estado_guardado.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
 
 import '../fixtures/payloads.dart' as p;
@@ -39,6 +43,9 @@ class ApiChofer extends ApiFalsa {
   /// Errores de los próximos envíos de ubicación, en orden; sin errores pendientes responde 204.
   final erroresUbicacion = <ErrorApi>[];
 
+  /// Error de todos los envíos de ubicación (después de [erroresUbicacion]), p. ej. sin señal.
+  ErrorApi? errorUbicacion;
+
   /// Si no es nulo, `enviarUbicacion` espera a que el test lo complete.
   Completer<void>? demoraUbicacion;
 
@@ -53,6 +60,15 @@ class ApiChofer extends ApiFalsa {
   Viaje? respuestaAvance;
   ErrorApi? errorAvance;
   final avances = <(int, EstadoViaje)>[];
+
+  /// El `id_accion` y el `momento` de cada avance, en el mismo orden que [avances].
+  final acciones = <({String? idAccion, DateTime? momento})>[];
+
+  /// Errores de los próximos avances, en orden (antes que [errorAvance]).
+  final erroresAvance = <ErrorApi>[];
+
+  /// Si no es nulo, `avanzarViaje` espera a que el test lo complete.
+  Completer<void>? demoraAvance;
   Viaje? respuestaCancelar;
   Agenda agendaRespuesta = Agenda.vacia;
   ErrorApi? errorAgenda;
@@ -113,6 +129,7 @@ class ApiChofer extends ApiFalsa {
     lotes.add(List.of(puntos));
     if (demoraUbicacion != null) await demoraUbicacion!.future;
     if (erroresUbicacion.isNotEmpty) throw erroresUbicacion.removeAt(0);
+    if (errorUbicacion != null) throw errorUbicacion!;
   }
 
   @override
@@ -129,9 +146,12 @@ class ApiChofer extends ApiFalsa {
   }
 
   @override
-  Future<Viaje> avanzarViaje(int viajeId, EstadoViaje estado) async {
+  Future<Viaje> avanzarViaje(int viajeId, EstadoViaje estado, {DateTime? momento, String? idAccion}) async {
     llamadas.add('avanzar:$viajeId:${estado.valor}');
     avances.add((viajeId, estado));
+    acciones.add((idAccion: idAccion, momento: momento));
+    if (demoraAvance != null) await demoraAvance!.future;
+    if (erroresAvance.isNotEmpty) throw erroresAvance.removeAt(0);
     if (errorAvance != null) throw errorAvance!;
     return respuestaAvance ??
         Viaje.fromJson(
@@ -159,6 +179,9 @@ class ApiChofer extends ApiFalsa {
 class AlmacenColaMemoria implements AlmacenCola {
   /// Turno de lo guardado; nulo si no hay nada guardado (el archivo no existe).
   int? turnoId;
+
+  /// Chofer de lo guardado: por defecto el de prueba ([chofer], id 2).
+  int usuarioId = 2;
   List<PuntoGps> puntos = [];
 
   /// Cada `guardar`, con los puntos que recibió.
@@ -171,24 +194,84 @@ class AlmacenColaMemoria implements AlmacenCola {
   bool get guardado => turnoId != null;
 
   @override
-  Future<List<PuntoGps>> leer(int turnoId) async {
+  Future<List<PuntoGps>> leer(int usuarioId, int turnoId) async {
     if (error != null) throw error!;
-    return turnoId == this.turnoId ? List.of(puntos) : [];
+    return usuarioId == this.usuarioId && turnoId == this.turnoId ? List.of(puntos) : [];
   }
 
   @override
-  Future<void> guardar(int turnoId, List<PuntoGps> puntos) async {
+  Future<({int turnoId, List<PuntoGps> puntos})?> leerCualquiera(int usuarioId) async {
     if (error != null) throw error!;
+    final id = turnoId;
+    return id == null || usuarioId != this.usuarioId ? null : (turnoId: id, puntos: List.of(puntos));
+  }
+
+  @override
+  Future<void> guardar(int usuarioId, int turnoId, List<PuntoGps> puntos) async {
+    if (error != null) throw error!;
+    this.usuarioId = usuarioId;
     this.turnoId = turnoId;
     this.puntos = List.of(puntos);
     escrituras.add(List.of(puntos));
   }
 
   @override
-  Future<void> borrar() async {
+  Future<void> borrar(int usuarioId) async {
     if (error != null) throw error!;
+    if (usuarioId != this.usuarioId) return; // el archivo de otro chofer no se toca
     borrados++;
     turnoId = null;
     puntos = [];
   }
 }
+
+/// [AlmacenAcciones] en memoria: lo que quedaría en el archivo (sobrevive a un contenedor descartado, como el
+/// archivo a la app cerrada).
+class AlmacenAccionesMemoria implements AlmacenAcciones {
+  /// Usuario de lo guardado; nulo si no hay nada guardado.
+  int? usuarioId;
+  List<AccionViaje> acciones = [];
+
+  /// Si no es nulo, todas las operaciones lo lanzan.
+  Object? error;
+
+  @override
+  Future<List<AccionViaje>> leer(int usuarioId) async {
+    if (error != null) throw error!;
+    return usuarioId == this.usuarioId ? List.of(acciones) : [];
+  }
+
+  @override
+  Future<void> guardar(int usuarioId, List<AccionViaje> acciones) async {
+    if (error != null) throw error!;
+    this.usuarioId = usuarioId;
+    this.acciones = List.of(acciones);
+  }
+
+  @override
+  Future<void> borrar(int usuarioId) async {
+    if (error != null) throw error!;
+    if (usuarioId != this.usuarioId) return;
+    this.usuarioId = null;
+    acciones = [];
+  }
+}
+
+/// [AlmacenJson] en memoria (sobrevive a un contenedor descartado).
+class AlmacenJsonMemoria implements AlmacenJson {
+  Json? datos;
+
+  @override
+  Future<Json?> leer() async => datos == null ? null : jsonDecode(jsonEncode(datos)) as Json;
+
+  @override
+  Future<void> guardar(Json datos) async => this.datos = jsonDecode(jsonEncode(datos)) as Json;
+
+  @override
+  Future<void> borrar() async => datos = null;
+}
+
+/// [fakeAsync] con el reloj en la hora de [punto] (las 12:00 del 1/10/2026): los puntos de los tests no tienen
+/// más de 24 h, que el servidor ya no acepta y la app descarta.
+void enHoraDeLosPuntos(void Function(FakeAsync async) prueba) =>
+    fakeAsync(prueba, initialTime: DateTime.utc(2026, 10, 1, 12, 30));

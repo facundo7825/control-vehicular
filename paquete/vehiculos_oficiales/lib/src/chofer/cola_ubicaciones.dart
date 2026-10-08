@@ -39,4 +39,12 @@ class ColaUbicaciones {
   }
 
   void vaciar() => _puntos.clear();
+
+  /// Saca los registrados antes de [limite] (p. ej. los de más de 24 h, que el servidor ya no acepta).
+  void descartarAnteriores(DateTime limite) {
+    final corte = limite.millisecondsSinceEpoch;
+    while (_puntos.isNotEmpty && _puntos.firstKey()! < corte) {
+      _puntos.remove(_puntos.firstKey());
+    }
+  }
 }

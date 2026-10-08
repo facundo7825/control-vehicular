@@ -12,6 +12,7 @@ use App\Models\PuntoRecorrido;
 use App\Models\Viaje;
 use App\Servicios\Parametros;
 use App\Servicios\ServicioViaje;
+use App\Support\HoraLocal;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -22,6 +23,8 @@ class ViajeController extends Controller
     private const LIMITE_HISTORIAL = 50;
 
     private const MAX_PUNTOS_RECORRIDO = 500;
+
+    private const FECHA_ISO = '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:?\d{2})?$/';
 
     public function __construct(private ServicioViaje $viajes) {}
 
@@ -158,11 +161,21 @@ class ViajeController extends Controller
 
     public function avanzar(Request $request, Viaje $viaje): ViajeResource
     {
-        $datos = $request->validate(['estado' => ['required', 'in:en_camino,llego,en_curso,finalizado']]);
+        $datos = $request->validate([
+            'estado' => ['required', 'in:en_camino,llego,en_curso,finalizado'],
+            // Cuándo lo tocó el chofer (la app lo guarda si no hay señal) y su id, para no aplicarla dos veces.
+            // ISO-8601 estricto (con o sin offset; sin offset es hora local): nada de "now" ni "+1 hour".
+            'momento' => ['nullable', 'string', 'regex:'.self::FECHA_ISO, 'date'],
+            'id_accion' => ['nullable', 'uuid'],
+        ]);
 
-        return new ViajeResource(
-            $this->viajes->avanzar($viaje, $request->user(), EstadoViaje::from($datos['estado'])),
-        );
+        return new ViajeResource($this->viajes->avanzar(
+            $viaje,
+            $request->user(),
+            EstadoViaje::from($datos['estado']),
+            isset($datos['momento']) ? HoraLocal::interpretar($datos['momento']) : null,
+            $datos['id_accion'] ?? null,
+        ));
     }
 
     public function cancelar(Request $request, Viaje $viaje): ViajeResource

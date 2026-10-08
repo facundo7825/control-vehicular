@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -8,11 +9,15 @@ import '../avisos/notificaciones_locales.dart';
 import '../entorno.dart';
 import '../modelos/modelos.dart';
 import '../sesion/sesion.dart';
+import '../tiempo_real/tiempo_real.dart';
+import '../tiempo_real/tiempo_real_provider.dart';
 import '../ubicacion/ubicador.dart';
 import '../viaje/viaje_actual.dart';
 import 'almacen_cola.dart';
+import 'cola_acciones.dart';
 import 'cola_ubicaciones.dart';
 import 'emisor_ubicacion.dart';
+import 'estado_guardado.dart';
 import 'rastreador_turno.dart';
 
 /// Los valores por defecto del backend (spec 5.7), si `GET /configuracion` no responde. Sin mapa de fondo
@@ -54,6 +59,34 @@ class PosicionPropiaNotifier extends Notifier<PosicionPropia> {
 
   void limpiar() => state = const PosicionPropia();
 }
+
+final ubicacionesAtrasadasProvider = NotifierProvider<UbicacionesAtrasadasNotifier, bool>(
+  UbicacionesAtrasadasNotifier.new,
+);
+
+/// Hay puntos del GPS del turno que no se pudieron mandar (ver `RastreadorTurno.alCambiarAtraso`).
+class UbicacionesAtrasadasNotifier extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void fijar(bool atrasadas) => state = atrasadas;
+}
+
+/// Por qué "Finalizar turno" espera (decisión 3 del plan sin señal).
+const esperandoSenalParaFinalizar = 'Esperando señal para enviar el viaje';
+
+/// Por qué "Finalizar turno" espera, o nulo si no espera. Mientras haya acciones del viaje o puntos del GPS sin
+/// enviar: sin turno, el servidor ya no puede ubicar el recorrido que falta. Si el servidor rechaza una y otra
+/// vez la acción ([EnvioAcciones.errorServidor]) no es la señal: se pide avisar al encargado.
+final motivoEsperaFinalizarProvider = Provider<String?>((ref) {
+  final acciones = hayAcciones(ref.watch(colaAccionesProvider));
+  if (acciones && ref.watch(envioAccionesProvider) == EnvioAcciones.errorServidor) return noSePudoEnviarViaje;
+  if (acciones || ref.watch(ubicacionesAtrasadasProvider)) return esperandoSenalParaFinalizar;
+  return null;
+});
+
+/// Hay acciones del viaje sin enviar (o todavía no se sabe: la cola se está leyendo del disco).
+bool hayAcciones(AsyncValue<List<AccionViaje>> cola) => !cola.hasError && !(cola.value?.isEmpty ?? false);
 
 /// Un viaje activo (aceptado a en curso) del chofer [choferId] cambia el ritmo de envío (spec 5.7). Uno
 /// que se reasignó a otro chofer, o que terminó y sigue en pantalla, no cuenta.
@@ -97,6 +130,31 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
   /// configuración no arranca un rastreo viejo.
   int _generacion = 0;
 
+  /// El turno vino de la copia guardada (se abrió sin señal): se vuelve a consultar al reconectar.
+  bool _desdeGuardado = false;
+
+  /// Puntos de turnos ya cerrados que todavía no llegaron al servidor (ver [_cerrarRastreo]).
+  final _puntosSinTurno = ColaUbicaciones();
+  EmisorUbicacion? _emisorSinTurno;
+  bool _enviandoSinTurno = false;
+  bool _otraVezSinTurno = false;
+
+  /// Reintento de los puntos sin turno mientras queden (cada [intervaloSondeo]).
+  Timer? _reintentoSinTurno;
+
+  /// El chofer: lo guardado en el teléfono es suyo (lo de otro chofer no se manda con esta sesión).
+  late int _yo;
+
+  /// Nunca lanza.
+  Future<void> _leerSinTurno() async {
+    try {
+      _puntosSinTurno.cargar(await ref.read(almacenSinTurnoProvider).leer(_yo, 0));
+      if (_descartarSinTurnoViejos()) await _guardarSinTurno();
+    } catch (e) {
+      debugPrint('vehiculos_oficiales: no se pudieron leer las ubicaciones sin turno (${e.runtimeType}).');
+    }
+  }
+
   @override
   Future<Turno?> build() async {
     _enPrimerPlano = _esPrimerPlano(WidgetsBinding.instance.lifecycleState);
@@ -109,6 +167,8 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
       _retomarAlVolver = false;
       _sondeo?.cancel();
       _sondeo = null;
+      _reintentoSinTurno?.cancel();
+      _reintentoSinTurno = null;
       final r = _rastreador;
       _rastreador = null;
       r
@@ -116,17 +176,55 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
         ..detener();
     });
     final yo = ref.read(usuarioProvider).id;
+    _yo = yo;
     ref.listen(
       viajeActualProvider.select((s) => viajeActivo(s.value?.viaje, yo)),
       (_, activo) => _rastreador?.enViaje(activo),
     );
+    // Los puntos esperan a las acciones del viaje (ver `EmisorUbicacion.retener`): cuando salió la última, se
+    // manda todo lo pendiente enseguida.
+    bool retener() => ref.mounted && hayAcciones(ref.read(colaAccionesProvider));
+    ref.listen(colaAccionesProvider.select((s) => !hayAcciones(s)), (antes, vacia) {
+      if (!vacia || antes != false) return;
+      _rastreador?.enviarAhora();
+      unawaited(_enviarSinTurno());
+    });
+    // Al reconectar: lo que quedó de turnos cerrados, y el turno real si se abrió con la copia guardada.
+    ref.listen(estadoConexionProvider, (antes, ahora) {
+      if (ahora != EstadoConexion.conectado || antes == EstadoConexion.conectado) return;
+      unawaited(_enviarSinTurno());
+      if (_desdeGuardado) unawaited(refrescar());
+    });
+    // Lo último que se supo del turno, para abrir sin señal (decisión 3 del plan sin señal).
+    final turnoGuardado = ref.read(almacenTurnoGuardadoProvider);
+    listenSelf((_, s) {
+      if (s case AsyncData(:final value)) unawaited(guardarPara(turnoGuardado, yo, value?.toJson()));
+    });
 
-    final turno = await ref.read(apiProvider).turnoActual();
+    final api = ref.read(apiProvider);
+    _emisorSinTurno = EmisorUbicacion(api: api, cola: _puntosSinTurno, retener: retener);
+    await _leerSinTurno();
+    if (!ref.mounted) return null;
+
+    Turno? turno;
+    try {
+      turno = await api.turnoActual();
+      _desdeGuardado = false;
+    } on SinConexion {
+      // Sin señal al abrir: con la copia guardada el chofer sigue trabajando (y el GPS rastreando) hasta que
+      // vuelva la señal y se consulte el turno real.
+      turno = await leerGuardado(turnoGuardado, yo, Turno.fromJson);
+      if (turno == null) rethrow;
+      _desdeGuardado = true;
+    }
     // Se cerró el módulo (o se recargó el turno) mientras tanto: no se pide permiso ni se abre el GPS.
     if (!ref.mounted) return turno;
+    await _rescatarCola(turno?.id);
+    if (!ref.mounted) return turno;
+    unawaited(_enviarSinTurno());
     _ajustarSondeo(sinTurno: turno == null);
     if (turno == null) {
-      await _borrarCola(); // lo guardado es de un turno que ya se cerró (spec 10)
+      // Nada que retomar: lo que estaba guardado ya pasó a los puntos sin turno.
     } else if (_enPrimerPlano) {
       // Turno abierto de antes (la app se cerró o se reabrió el módulo).
       await _retomar(turno, desdeBuild: true);
@@ -151,6 +249,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
     if (_retomarAlVolver && turno != null && _rastreador == null) unawaited(_retomar(turno));
     _retomarAlVolver = false;
     unawaited(refrescar());
+    unawaited(ref.read(colaAccionesProvider.notifier).sincronizar());
   }
 
   /// Retoma [turno] ya si la app está en primer plano; si no, al volver.
@@ -226,6 +325,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
     final Turno? turno;
     try {
       turno = await ref.read(apiProvider).turnoActual();
+      _desdeGuardado = false;
     } on ErrorApi {
       return;
     }
@@ -235,7 +335,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
       if (turno != null) state = AsyncData(turno);
       return;
     }
-    if (antes != null) _detenerRastreo();
+    if (antes != null) _cerrarRastreo();
     state = AsyncData(turno);
     _ajustarSondeo(sinTurno: turno == null);
     if (turno != null) _retomarEnPrimerPlano(turno);
@@ -282,13 +382,27 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
   /// antes de cerrar el turno.") llega a la pantalla y el turno y el rastreo siguen como estaban. Si al
   /// vaciar la cola el backend ya dice que no hay turno (lo cerró un administrador), no se pide cerrarlo:
   /// se deja de rastrear y se vuelve a preguntar el turno.
+  ///
+  /// Con acciones del viaje sin enviar no se cierra: se intenta mandarlas y, si no salen, lanza [SinConexion]
+  /// ("Esperando señal para enviar el viaje.").
   Future<void> finalizar() async {
+    if (hayAcciones(ref.read(colaAccionesProvider))) {
+      await ref.read(colaAccionesProvider.notifier).sincronizar();
+      if (!ref.mounted) return;
+      if (hayAcciones(ref.read(colaAccionesProvider))) {
+        throw SinConexion('${ref.read(motivoEsperaFinalizarProvider) ?? esperandoSenalParaFinalizar}.');
+      }
+    }
     final vaciado = await _rastreador?.vaciar();
     if (!ref.mounted) return;
     if (vaciado == ResultadoEnvio.sinTurno) return _alQuedarSinTurno();
+    // Lo que no salió todavía puede ser del recorrido de un viaje: se espera a mandarlo antes de cerrar.
+    if (vaciado == ResultadoEnvio.reintentar || vaciado == ResultadoEnvio.retenido) {
+      throw const SinConexion('$esperandoSenalParaFinalizar.');
+    }
     await ref.read(apiProvider).finalizarTurno();
     if (!ref.mounted) return;
-    _detenerRastreo();
+    _cerrarRastreo();
     state = const AsyncData(null);
     _ajustarSondeo(sinTurno: true);
   }
@@ -321,10 +435,17 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
     final posicion = ref.read(posicionPropiaProvider.notifier);
     final almacen = ref.read(almacenColaProvider);
     final aviso = ref.read(avisoSesionProvider);
+    final atraso = ref.read(ubicacionesAtrasadasProvider.notifier);
     _rastreador = RastreadorTurno(
       ubicador: ref.read(ubicadorProvider),
       cola: cola,
-      emisor: EmisorUbicacion(api: ref.read(apiProvider), cola: cola),
+      // Primero las acciones del viaje: así el servidor ya conoce el intervalo del viaje al recibir los puntos.
+      emisor: EmisorUbicacion(
+        api: ref.read(apiProvider),
+        cola: cola,
+        retener: () => ref.mounted && hayAcciones(ref.read(colaAccionesProvider)),
+      ),
+      alCambiarAtraso: atraso.fijar,
       intervaloTurno: Duration(seconds: conf.gpsTurnoSeg),
       intervaloViaje: Duration(seconds: conf.gpsViajeSeg),
       alPunto: posicion.punto,
@@ -332,19 +453,113 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
       alQuedarSinTurno: () => unawaited(_alQuedarSinTurno()),
       // Después de un 401 la cola ya se borró (SesionNotifier): no se vuelve a escribir.
       guardar: (puntos) async {
-        if (!aviso.avisado) await almacen.guardar(turno.id, puntos);
+        if (!aviso.avisado) await almacen.guardar(_yo, turno.id, puntos);
       },
     )..iniciar(enViaje: viajeActivo(ref.read(viajeActualProvider).value?.viaje, ref.read(usuarioProvider).id));
   }
 
-  /// El turno terminó (se finalizó, o el backend dice que no hay): también se borra la cola guardada.
-  void _detenerRastreo() {
+  /// El turno se cerró (lo finalizó el chofer, un fichaje, un administrador, o el backend dice que no hay): se
+  /// corta el rastreo, pero lo que quedó sin mandar no se tira: puede ser del recorrido de un viaje, que el
+  /// servidor acepta aunque ya no haya turno. Pasa a los puntos sin turno ([_enviarSinTurno]).
+  ///
+  /// El archivo de los puntos sin turno se escribe antes de borrar la cola del turno: si la app se cierra en el
+  /// medio, quedan en uno o en el otro (repetidos no importa: el servidor no duplica la misma hora).
+  void _cerrarRastreo() {
+    final pendientes = _rastreador?.cola.puntos ?? const <PuntoGps>[];
+    _detenerRastreo(borrarCola: false);
+    unawaited(() async {
+      if (pendientes.isNotEmpty) await _agregarSinTurno(pendientes);
+      await _borrarCola();
+    }());
+  }
+
+  /// Agrega [puntos] a los de turnos cerrados, los guarda y empieza a mandarlos.
+  Future<void> _agregarSinTurno(List<PuntoGps> puntos) async {
+    _puntosSinTurno.cargar(puntos);
+    _descartarSinTurnoViejos();
+    await _guardarSinTurno();
+    unawaited(_enviarSinTurno());
+  }
+
+  /// Manda los puntos de turnos cerrados (después de las acciones del viaje). Los lotes que el servidor no
+  /// ubica en ningún viaje se descartan; sin red quedan guardados y se reintenta al reconectar, al volver a
+  /// primer plano, al abrir y cuando salen las acciones. Nunca lanza.
+  Future<void> _enviarSinTurno() async {
+    final emisor = _emisorSinTurno;
+    if (_descartarSinTurnoViejos()) await _guardarSinTurno();
+    if (emisor == null || _puntosSinTurno.largo == 0) return;
+    if (_enviandoSinTurno) {
+      _otraVezSinTurno = true; // p. ej. salieron las acciones mientras este envío estaba retenido
+      return;
+    }
+    _enviandoSinTurno = true;
+    try {
+      do {
+        _otraVezSinTurno = false;
+        await emisor.vaciarSinTurno();
+        if (ref.mounted) await _guardarSinTurno();
+      } while (_otraVezSinTurno && ref.mounted && _puntosSinTurno.largo > 0);
+    } catch (e) {
+      debugPrint('vehiculos_oficiales: error inesperado al enviar las ubicaciones sin turno (${e.runtimeType}).');
+    } finally {
+      _enviandoSinTurno = false;
+    }
+    _armarReintentoSinTurno();
+  }
+
+  /// Mientras queden puntos sin turno se reintenta cada [intervaloSondeo] (además de reconectar, volver a
+  /// primer plano y salir las acciones).
+  void _armarReintentoSinTurno() {
+    if (ref.mounted && _puntosSinTurno.largo > 0) {
+      _reintentoSinTurno ??= Timer.periodic(intervaloSondeo, (_) => unawaited(_enviarSinTurno()));
+    } else {
+      _reintentoSinTurno?.cancel();
+      _reintentoSinTurno = null;
+    }
+  }
+
+  /// El servidor no acepta puntos de más de 24 h: no se guardan ni se mandan.
+  /// Devuelve si sacó alguno.
+  bool _descartarSinTurnoViejos() {
+    final antes = _puntosSinTurno.largo;
+    _puntosSinTurno.descartarAnteriores(clock.now().toUtc().subtract(const Duration(hours: 24)));
+    return _puntosSinTurno.largo != antes;
+  }
+
+  /// Nunca lanza.
+  Future<void> _guardarSinTurno() async {
+    final almacen = ref.read(almacenSinTurnoProvider);
+    final puntos = _puntosSinTurno.puntos;
+    try {
+      await (puntos.isEmpty ? almacen.borrar(_yo) : almacen.guardar(_yo, 0, puntos));
+    } catch (e) {
+      debugPrint('vehiculos_oficiales: no se pudieron guardar las ubicaciones sin turno (${e.runtimeType}).');
+    }
+  }
+
+  /// Al abrir: lo guardado en la cola del turno que no es del turno abierto ([turnoAbierto], nulo si no hay)
+  /// es de un turno que se cerró con la app cerrada. Pasa a los puntos sin turno. Nunca lanza.
+  Future<void> _rescatarCola(int? turnoAbierto) async {
+    final almacen = ref.read(almacenColaProvider);
+    try {
+      final guardado = await almacen.leerCualquiera(_yo);
+      if (!ref.mounted || guardado == null || guardado.turnoId == turnoAbierto) return;
+      if (guardado.puntos.isNotEmpty) await _agregarSinTurno(guardado.puntos);
+      await almacen.borrar(_yo);
+    } catch (e) {
+      debugPrint('vehiculos_oficiales: no se pudo leer la cola de ubicaciones guardada (${e.runtimeType}).');
+    }
+  }
+
+  /// Corta el rastreo y borra la cola guardada del turno (lo pendiente lo rescata [_cerrarRastreo]).
+  void _detenerRastreo({bool borrarCola = true}) {
     _generacion++;
     _retomarAlVolver = false;
     _rastreador?.detener();
     _rastreador = null;
     ref.read(posicionPropiaProvider.notifier).limpiar();
-    unawaited(_borrarCola());
+    ref.read(ubicacionesAtrasadasProvider.notifier).fijar(false);
+    if (borrarCola) unawaited(_borrarCola());
   }
 
   /// Lo guardado para [turnoId]. Si no hay nada (o es de otro turno, o no se puede leer) se borra el
@@ -352,8 +567,8 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
   Future<List<PuntoGps>> _leerCola(int turnoId) async {
     final almacen = ref.read(almacenColaProvider);
     try {
-      final puntos = await almacen.leer(turnoId);
-      if (puntos.isEmpty) await almacen.borrar();
+      final puntos = await almacen.leer(_yo, turnoId);
+      if (puntos.isEmpty) await almacen.borrar(_yo);
       return puntos;
     } catch (e) {
       debugPrint('vehiculos_oficiales: no se pudo leer la cola de ubicaciones guardada (${e.runtimeType}).');
@@ -364,7 +579,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
   /// Nunca lanza: un error de disco no puede cortar el cierre del turno.
   Future<void> _borrarCola() async {
     try {
-      await ref.read(almacenColaProvider).borrar();
+      await ref.read(almacenColaProvider).borrar(_yo);
     } catch (e) {
       debugPrint('vehiculos_oficiales: no se pudo borrar la cola de ubicaciones guardada (${e.runtimeType}).');
     }
@@ -374,7 +589,7 @@ class TurnoNotifier extends AsyncNotifier<Turno?> {
   /// rastrear y se vuelve a preguntar. Corre sin await desde el timer: no puede propagar errores.
   Future<void> _alQuedarSinTurno() async {
     if (!ref.mounted) return;
-    _detenerRastreo();
+    _cerrarRastreo();
     try {
       final turno = await ref.read(apiProvider).turnoActual();
       if (!ref.mounted) return;

@@ -61,6 +61,8 @@ it('sin viajes devuelve vacío', function () {
 });
 
 it('al finalizar un viaje guarda los metros de su recorrido', function () {
+    // Los puntos (10:00 y 10:01) tienen que caer dentro del viaje: los km cuentan solo su intervalo.
+    $this->travelTo(Carbon::parse('11:00'));
     $viaje = Viaje::factory()->create(['estado' => EstadoViaje::EnCurso, 'iniciado_en' => now()->subHour()]);
     $sinPuntos = Viaje::factory()->create(['estado' => EstadoViaje::EnCurso, 'iniciado_en' => now()->subHour()]);
     cargarPuntos($viaje, [[-34.600, -58.380, '10:00'], [-34.610, -58.380, '10:01']]);

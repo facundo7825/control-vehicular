@@ -347,7 +347,7 @@ void main() {
   });
 
   test('un 422 "Iniciá un turno…" del envío detiene el rastreo y vuelve a preguntar el turno', () {
-    fakeAsync((async) {
+    enHoraDeLosPuntos((async) {
       api.turno = turnoDePrueba();
       final c = crear();
       async.flushMicrotasks();
@@ -361,8 +361,10 @@ void main() {
       expect(gps.siguiendo, isFalse);
       expect(api.llamadas.where((l) => l == 'turnoActual'), hasLength(2));
       expect(c.read(turnoProvider).value, isNull);
+      // El punto que quedó se manda una vez más sin turno (podría ser del recorrido de un viaje); después nada.
+      expect(envios(), 2);
       async.elapse(const Duration(minutes: 1));
-      expect(envios(), 1);
+      expect(envios(), 2);
     });
   });
 
@@ -678,8 +680,8 @@ void main() {
       });
     });
 
-    test('lo guardado de otro turno se descarta', () {
-      fakeAsync((async) {
+    test('lo guardado de otro turno no se mezcla: se manda aparte (puede ser de un viaje)', () {
+      enHoraDeLosPuntos((async) {
         api.turno = turnoDePrueba();
         almacen
           ..turnoId = 99
@@ -688,9 +690,15 @@ void main() {
         async.flushMicrotasks();
 
         expect(almacen.guardado, isFalse);
+        expect(api.lotes.map(segundos), [
+          [0],
+        ]);
         gps.emitir(punto(30));
         async.elapse(const Duration(seconds: 10));
-        expect(segundos(api.lotes.single), [30]);
+        expect(api.lotes.map(segundos), [
+          [0],
+          [30],
+        ]);
       });
     });
 
@@ -711,7 +719,6 @@ void main() {
         api.turno = turnoDePrueba();
         final c = crear();
         async.flushMicrotasks();
-        api.erroresUbicacion.add(const SinConexion());
         gps.emitir(punto(0));
         async.elapse(const Duration(seconds: 5));
         expect(almacen.guardado, isTrue);
@@ -727,6 +734,25 @@ void main() {
         async.flushMicrotasks();
         expect(almacen.escrituras, hasLength(escrituras));
         expect(almacen.guardado, isFalse);
+      });
+    });
+
+    test('finalizar con puntos que no salen (sin señal) no cierra: el recorrido se mandaría sin turno', () {
+      fakeAsync((async) {
+        api.turno = turnoDePrueba();
+        final c = crear();
+        async.flushMicrotasks();
+        api.errorUbicacion = const SinConexion();
+        gps.emitir(punto(0));
+
+        Object? error;
+        c.read(turnoProvider.notifier).finalizar().catchError((Object e) => error = e);
+        async.flushMicrotasks();
+
+        expect(error, isA<SinConexion>().having((e) => e.mensaje, 'mensaje', 'Esperando señal para enviar el viaje.'));
+        expect(api.llamadas, isNot(contains('finalizar')));
+        expect(c.read(turnoProvider).value, isNotNull);
+        expect(gps.siguiendo, isTrue);
       });
     });
 

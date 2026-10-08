@@ -9,7 +9,9 @@ use App\Enums\ResultadoOferta;
 use App\Enums\RolUsuario;
 use App\Enums\TipoViaje;
 use App\Excepciones\AccionNoPermitida;
+use App\Excepciones\ConflictoViaje;
 use App\Excepciones\ReglaNegocio;
+use App\Models\AccionViaje;
 use App\Models\CargoPrioritario;
 use App\Models\OfertaViaje;
 use App\Models\Turno;
@@ -17,6 +19,8 @@ use App\Models\Usuario;
 use App\Models\Vehiculo;
 use App\Models\Viaje;
 use App\Support\HoraLocal;
+use Illuminate\Database\UniqueConstraintViolationException;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
 class ServicioViaje
@@ -103,31 +107,148 @@ class ServicioViaje
 
     private const PASOS_CHOFER = [EstadoViaje::EnCamino, EstadoViaje::Llego, EstadoViaje::EnCurso, EstadoViaje::Finalizado];
 
-    public function avanzar(Viaje $viaje, Usuario $chofer, EstadoViaje $hacia): Viaje
-    {
-        if ($viaje->chofer_id !== $chofer->id) {
-            throw new AccionNoPermitida('Este viaje no es tuyo.');
-        }
+    /** Tolerancia de la hora del celular: hacia adelante y antes del paso anterior del viaje. */
+    private const TOLERANCIA_MOMENTO_MIN = 2;
+
+    /** Una acción guardada sin señal se acepta hasta este tiempo después. */
+    private const ANTIGUEDAD_MAXIMA_MOMENTO_H = 24;
+
+    private const ACCION_DE_OTRO_VIAJE = 'Esa acción ya se registró en otro viaje.';
+
+    /**
+     * El chofer avanza el viaje. La app puede mandar la acción tarde (la tocó sin señal): `$momento` es cuándo la
+     * tocó y `$idAccion` (uuid de la app) hace que un reenvío de una acción ya aplicada no la repita.
+     */
+    public function avanzar(
+        Viaje $viaje, Usuario $chofer, EstadoViaje $hacia, ?Carbon $momento = null, ?string $idAccion = null,
+    ): Viaje {
         if (! in_array($hacia, self::PASOS_CHOFER, true)) {
             throw new ReglaNegocio('Estado no válido para el chofer.');
         }
-
-        if ($hacia === EstadoViaje::EnCamino && $viaje->tipo->esAgendado()) {
-            $this->salirHaciaReserva($viaje, $chofer);
-        } else {
-            $this->maquina->transicionar($viaje, $hacia);
+        // Un reenvío de una acción ya aplicada responde 200 siempre, aunque su hora ya no pasara las validaciones.
+        if ($this->accionYaAplicada($idAccion, $viaje, $chofer)) {
+            return $viaje->refresh()->load(['chofer', 'vehiculo', 'solicitante']);
+        }
+        // Atrasada: el chofer la tocó hace más de la tolerancia (sin señal). Solo entonces los conflictos se
+        // explican como "mientras estabas sin señal" (409); una acción en el momento conserva los errores de siempre.
+        $atrasada = $momento !== null && $momento->lt(now()->subMinutes(self::TOLERANCIA_MOMENTO_MIN));
+        if ($momento) {
+            if ($momento->gt(now()->addMinutes(self::TOLERANCIA_MOMENTO_MIN))) {
+                throw new ReglaNegocio('La hora de la acción está en el futuro. Revisá la hora del celular.');
+            }
+            if ($momento->lt(now()->subHours(self::ANTIGUEDAD_MAXIMA_MOMENTO_H))) {
+                throw new ReglaNegocio('La acción tiene más de 24 horas; ya no se puede registrar.');
+            }
+            $momento = $momento->copy()->min(now());
         }
 
-        return $viaje->load(['chofer', 'vehiculo', 'solicitante']);
+        try {
+            $this->aplicarAvance($viaje, $chofer, $hacia, $momento, $idAccion, $atrasada);
+        } catch (UniqueConstraintViolationException $e) {
+            // El mismo id_accion llegó a la vez para otro viaje (cada pedido bloqueó su viaje): vale el primero
+            // (422 si es de otro viaje, 200 si es este). Si no hay ninguna acción con ese id, la violación es otra.
+            if ($idAccion === null || ! $this->accionYaAplicada($idAccion, $viaje, $chofer)) {
+                throw $e;
+            }
+        }
+
+        return $viaje->refresh()->load(['chofer', 'vehiculo', 'solicitante']);
+    }
+
+    /** ¿La acción ya se aplicó en este viaje? Si el id_accion es de otro viaje o de otro chofer, 422. */
+    private function accionYaAplicada(?string $idAccion, Viaje $viaje, Usuario $chofer): bool
+    {
+        $previa = $idAccion !== null ? AccionViaje::where('id_accion', $idAccion)->first() : null;
+        if (! $previa) {
+            return false;
+        }
+        if ($previa->viaje_id !== $viaje->id || $previa->chofer_id !== $chofer->id) {
+            throw new ReglaNegocio(self::ACCION_DE_OTRO_VIAJE);
+        }
+
+        return true;
+    }
+
+    private function aplicarAvance(
+        Viaje $viaje, Usuario $chofer, EstadoViaje $hacia, ?Carbon $momento, ?string $idAccion, bool $atrasada,
+    ): void {
+        DB::transaction(function () use ($viaje, $chofer, $hacia, $momento, $idAccion, $atrasada) {
+            // Mismo primer lock que la máquina de estados (el viaje): dos reenvíos de la misma acción se ordenan acá.
+            $viaje->setRawAttributes(Viaje::whereKey($viaje->id)->lockForUpdate()->firstOrFail()->getAttributes(), true);
+
+            if ($this->accionYaAplicada($idAccion, $viaje, $chofer)) {
+                return; // un reenvío concurrente ya la aplicó: se devuelve el viaje como está
+            }
+
+            $this->validarVigencia($viaje, $chofer, $atrasada);
+            if ($momento && $viaje->estado !== $hacia) {
+                $momento = $this->momentoDesdePasoAnterior($viaje, $hacia, $momento);
+            }
+
+            if ($hacia === EstadoViaje::EnCamino && $viaje->tipo->esAgendado()) {
+                $this->salirHaciaReserva($viaje, $chofer, $momento);
+            } else {
+                $this->maquina->transicionar($viaje, $hacia, momento: $momento);
+            }
+
+            if ($idAccion !== null || $momento !== null) {
+                AccionViaje::create([
+                    'id_accion' => $idAccion,
+                    'viaje_id' => $viaje->id,
+                    'chofer_id' => $chofer->id,
+                    'estado' => $hacia,
+                    'momento' => $momento ?? now(),
+                    'aplicada_en' => now(),
+                ]);
+            }
+        }, attempts: 3);
+    }
+
+    /**
+     * El viaje sigue siendo del chofer. Una acción atrasada (la app la guardó sin señal) que encuentra el viaje
+     * cambiado (cancelado o reasignado) recibe un conflicto, sin cambiar nada, y la app descarta sus pendientes.
+     */
+    private function validarVigencia(Viaje $viaje, Usuario $chofer, bool $diferida): void
+    {
+        if ($diferida && $viaje->estado === EstadoViaje::Cancelado) {
+            throw new ConflictoViaje('El viaje fue cancelado mientras estabas sin señal.');
+        }
+        if ($viaje->chofer_id !== $chofer->id) {
+            throw $diferida
+                ? new ConflictoViaje('El viaje fue reasignado a otro chofer mientras estabas sin señal.')
+                : new AccionNoPermitida('Este viaje no es tuyo.');
+        }
+    }
+
+    /**
+     * La acción no puede ser anterior al paso previo del viaje (en_camino no tiene marca propia: vale aceptado_en).
+     * Dentro de la tolerancia (la hora del celular puede estar un poco atrasada) se toma la del paso previo.
+     */
+    private function momentoDesdePasoAnterior(Viaje $viaje, EstadoViaje $hacia, Carbon $momento): Carbon
+    {
+        $previo = match ($hacia) {
+            EstadoViaje::EnCamino, EstadoViaje::Llego => $viaje->aceptado_en,
+            EstadoViaje::EnCurso => $viaje->llego_en,
+            EstadoViaje::Finalizado => $viaje->iniciado_en,
+            default => null,
+        };
+        if (! $previo || $momento->gte($previo)) {
+            return $momento;
+        }
+        if ($momento->lt($previo->copy()->subMinutes(self::TOLERANCIA_MOMENTO_MIN))) {
+            throw new ReglaNegocio('La hora de la acción es anterior al paso anterior del viaje.');
+        }
+
+        return $previo->copy();
     }
 
     /**
      * Spec 5.4 paso 7: la reserva arranca como un viaje normal, pero no antes de tiempo, sin turno ni con otro viaje.
      * Un viaje largo, igual, pero con el vehículo que le asignó el encargado.
      */
-    private function salirHaciaReserva(Viaje $viaje, Usuario $chofer): void
+    private function salirHaciaReserva(Viaje $viaje, Usuario $chofer, ?Carbon $momento = null): void
     {
-        DB::transaction(function () use ($viaje, $chofer) {
+        DB::transaction(function () use ($viaje, $chofer, $momento) {
             // Mismo orden de bloqueo que Asignador (viaje, luego chofer): mientras sale, no se le asigna un inmediato.
             $actual = Viaje::whereKey($viaje->id)->lockForUpdate()->firstOrFail();
             Usuario::whereKey($chofer->id)->lockForUpdate()->first();
@@ -146,7 +267,7 @@ class ServicioViaje
             $largo = $viaje->tipo === TipoViaje::Largo;
             [$esta, $la] = $largo ? ['este viaje largo', 'el viaje largo'] : ['esta reserva', 'la reserva'];
             $desde = $viaje->programado_para->copy()->subMinutes($this->parametros->entero('bloqueo_antes_reserva_min'));
-            if (now()->lt($desde)) {
+            if (($momento ?? now())->lt($desde)) {
                 throw new ReglaNegocio("Podés salir hacia $esta a partir de las ".HoraLocal::formatear($desde, 'H:i').'.');
             }
 
@@ -163,7 +284,7 @@ class ServicioViaje
                 $this->usarVehiculoDelViajeLargo($turno, $vehiculoId);
             }
 
-            $this->maquina->transicionar($viaje, EstadoViaje::EnCamino, ['vehiculo_id' => $vehiculoId]);
+            $this->maquina->transicionar($viaje, EstadoViaje::EnCamino, ['vehiculo_id' => $vehiculoId], $momento);
         }, attempts: 3);
     }
 

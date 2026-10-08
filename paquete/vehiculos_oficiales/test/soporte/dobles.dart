@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:vehiculos_oficiales/src/api/api_vehiculos.dart';
 import 'package:vehiculos_oficiales/src/api/cliente_api.dart';
 import 'package:vehiculos_oficiales/src/api/errores_api.dart';
+import 'package:vehiculos_oficiales/src/mapa/corredor_teselas.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
 import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real.dart';
 import 'package:vehiculos_oficiales/src/ubicacion/ubicador.dart';
@@ -271,4 +272,31 @@ class UbicadorFalso implements Ubicador {
 
   @override
   Future<void> abrirAjustes(PermisoUbicacion motivo) async => ajustesAbiertos.add(motivo);
+}
+
+/// Anota las teselas pedidas. Con [demorar], cada una espera a que el test la libere.
+class DescargadorFalso implements DescargadorTeselas {
+  DescargadorFalso({this.zoomMaximo = 19});
+
+  @override
+  final int zoomMaximo;
+
+  final pedidas = <Tesela>[];
+  bool demorar = false;
+  final esperas = <Completer<void>>[];
+
+  @override
+  Future<void> descargar(Tesela tesela) async {
+    pedidas.add(tesela);
+    if (!demorar) return;
+    final espera = Completer<void>();
+    esperas.add(espera);
+    await espera.future;
+  }
+
+  void liberar() {
+    for (final e in esperas) {
+      if (!e.isCompleted) e.complete();
+    }
+  }
 }

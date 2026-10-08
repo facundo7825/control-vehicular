@@ -9,15 +9,20 @@ import 'errores_api.dart';
 /// HTTP contra `/api` del backend. Agrega `Accept: application/json` (sin él Laravel responde un 401
 /// como redirección al login) y el token Sanctum, y traduce las respuestas de error a [ErrorApi].
 class ClienteApi {
-  ClienteApi({required Uri baseApi, required this.alRecibir401, HttpClientAdapter? adaptador})
-    : _dio = Dio(
-        BaseOptions(
-          baseUrl: baseApi.toString(),
-          connectTimeout: const Duration(seconds: 10),
-          receiveTimeout: const Duration(seconds: 20),
-          headers: {'Accept': 'application/json'},
-        ),
-      ) {
+  ClienteApi({
+    required Uri baseApi,
+    required this.alRecibir401,
+    HttpClientAdapter? adaptador,
+    Stopwatch Function()? cronometro,
+  }) : _cronometro = cronometro ?? Stopwatch.new,
+       _dio = Dio(
+         BaseOptions(
+           baseUrl: baseApi.toString(),
+           connectTimeout: const Duration(seconds: 10),
+           receiveTimeout: const Duration(seconds: 20),
+           headers: {'Accept': 'application/json'},
+         ),
+       ) {
     if (adaptador != null) _dio.httpClientAdapter = adaptador;
   }
 
@@ -32,6 +37,29 @@ class ClienteApi {
   /// Reloj del servidor menos reloj del dispositivo, según el encabezado `Date` de la última respuesta
   /// que lo trajo (cero hasta entonces). Lo usa `RelojServidor` para las cuentas regresivas.
   Duration desfaseReloj = Duration.zero;
+
+  /// Un cronómetro monotónico (en los tests, uno que sigue al reloj falso).
+  final Stopwatch Function() _cronometro;
+
+  /// El `Date` de la última respuesta que lo trajo y el tiempo transcurrido desde entonces.
+  DateTime? _horaServidor;
+  Stopwatch? _desdeHoraServidor;
+  DateTime? _relojAlSincronizar;
+
+  /// Hora del servidor: el último `Date` más lo que pasó desde esa respuesta. Lo que pasó es lo mayor entre lo
+  /// que avanzó el reloj del teléfono y un cronómetro monotónico: en Android el cronómetro no cuenta el tiempo
+  /// con el teléfono dormido (el reloj sí), y si el reloj del teléfono vuelve atrás (se corrige sin señal o lo
+  /// toca el chofer) se usa solo el cronómetro. Un adelanto manual del reloj se acepta (es raro). Nula hasta la
+  /// primera respuesta con `Date`.
+  DateTime? horaServidor() {
+    final base = _horaServidor;
+    final desde = _desdeHoraServidor;
+    final relojEntonces = _relojAlSincronizar;
+    if (base == null || desde == null || relojEntonces == null) return null;
+    final cronometro = desde.elapsed;
+    final reloj = clock.now().difference(relojEntonces);
+    return base.add(reloj.isNegative || reloj < cronometro ? cronometro : reloj);
+  }
 
   Future<Object?> get(String ruta, {Map<String, dynamic>? query}) =>
       _enviar(() => _dio.get<Object?>(ruta, queryParameters: query, options: _opciones()));
@@ -77,7 +105,11 @@ class ClienteApi {
     try {
       final fecha = r.headers['date']?.firstOrNull;
       if (fecha == null) return;
-      desfaseReloj = parseHttpDate(fecha).difference(clock.now().toUtc());
+      final servidor = parseHttpDate(fecha);
+      desfaseReloj = servidor.difference(clock.now().toUtc());
+      _horaServidor = servidor;
+      _desdeHoraServidor = _cronometro()..start();
+      _relojAlSincronizar = clock.now();
     } catch (e) {
       // Se conserva el desfase anterior.
       debugPrint('vehiculos_oficiales: encabezado Date ignorado (${e.runtimeType}).');
@@ -109,6 +141,8 @@ class ClienteApi {
         return AccesoDenegado(mensaje ?? 'No tenés permiso para esta acción.');
       case 404:
         return NoEncontrado(mensaje ?? 'No se encontró lo que buscabas.');
+      case 409:
+        return Conflicto(mensaje ?? 'El viaje cambió mientras tanto.');
       case 422:
         return ErrorNegocio(mensaje ?? 'No se pudo completar la acción.', errores: _errores(cuerpo));
       case 503:

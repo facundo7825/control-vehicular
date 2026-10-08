@@ -18,7 +18,12 @@ void main() {
   setUp(() {
     http = AdaptadorFalso();
     api = ApiVehiculos(
-      ClienteApi(baseApi: Uri.parse('http://10.0.2.2:8000/api/'), alRecibir401: () {}, adaptador: http),
+      ClienteApi(
+        baseApi: Uri.parse('http://10.0.2.2:8000/api/'),
+        alRecibir401: () {},
+        adaptador: http,
+        cronometro: () => clock.stopwatch(),
+      ),
     );
     reloj = RelojServidor(api.cliente);
   });
@@ -86,4 +91,81 @@ void main() {
       expect(reloj.restante(ahora.add(const Duration(milliseconds: 1500))), const Duration(milliseconds: 1500));
     });
   });
+
+  group('hora del servidor sin señal', () {
+    late CronometroFalso cronometro;
+
+    setUp(() async {
+      cronometro = CronometroFalso();
+      api = ApiVehiculos(
+        ClienteApi(
+          baseApi: Uri.parse('http://10.0.2.2:8000/api/'),
+          alRecibir401: () {},
+          adaptador: http,
+          cronometro: () => cronometro,
+        ),
+      );
+      reloj = RelojServidor(api.cliente);
+      http.responder('GET', 'configuracion', 200, p.configuracion);
+      http.fechaServidor = ahora;
+      await withClock(Clock.fixed(ahora), () async {
+        await api.configuracion();
+      });
+    });
+
+    test('si el reloj del teléfono vuelve atrás, cuenta el cronómetro', () {
+      // Sin señal, el teléfono corrige su hora 2 h para atrás; mientras tanto pasaron 5 min.
+      cronometro.transcurrido = const Duration(minutes: 5);
+      withClock(Clock.fixed(ahora.subtract(const Duration(hours: 2))), () {
+        expect(reloj.ahora(), ahora.add(const Duration(minutes: 5)));
+      });
+    });
+
+    test('con el teléfono dormido (el cronómetro de Android no avanza) cuenta el reloj', () {
+      cronometro.transcurrido = const Duration(minutes: 5);
+      withClock(Clock.fixed(ahora.add(const Duration(minutes: 40))), () {
+        expect(reloj.ahora(), ahora.add(const Duration(minutes: 40)));
+      });
+    });
+
+    test('con el reloj quieto o atrasado respecto del cronómetro, cuenta el cronómetro', () {
+      cronometro.transcurrido = const Duration(minutes: 5);
+      withClock(Clock.fixed(ahora.add(const Duration(minutes: 2))), () {
+        expect(reloj.ahora(), ahora.add(const Duration(minutes: 5)));
+      });
+    });
+  });
+}
+
+/// Un cronómetro cuyo tiempo transcurrido fija el test.
+class CronometroFalso implements Stopwatch {
+  Duration transcurrido = Duration.zero;
+  bool _corriendo = false;
+
+  @override
+  Duration get elapsed => transcurrido;
+
+  @override
+  int get elapsedMicroseconds => transcurrido.inMicroseconds;
+
+  @override
+  int get elapsedMilliseconds => transcurrido.inMilliseconds;
+
+  @override
+  int get elapsedTicks => transcurrido.inMicroseconds;
+
+  @override
+  int get frequency => 1000000;
+
+  @override
+  bool get isRunning => _corriendo;
+
+  @override
+  void reset() => transcurrido = Duration.zero;
+
+  @override
+  void start() => _corriendo = true;
+
+  @override
+  void stop() => _corriendo = false;
 }

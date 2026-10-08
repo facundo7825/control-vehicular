@@ -17,6 +17,7 @@ import '../modulo_app.dart';
 import 'agenda.dart';
 import 'inicio_chofer.dart';
 import 'mis_viajes_chofer.dart';
+import 'viaje_chofer.dart';
 
 /// Spec 7, chofer 2 y 6: su posición, su estado, el vehículo del turno, la próxima reserva
 /// confirmada, el acceso a la agenda y "Finalizar turno".
@@ -66,6 +67,8 @@ class _MapaChoferState extends ConsumerState<MapaChofer> {
     final hayViaje = viajeActivo(ref.watch(viajeActualProvider).value?.viaje, usuario.id);
     // La agenda llega ordenada por fecha: la primera reserva confirmada es la próxima.
     final proxima = ref.watch(agendaProvider).value?.reservas.firstOrNull;
+    // Sin turno, el servidor ya no podría ubicar los pasos y el recorrido que faltan enviar.
+    final esperaSenal = ref.watch(motivoEsperaFinalizarProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -79,6 +82,7 @@ class _MapaChoferState extends ConsumerState<MapaChofer> {
       body: Column(
         children: [
           const BannerConexion(),
+          const BannerAccionesPendientes(),
           if (hayViaje)
             MaterialBanner(
               content: const Text('Tenés un viaje en curso.'),
@@ -141,7 +145,11 @@ class _MapaChoferState extends ConsumerState<MapaChofer> {
                     const Text('Fichaste la salida: se cierra al terminar el viaje.'),
                   if (aqui == null && !posicion.sinGps) const Text('Buscando tu ubicación…'),
                   const SizedBox(height: 16),
-                  OutlinedButton(onPressed: () => _finalizar(context), child: const Text('Finalizar turno')),
+                  OutlinedButton(
+                    onPressed: esperaSenal != null ? null : () => _finalizar(context),
+                    child: const Text('Finalizar turno'),
+                  ),
+                  if (esperaSenal != null) Text(esperaSenal, textAlign: TextAlign.center),
                 ],
               ),
             ),

@@ -5,8 +5,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/errores_api.dart';
 import '../chofer/almacen_cola.dart';
+import '../chofer/cola_acciones.dart';
+import '../chofer/estado_guardado.dart';
 import '../entorno.dart';
 import '../modelos/modelos.dart';
+import '../tiempo_real/tiempo_real.dart';
+import '../tiempo_real/tiempo_real_provider.dart';
 import 'almacen_token.dart';
 
 sealed class EstadoSesion {
@@ -61,10 +65,13 @@ class SesionNotifier extends Notifier<EstadoSesion> {
   EstadoSesion build() {
     final aviso = ref.watch(avisoSesionProvider);
     aviso.escuchar(() {
+      final antes = state;
+      _dejarDeConfirmar();
       state = const SesionVencida();
       unawaited(_almacenar('borrar', (a) => a.borrar()));
-      unawaited(_borrarCola());
+      if (antes is SesionLista) unawaited(_borrarCola(antes.usuario.id));
     });
+    ref.onDispose(_dejarDeConfirmar);
     Future.microtask(iniciar);
     return const SesionIniciando();
   }
@@ -81,9 +88,20 @@ class SesionNotifier extends Notifier<EstadoSesion> {
     try {
       final r = await api.intercambiar(tokenPJ);
       api.cliente.token = r.token;
-      // Si no se puede guardar, igual se sigue: solo se pierde el respaldo ante una caída del PJ.
-      await _almacenar('guardar', (a) => a.guardar(tokenPJ, r.token));
+      // Si no se puede guardar, igual se sigue: solo se pierde el respaldo ante una caída del PJ o sin señal.
+      await _almacenar('guardar', (a) => a.guardar(tokenPJ, r.token, usuario: r.usuario.toJson()));
       if (ref.mounted) _lista(SesionLista(r.usuario));
+    } on SinConexion catch (e) {
+      // Sin señal al abrir (el chofer en la ruta): con la sesión guardada de este mismo token del PJ se sigue
+      // con ese usuario, sin preguntarle al servidor, y se confirma al volver la señal.
+      final guardada = await _sesionGuardada(tokenPJ);
+      if (!ref.mounted) return;
+      if (guardada == null) {
+        state = SesionConError(e.mensaje);
+      } else {
+        _lista(guardada);
+        _confirmarAlVolver(tokenPJ);
+      }
     } on SesionInvalida {
       // El aviso ya pasó el estado a SesionVencida y llamó a la app principal.
     } on AccesoDenegado catch (e) {
@@ -115,20 +133,126 @@ class SesionNotifier extends Notifier<EstadoSesion> {
     }
   }
 
-  /// Spec 10: la cola de ubicaciones solo la retoma el turno del chofer. Si la sesión es de alguien que no
-  /// es chofer (otro usuario en el mismo teléfono, o un chofer que cambió de rol), nadie la borraría.
+  /// Lo pendiente de cada chofer va en sus propios archivos: otra sesión en el mismo teléfono (otro chofer o
+  /// alguien que no es chofer) no lo toca ni lo manda. Lo que nadie retomó en 24 h se borra
+  /// ([purgarPendientesViejosProvider], spec 10).
   void _lista(SesionLista lista) {
     state = lista;
-    if (!lista.usuario.esChofer) unawaited(_borrarCola());
+    unawaited(_purgarViejos());
   }
 
-  /// Spec 10: al cerrarse la sesión (401) no quedan en el dispositivo ubicaciones del turno sin enviar.
   /// Nunca lanza.
-  Future<void> _borrarCola() async {
+  Future<void> _purgarViejos() async {
     try {
-      await ref.read(almacenColaProvider).borrar();
+      await ref.read(purgarPendientesViejosProvider)();
     } catch (e) {
-      debugPrint('vehiculos_oficiales: no se pudo borrar la cola de ubicaciones guardada (${e.runtimeType}).');
+      debugPrint('vehiculos_oficiales: no se pudo purgar lo pendiente viejo (${e.runtimeType}).');
+    }
+  }
+
+  /// Spec 10: al cerrarse la sesión (401) no quedan en el dispositivo ubicaciones del turno sin enviar de
+  /// [usuarioId]; tampoco sus acciones del viaje, sus puntos de turnos cerrados ni la copia del turno y del viaje
+  /// guardada para abrir sin señal. Nunca lanza.
+  Future<void> _borrarCola(int usuarioId) async {
+    final borrados = <(String, Future<void> Function())>[
+      ('la cola de ubicaciones', () => ref.read(almacenColaProvider).borrar(usuarioId)),
+      ('las ubicaciones sin turno', () => ref.read(almacenSinTurnoProvider).borrar(usuarioId)),
+      ('la cola de acciones', () => ref.read(almacenAccionesProvider).borrar(usuarioId)),
+      ('el turno guardado', ref.read(almacenTurnoGuardadoProvider).borrar),
+      ('el viaje guardado', ref.read(almacenViajeGuardadoProvider).borrar),
+    ];
+    for (final (que, borrar) in borrados) {
+      try {
+        await borrar();
+      } catch (e) {
+        debugPrint('vehiculos_oficiales: no se pudo borrar $que (${e.runtimeType}).');
+      }
+    }
+  }
+
+  /// La sesión guardada para [tokenPJ] (token Sanctum y usuario), con el token ya puesto en el cliente; nula si
+  /// falta alguno de los dos. Nunca lanza.
+  Future<SesionLista?> _sesionGuardada(String tokenPJ) async {
+    final token = await _almacenar('leer', (a) => a.leer(tokenPJ));
+    final usuario = await _almacenar('leer', (a) => a.leerUsuario(tokenPJ));
+    if (token == null || usuario == null) return null;
+    try {
+      final lista = SesionLista(Usuario.fromJson(usuario));
+      ref.read(apiProvider).cliente.token = token;
+      return lista;
+    } catch (e) {
+      debugPrint('vehiculos_oficiales: no se pudo leer el usuario guardado (${e.runtimeType}).');
+      return null;
+    }
+  }
+
+  /// Cada cuánto se reintenta confirmar una sesión que se abrió sin señal (además de al reconectar el socket).
+  static const intervaloConfirmacion = Duration(seconds: 30);
+
+  Timer? _confirmacion;
+  ProviderSubscription<EstadoConexion>? _escuchaConexion;
+  bool _confirmando = false;
+
+  /// Una sesión abierta con lo guardado se confirma con el servidor al reconectar el socket y cada
+  /// [intervaloConfirmacion], hasta que responda.
+  void _confirmarAlVolver(String tokenPJ) {
+    _confirmacion ??= Timer.periodic(intervaloConfirmacion, (_) => unawaited(_confirmar(tokenPJ)));
+    _escuchaConexion ??= ref.listen(estadoConexionProvider, (antes, ahora) {
+      if (ahora == EstadoConexion.conectado && antes != EstadoConexion.conectado) unawaited(_confirmar(tokenPJ));
+    });
+  }
+
+  void _dejarDeConfirmar() {
+    _confirmacion?.cancel();
+    _confirmacion = null;
+    _escuchaConexion?.close();
+    _escuchaConexion = null;
+  }
+
+  /// Vuelve a intercambiar el token del PJ. El mismo usuario sigue con la misma sesión (no se reinicia el
+  /// módulo: el turno y su GPS siguen); otro, o con otro rol, la reemplaza. Un 401 vence la sesión como
+  /// siempre (el aviso borra lo guardado). Sin red (o el servidor caído) se reintenta más tarde. Nunca lanza.
+  Future<void> _confirmar(String tokenPJ) async {
+    final aviso = ref.read(avisoSesionProvider);
+    // Una sesión que venció (401 de cualquier pedido) no se vuelve a confirmar ni a guardar.
+    bool vigente() => ref.mounted && !aviso.avisado && state is SesionLista;
+    if (_confirmando || !vigente()) return;
+    _confirmando = true;
+    final api = ref.read(apiProvider);
+    try {
+      final r = await api.intercambiar(tokenPJ);
+      if (!vigente()) return;
+      api.cliente.token = r.token;
+      await _almacenar('guardar', (a) => a.guardar(tokenPJ, r.token, usuario: r.usuario.toJson()));
+      if (!vigente()) {
+        // Venció mientras se guardaba: no queda nada guardado.
+        await _almacenar('borrar', (a) => a.borrar());
+        return;
+      }
+      _dejarDeConfirmar();
+      final actual = state;
+      if (actual is SesionLista && actual.usuario.id == r.usuario.id && actual.usuario.rol == r.usuario.rol) return;
+      _lista(SesionLista(r.usuario));
+    } on SesionInvalida {
+      _dejarDeConfirmar(); // el aviso ya pasó a SesionVencida
+    } on AccesoDenegado catch (e) {
+      _dejarDeConfirmar();
+      if (vigente()) state = SesionDeshabilitada(e.mensaje);
+    } on SinConexion {
+      // Sin red: la sesión guardada sigue y se reintenta.
+    } on ErrorServidor {
+      // 5xx: se reintenta.
+    } on ServicioNoDisponible {
+      // El PJ caído (503): se reintenta.
+    } on ErrorApi catch (e) {
+      // Cualquier otro rechazo (422, 404…) no se arregla reintentando: la sesión guardada sigue hasta que un
+      // pedido diga lo contrario.
+      debugPrint('vehiculos_oficiales: no se pudo confirmar la sesión guardada (${e.runtimeType}).');
+      _dejarDeConfirmar();
+    } catch (e) {
+      debugPrint('vehiculos_oficiales: error inesperado al confirmar la sesión (${e.runtimeType}).');
+    } finally {
+      _confirmando = false;
     }
   }
 

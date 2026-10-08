@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io' show FileSystemException;
 
 import 'package:flutter/services.dart';
@@ -10,6 +11,8 @@ import 'package:vehiculos_oficiales/src/entorno.dart';
 import 'package:vehiculos_oficiales/src/modelos/modelos.dart';
 import 'package:vehiculos_oficiales/src/sesion/almacen_token.dart';
 import 'package:vehiculos_oficiales/src/sesion/sesion.dart';
+import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real.dart';
+import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real_provider.dart';
 
 import 'fixtures/payloads.dart' as p;
 import 'soporte/dobles.dart';
@@ -77,6 +80,8 @@ void main() {
 
   test('un 401 borra la cola de ubicaciones guardada (spec 10)', () async {
     final cola = AlmacenColaMemoria()
+      ..usuarioId =
+          1 // la de esta misma sesión (Ana)
       ..turnoId = 1
       ..puntos = [punto(0)];
     e.almacenCola = cola;
@@ -91,7 +96,7 @@ void main() {
     expect(cola.guardado, isFalse);
   });
 
-  group('cola de ubicaciones guardada al quedar lista (spec 10)', () {
+  group('cola de ubicaciones guardada (de otro chofer) al quedar lista (spec 10)', () {
     late AlmacenColaMemoria cola;
 
     setUp(() {
@@ -101,17 +106,18 @@ void main() {
       e.almacenCola = cola;
     });
 
-    test('un usuario que no es chofer la borra', () async {
+    test('un usuario que no es chofer no la toca (es de otro chofer) y se purga lo viejo', () async {
       e.http.responder('POST', 'auth/intercambio', 200, p.intercambio);
       final c = e.contenedor();
 
       expect(await sesionResuelta(c), isA<SesionLista>());
       await Future<void>.delayed(Duration.zero);
 
-      expect(cola.guardado, isFalse);
+      expect(cola.guardado, isTrue);
+      expect(e.purgas, 1);
     });
 
-    test('también con el token guardado (503 del intercambio)', () async {
+    test('tampoco con el token guardado (503 del intercambio)', () async {
       await e.almacen.guardar('sim|100|Ana Pérez|Secretaria', '7|guardado');
       e.http.responder('POST', 'auth/intercambio', 503, '{"message":"Servicio de identidad no disponible."}');
       e.http.responder('GET', 'yo', 200, '{"id":1,"nombre":"Ana","cargo":null,"rol":"admin"}');
@@ -120,7 +126,7 @@ void main() {
       expect(await sesionResuelta(c), isA<SesionLista>());
       await Future<void>.delayed(Duration.zero);
 
-      expect(cola.guardado, isFalse);
+      expect(cola.guardado, isTrue);
     });
 
     test('un chofer la conserva (el turno la retoma)', () async {
@@ -206,6 +212,139 @@ void main() {
     expect(c.read(sesionProvider), isA<SesionConError>());
   });
 
+  group('sin señal al abrir', () {
+    const tokenPJ = 'sim|100|Ana Pérez|Secretaria';
+    const usuario = {'id': 2, 'nombre': 'Carlos Gómez', 'cargo': 'Chofer', 'rol': 'chofer'};
+    late TiempoRealFalso tr;
+
+    setUp(() => tr = TiempoRealFalso(estado: EstadoConexion.desconectado));
+
+    ProviderContainer crear() => e.contenedor([tiempoRealProvider.overrideWithValue(tr)]);
+
+    test('con la sesión guardada queda lista con el usuario guardado, sin preguntar /yo', () async {
+      await e.almacen.guardar(tokenPJ, '7|guardado', usuario: usuario);
+      e.http.sinRed('POST', 'auth/intercambio');
+      final c = crear();
+
+      final s = await sesionResuelta(c);
+      expect(s, isA<SesionLista>().having((s) => s.usuario.id, 'usuario', 2));
+      expect((s as SesionLista).usuario.esChofer, isTrue);
+      expect(c.read(clienteApiProvider).token, '7|guardado');
+      expect(e.http.pedidos.map((r) => r.uri.path), ['/api/auth/intercambio']);
+    });
+
+    test(
+      'al reconectar se vuelve a intercambiar: el mismo usuario sigue con la misma sesión y el token nuevo',
+      () async {
+        await e.almacen.guardar(tokenPJ, '7|guardado', usuario: usuario);
+        e.http.sinRed('POST', 'auth/intercambio');
+        final c = crear();
+        final antes = await sesionResuelta(c);
+
+        e.http
+          ..limpiar('POST', 'auth/intercambio')
+          ..responder('POST', 'auth/intercambio', 200, '{"token":"8|nuevo","usuario":${jsonEncode(usuario)}}');
+        tr.cambiar(EstadoConexion.conectado);
+        for (var i = 0; i < 10; i++) {
+          await Future<void>.delayed(Duration.zero);
+        }
+
+        expect(identical(c.read(sesionProvider), antes), isTrue);
+        expect(c.read(clienteApiProvider).token, '8|nuevo');
+        expect(await e.almacen.leer(tokenPJ), '8|nuevo');
+        expect(await e.almacen.leerUsuario(tokenPJ), usuario);
+      },
+    );
+
+    test('al reconectar con la sesión vencida (401) se avisa y se borra', () async {
+      await e.almacen.guardar(tokenPJ, '7|guardado', usuario: usuario);
+      e.http.sinRed('POST', 'auth/intercambio');
+      final c = crear();
+      await sesionResuelta(c);
+
+      e.http
+        ..limpiar('POST', 'auth/intercambio')
+        ..responder('POST', 'auth/intercambio', 401, p.noAutenticado);
+      tr.cambiar(EstadoConexion.conectado);
+      for (var i = 0; i < 10; i++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+
+      expect(c.read(sesionProvider), isA<SesionVencida>());
+      expect(await e.almacen.leer(tokenPJ), isNull);
+    });
+
+    Future<void> pasar() async {
+      for (var i = 0; i < 10; i++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+    }
+
+    test('un 401 de otro pedido mientras se confirma: la sesión queda vencida y no se vuelve a guardar', () async {
+      await e.almacen.guardar(tokenPJ, '7|guardado', usuario: usuario);
+      e.http
+        ..sinRed('POST', 'auth/intercambio')
+        ..responder('GET', 'viajes/actual', 401, p.noAutenticado);
+      final c = crear();
+      await sesionResuelta(c);
+
+      e.http.limpiar('POST', 'auth/intercambio');
+      final intercambio = e.http.demorar('POST', 'auth/intercambio');
+      tr.cambiar(EstadoConexion.conectado);
+      await pasar();
+      await expectLater(c.read(apiProvider).viajeActual(), throwsA(isA<SesionInvalida>()));
+      intercambio.complete((200, '{"token":"8|nuevo","usuario":${jsonEncode(usuario)}}'));
+      await pasar();
+      // Ni el timer ni otra reconexión la reviven.
+      tr
+        ..cambiar(EstadoConexion.desconectado)
+        ..cambiar(EstadoConexion.conectado);
+      await pasar();
+
+      expect(c.read(sesionProvider), isA<SesionVencida>());
+      expect(await e.almacen.leer(tokenPJ), isNull);
+      expect(await e.almacen.leerUsuario(tokenPJ), isNull);
+      expect(e.sesionesInvalidas, 1);
+      expect(e.http.pedidos.where((r) => r.uri.path == '/api/auth/intercambio'), hasLength(2));
+    });
+
+    test('un rechazo que no es de red (422) deja de reintentar la confirmación', () async {
+      await e.almacen.guardar(tokenPJ, '7|guardado', usuario: usuario);
+      e.http.sinRed('POST', 'auth/intercambio');
+      final c = crear();
+      await sesionResuelta(c);
+
+      e.http
+        ..limpiar('POST', 'auth/intercambio')
+        ..responder('POST', 'auth/intercambio', 422, p.validacion);
+      tr.cambiar(EstadoConexion.conectado);
+      await pasar();
+      tr
+        ..cambiar(EstadoConexion.desconectado)
+        ..cambiar(EstadoConexion.conectado);
+      await pasar();
+
+      expect(e.http.pedidos.where((r) => r.uri.path == '/api/auth/intercambio'), hasLength(2));
+      expect(c.read(sesionProvider), isA<SesionLista>());
+    });
+
+    test('sin usuario guardado (una sesión de antes) es el error de siempre', () async {
+      await e.almacen.guardar(tokenPJ, '7|guardado');
+      e.http.sinRed('POST', 'auth/intercambio');
+      final c = crear();
+
+      expect(await sesionResuelta(c), isA<SesionConError>());
+    });
+
+    test('el intercambio guarda el usuario junto al token', () async {
+      e.http.responder('POST', 'auth/intercambio', 200, p.intercambio);
+      final c = crear();
+      await sesionResuelta(c);
+
+      expect((await e.almacen.leerUsuario(tokenPJ))!['id'], 1);
+    });
+  });
+
   almacenQueFalla();
 }
 
@@ -215,7 +354,11 @@ class AlmacenQueFalla implements AlmacenToken {
   Future<String?> leer(String tokenPJ) async => throw PlatformException(code: 'leer');
 
   @override
-  Future<void> guardar(String tokenPJ, String tokenSanctum) async => throw PlatformException(code: 'guardar');
+  Future<Map<String, dynamic>?> leerUsuario(String tokenPJ) async => throw PlatformException(code: 'leer');
+
+  @override
+  Future<void> guardar(String tokenPJ, String tokenSanctum, {Map<String, dynamic>? usuario}) async =>
+      throw PlatformException(code: 'guardar');
 
   @override
   Future<void> borrar() async => throw PlatformException(code: 'borrar');

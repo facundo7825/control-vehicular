@@ -24,11 +24,18 @@ final class KilometrosRecorridos
         $metros = [];
         $anterior = null;
 
+        // Solo los puntos dentro del intervalo real del viaje [iniciado_en, finalizado_en]: con una acción
+        // enviada tarde (sin señal), el viaje pudo terminar antes de puntos que el servidor ya había recibido.
         PuntoRecorrido::query()
-            ->whereIn('viaje_id', $viajeIds)
-            ->orderBy('viaje_id')->orderBy('registrado_en')->orderBy('id')
+            ->join('viajes', 'viajes.id', '=', 'recorrido_viaje.viaje_id')
+            ->whereIn('recorrido_viaje.viaje_id', $viajeIds)
+            ->where(fn ($q) => $q->whereNull('viajes.iniciado_en')
+                ->orWhereColumn('recorrido_viaje.registrado_en', '>=', 'viajes.iniciado_en'))
+            ->where(fn ($q) => $q->whereNull('viajes.finalizado_en')
+                ->orWhereColumn('recorrido_viaje.registrado_en', '<=', 'viajes.finalizado_en'))
+            ->orderBy('recorrido_viaje.viaje_id')->orderBy('recorrido_viaje.registrado_en')->orderBy('recorrido_viaje.id')
             ->toBase()
-            ->select(['viaje_id', 'lat', 'lng'])
+            ->select(['recorrido_viaje.viaje_id', 'recorrido_viaje.lat', 'recorrido_viaje.lng'])
             ->cursor()
             ->each(function (object $punto) use (&$metros, &$anterior) {
                 $viaje = (int) $punto->viaje_id;

@@ -156,9 +156,20 @@ class ApiVehiculos {
     await cliente.post('ofertas/$ofertaId/rechazar');
   }
 
-  /// `en_camino`, `llego`, `en_curso` o `finalizado`.
-  Future<Viaje> avanzarViaje(int viajeId, EstadoViaje estado) => _leer(
-    () async => Viaje.fromJson(await cliente.postMapa('viajes/$viajeId/estado', datos: {'estado': estado.valor})),
+  /// `en_camino`, `llego`, `en_curso` o `finalizado`. Desde la cola de acciones van también [momento] (cuándo lo
+  /// tocó el chofer, en UTC) e [idAccion] (una acción ya aplicada devuelve el viaje actual sin repetirla). 409
+  /// ([Conflicto]) si el viaje se canceló o se reasignó mientras tanto.
+  Future<Viaje> avanzarViaje(int viajeId, EstadoViaje estado, {DateTime? momento, String? idAccion}) => _leer(
+    () async => Viaje.fromJson(
+      await cliente.postMapa(
+        'viajes/$viajeId/estado',
+        datos: {
+          'estado': estado.valor,
+          if (momento != null) 'momento': momento.toUtc().toIso8601String(),
+          'id_accion': ?idAccion,
+        },
+      ),
+    ),
   );
 
   Future<Agenda> agenda() => _leer(() async => Agenda.fromJson(await cliente.getMapa('agenda')));

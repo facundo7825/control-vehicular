@@ -1,11 +1,15 @@
 import 'dart:async';
 
+import 'package:clock/clock.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:vehiculos_oficiales/src/avisos/notificaciones_locales.dart';
 import 'package:vehiculos_oficiales/src/avisos/reproductor_sonidos.dart';
 import 'package:vehiculos_oficiales/src/chofer/almacen_cola.dart';
+import 'package:vehiculos_oficiales/src/chofer/cola_acciones.dart';
+import 'package:vehiculos_oficiales/src/chofer/estado_guardado.dart';
 import 'package:vehiculos_oficiales/src/entorno.dart';
+import 'package:vehiculos_oficiales/src/mapa/cache_teselas.dart';
 import 'package:vehiculos_oficiales/src/sesion/almacen_token.dart';
 import 'package:vehiculos_oficiales/vehiculos_oficiales.dart';
 
@@ -50,7 +54,14 @@ class EntornoPrueba {
   final http = AdaptadorFalso();
   AlmacenToken almacen = AlmacenTokenMemoria();
   AlmacenCola almacenCola = AlmacenColaMemoria();
+  AlmacenAcciones almacenAcciones = AlmacenAccionesMemoria();
+  AlmacenCola almacenSinTurno = AlmacenColaMemoria();
+  AlmacenJson turnoGuardado = AlmacenJsonMemoria();
+  AlmacenJson viajeGuardado = AlmacenJsonMemoria();
   int sesionesInvalidas = 0;
+
+  /// Veces que la sesión pidió purgar lo pendiente viejo (en los tests no hay disco).
+  int purgas = 0;
 
   /// Nunca los plugins de audio y notificaciones.
   final sonidos = ReproductorFalso();
@@ -71,8 +82,17 @@ class EntornoPrueba {
   /// Sin el entorno, que lo agrega `ModuloVehiculos`.
   List<Override> overridesDeModulo([List<Override> extra = const []]) => [
     adaptadorHttpProvider.overrideWithValue(http),
+    // El reloj falso de fakeAsync también mueve el cronómetro de la hora del servidor.
+    cronometroProvider.overrideWithValue(() => clock.stopwatch()),
     almacenTokenProvider.overrideWithValue(almacen),
     almacenColaProvider.overrideWithValue(almacenCola),
+    almacenAccionesProvider.overrideWithValue(almacenAcciones),
+    almacenSinTurnoProvider.overrideWithValue(almacenSinTurno),
+    purgarPendientesViejosProvider.overrideWithValue(() async => purgas++),
+    almacenTurnoGuardadoProvider.overrideWithValue(turnoGuardado),
+    almacenViajeGuardadoProvider.overrideWithValue(viajeGuardado),
+    // Sin disco para las teselas (ni path_provider): el mapa de prueba no las usa.
+    almacenTeselasProvider.overrideWithValue(null),
     reproductorSonidosProvider.overrideWithValue(sonidos),
     notificacionesLocalesProvider.overrideWithValue(notificaciones),
     ...extra,

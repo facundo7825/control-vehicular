@@ -1,9 +1,14 @@
 import 'dart:convert';
 
+import 'package:dio/dio.dart' hide Headers;
+import 'package:dio/dio.dart' as dio show Headers;
+import 'package:dio_cache_interceptor/dio_cache_interceptor.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter_map_cache/flutter_map_cache.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart' as gm;
 import 'package:latlong2/latlong.dart';
@@ -11,6 +16,8 @@ import 'package:vehiculos_oficiales/src/api/api_vehiculos.dart';
 import 'package:vehiculos_oficiales/src/api/errores_api.dart';
 import 'package:vehiculos_oficiales/src/chofer/turno.dart' show configuracionProvider;
 import 'package:vehiculos_oficiales/src/entorno.dart';
+import 'package:vehiculos_oficiales/src/mapa/cache_teselas.dart';
+import 'package:vehiculos_oficiales/src/mapa/corredor_teselas.dart';
 import 'package:vehiculos_oficiales/src/mapa/mapa.dart';
 import 'package:vehiculos_oficiales/src/mapa/mapa_google.dart';
 import 'package:vehiculos_oficiales/src/mapa/mapa_osm.dart';
@@ -37,6 +44,33 @@ class _TeselasVacias extends TileProvider {
     pedidas++;
     return MemoryImage(_pngVacio);
   }
+}
+
+/// Un servidor de teselas falso para el cliente HTTP del caché: responde un PNG y anota lo pedido.
+class _ServidorTeselas implements HttpClientAdapter {
+  final pedidas = <Uri>[];
+  final agentes = <String?>[];
+  int estado = 200;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    pedidas.add(options.uri);
+    agentes.add(options.headers['User-Agent'] as String?);
+    return ResponseBody.fromBytes(
+      estado == 200 ? _pngVacio : Uint8List(0),
+      estado,
+      headers: {
+        dio.Headers.contentTypeHeader: ['image/png'],
+      },
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
 }
 
 /// Lo que manda el backend por defecto: el mapa de fondo de OpenStreetMap.
@@ -768,4 +802,162 @@ void main() {
       expect(tocado, 1);
     });
   });
+  group('teselas sin señal', () {
+    late _ServidorTeselas servidor;
+    late MemCacheStore almacen;
+
+    setUp(() {
+      servidor = _ServidorTeselas();
+      almacen = MemCacheStore();
+    });
+
+    List<Override> overrides({
+      AsyncValue<Configuracion> configuracion = const AsyncData(_configuracionOsm),
+      String claveGoogle = '',
+      bool conDisco = true,
+    }) => [
+      entornoProvider.overrideWithValue(_entornoConClave(claveGoogle)),
+      configuracionProvider.overrideWithValue(configuracion),
+      almacenTeselasProvider.overrideWithValue(conDisco ? almacen : null),
+      adaptadorTeselasProvider.overrideWithValue(servidor),
+    ];
+
+    testWidgets('sin un proveedor de prueba, las teselas pasan por el caché en disco', (tester) async {
+      tester.view.physicalSize = const Size(800, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: overrides(),
+          child: const MaterialApp(
+            home: Scaffold(
+              body: MapaOsm(datos: DatosMapa(centro: Coordenada(-26.8241, -65.2226))),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      final proveedor = tester.widget<TileLayer>(find.byType(TileLayer)).tileProvider;
+      expect(proveedor, isA<CachedTileProvider>());
+      expect(proveedor.headers['User-Agent'], 'flutter_map (${MapaOsm.agenteUsuario})');
+
+      // Las bajadas a la red quedan guardadas.
+      for (var i = 0; i < 5 && servidor.pedidas.isEmpty; i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(servidor.pedidas, isNotEmpty);
+      expect(servidor.pedidas.first.host, 'tile.openstreetmap.org');
+      expect(
+        await tester.runAsync(() => almacen.exists(CacheOptions.defaultCacheKeyBuilder(url: servidor.pedidas.first))),
+        isTrue,
+      );
+    });
+
+    testWidgets('sin disco (web), las teselas van directo a la red', (tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: overrides(conDisco: false),
+          child: const MaterialApp(
+            home: Scaffold(
+              body: MapaOsm(datos: DatosMapa(centro: Coordenada(-26.8241, -65.2226))),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(tester.widget<TileLayer>(find.byType(TileLayer)).tileProvider, isNot(isA<CachedTileProvider>()));
+    });
+
+    group('descargador', () {
+      test('baja una tesela del servidor configurado al caché, una sola vez', () async {
+        final contenedor = ProviderContainer.test(
+          overrides: overrides(configuracion: const AsyncData(_configuracionPropia)),
+        );
+        final descargador = contenedor.read(descargadorTeselasProvider)!;
+        expect(descargador.zoomMaximo, 19);
+
+        await descargador.descargar(const Tesela(14, 5223, 9460));
+        await descargador.descargar(const Tesela(14, 5223, 9460));
+
+        expect(servidor.pedidas, [Uri.parse('https://mapas.ejemplo.gob.ar/14/5223/9460.png')]);
+        expect(servidor.agentes.single, 'flutter_map (${MapaOsm.agenteUsuario})');
+        expect(await almacen.exists(CacheOptions.defaultCacheKeyBuilder(url: servidor.pedidas.single)), isTrue);
+      });
+
+      test('una tesela que ya está en el caché no se vuelve a leer del disco', () async {
+        final contado = _AlmacenContado();
+        almacen = contado;
+        final contenedor = ProviderContainer.test(
+          overrides: overrides(configuracion: const AsyncData(_configuracionPropia)),
+        );
+        final descargador = contenedor.read(descargadorTeselasProvider)!;
+        await descargador.descargar(const Tesela(14, 5223, 9460));
+        final lecturas = contado.lecturas;
+
+        await descargador.descargar(const Tesela(14, 5223, 9460));
+
+        expect(contado.lecturas, lecturas);
+        expect(servidor.pedidas, hasLength(1));
+      });
+
+      test('en un servidor TMS la fila va invertida, como la pide el mapa', () async {
+        const tms = Configuracion(
+          gpsTurnoSeg: 10,
+          gpsViajeSeg: 5,
+          ofertaSegundos: 30,
+          teselas: MapaFondo(
+            url: 'https://mapas.ejemplo.gob.ar/tms/{z}/{x}/{y}.png',
+            atribucion: 'IGN',
+            tms: true,
+            maxZoom: 13,
+          ),
+        );
+        final contenedor = ProviderContainer.test(overrides: overrides(configuracion: const AsyncData(tms)));
+        final descargador = contenedor.read(descargadorTeselasProvider)!;
+        expect(descargador.zoomMaximo, 13);
+        await descargador.descargar(const Tesela(3, 2, 1));
+        expect(servidor.pedidas, [Uri.parse('https://mapas.ejemplo.gob.ar/tms/3/2/6.png')]);
+      });
+
+      test('una tesela que no llega es un error (la descarga la saltea)', () async {
+        servidor.estado = 500;
+        final contenedor = ProviderContainer.test(
+          overrides: overrides(configuracion: const AsyncData(_configuracionPropia)),
+        );
+        await expectLater(
+          contenedor.read(descargadorTeselasProvider)!.descargar(const Tesela(1, 0, 0)),
+          throwsA(anything),
+        );
+      });
+
+      test('nulo con el mapa de Google, sin disco, sin mapa de fondo o con el OSM público', () {
+        DescargadorTeselas? descargador({String claveGoogle = '', bool conDisco = true}) => ProviderContainer.test(
+          overrides: overrides(
+            configuracion: const AsyncData(_configuracionPropia),
+            claveGoogle: claveGoogle,
+            conDisco: conDisco,
+          ),
+        ).read(descargadorTeselasProvider);
+        expect(descargador(), isNotNull);
+        expect(descargador(claveGoogle: 'AIza'), isNull);
+        expect(descargador(conDisco: false), isNull);
+        // Su política de uso no admite bajar teselas por adelantado (solo se guardan las que se ven).
+        expect(ProviderContainer.test(overrides: overrides()).read(descargadorTeselasProvider), isNull);
+        final sinFondo = ProviderContainer.test(overrides: overrides(configuracion: const AsyncLoading()));
+        expect(sinFondo.read(descargadorTeselasProvider), isNull);
+      });
+    });
+  });
+}
+
+/// Cuenta las lecturas completas de una tesela (`get`).
+class _AlmacenContado extends MemCacheStore {
+  int lecturas = 0;
+
+  @override
+  Future<CacheResponse?> get(String key) {
+    lecturas++;
+    return super.get(key);
+  }
 }

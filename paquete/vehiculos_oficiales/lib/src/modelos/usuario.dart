@@ -26,4 +26,7 @@ class Usuario {
 
   /// El admin usa la app como solicitante (las rutas de pedido admiten `rol:solicitante,admin`).
   bool get esChofer => rol == Rol.chofer;
+
+  /// Lo que lee [Usuario.fromJson] (para abrir sin señal con el usuario de la última sesión).
+  Json toJson() => {'id': id, 'nombre': nombre, 'cargo': cargo, 'rol': rol.name};
 }
