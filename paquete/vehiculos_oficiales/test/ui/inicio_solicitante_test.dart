@@ -41,7 +41,10 @@ void main() {
     return montarModulo(tester, e, ubicador: ubicador);
   }
 
-  Map<String, dynamic> ultimoCuerpo() => jsonDecode(e.http.pedidos.last.cuerpo) as Map<String, dynamic>;
+  /// El cuerpo del último pedido que manda datos (después de pedir, el borrador vuelve a pedir la dirección
+  /// de la ubicación con un GET).
+  Map<String, dynamic> ultimoCuerpo() =>
+      jsonDecode(e.http.pedidos.lastWhere((p) => p.metodo != 'GET').cuerpo) as Map<String, dynamic>;
 
   testWidgets('muestra los choferes en turno; el libre en verde', (tester) async {
     await abrir(tester);
@@ -109,6 +112,46 @@ void main() {
       'motivo': 'Audiencia',
     });
     expect(find.text('Buscando el chofer más cercano…'), findsOneWidget);
+  });
+
+  testWidgets('el panel muestra la dirección de mi ubicación y del destino tocado, y el pedido las manda', (
+    tester,
+  ) async {
+    final buscando = e.http.demorar('GET', 'lugares/inverso');
+    e.http.responder('POST', 'viajes', 201, p.viajeOfrecido);
+
+    await abrir(tester);
+    expect(find.text('Tu ubicación actual'), findsOneWidget);
+    expect(find.text('Buscando la dirección…'), findsOneWidget);
+    buscando.complete((200, '{"direccion":"Sarmiento 520"}'));
+    await tester.pumpAndSettle();
+    expect(find.text('Tu ubicación actual'), findsOneWidget);
+    expect(find.text('Sarmiento 520'), findsOneWidget);
+    expect(find.text('Buscando la dirección…'), findsNothing);
+    final inversa = e.http.pedidos.lastWhere((p) => p.uri.path.endsWith('lugares/inverso'));
+    expect(inversa.uri.queryParameters, {'lat': '-26.8241', 'lng': '-65.2226'});
+
+    final segunda = e.http.demorar('GET', 'lugares/inverso');
+    await tester.tap(find.byKey(const Key('tocar-mapa'))); // destino
+    await tester.pumpAndSettle();
+    expect(find.text('Buscando la dirección…'), findsOneWidget);
+    segunda.complete((200, '{"direccion":"San Martín 100"}'));
+    await tester.pumpAndSettle();
+    expect(find.text('San Martín 100'), findsWidgets);
+    expect(find.textContaining('-26.8'), findsNothing); // nunca coordenadas a la vista
+
+    await tester.tap(find.text('Pedir el más cercano'));
+    await esperar(tester);
+
+    expect(ultimoCuerpo(), {
+      'modo': 'mas_cercano',
+      'origen_lat': -26.8241,
+      'origen_lng': -65.2226,
+      'origen_direccion': 'Sarmiento 520',
+      'destino_lat': puntoTocado.lat,
+      'destino_lng': puntoTocado.lng,
+      'destino_direccion': 'San Martín 100',
+    });
   });
 
   testWidgets('pedir a un chofer elegido en el mapa', (tester) async {

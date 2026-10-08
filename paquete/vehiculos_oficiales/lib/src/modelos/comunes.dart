@@ -26,8 +26,10 @@ class Lugar {
   final Coordenada coordenada;
   final String? direccion;
 
-  /// Texto para mostrar: la dirección escrita o, si no hay, las coordenadas.
-  String get descripcion => direccion ?? '${coordenada.lat.toStringAsFixed(5)}, ${coordenada.lng.toStringAsFixed(5)}';
+  /// Texto para mostrar: la dirección o, si no hay, un texto fijo (nunca las coordenadas).
+  String get descripcion => direccion ?? sinDireccion;
+
+  static const sinDireccion = 'Ubicación marcada en el mapa';
 }
 
 /// `{patente, marca, modelo, color}`; `id` solo viene en `GET /vehiculos/disponibles`.

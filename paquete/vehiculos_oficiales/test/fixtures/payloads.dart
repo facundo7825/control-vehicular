@@ -94,3 +94,17 @@ const eventoEstadoChofer = r'''{"chofer_id":2,"estado":"en_viaje"}''';
 // del punto de la maniobra dentro de `puntos`. Sin recorrido disponible responde 200 con `null`.
 const ruta =
     r'''{"distancia_m":1830,"duracion_s":240.5,"puntos":[[-26.8241,-65.2226],[-26.8162,-65.2201],[-26.8083,-65.2176]],"pasos":[{"instruccion":"Seguí por 24 de Septiembre","distancia_m":1830,"indice":0,"lat":-26.8241,"lng":-65.2226,"tipo":"salida"},{"instruccion":"Llegaste a destino","distancia_m":0,"indice":2,"lat":-26.8083,"lng":-65.2176,"tipo":"llegada"}]}''';
+
+// GET /api/viajes/1 de un viaje finalizado (con los campos del detalle del historial)
+const viajeFinalizado =
+    r'''{"id":1,"tipo":"inmediato","modo":"mas_cercano","estado":"finalizado","obligatorio":false,"origen":{"lat":-26.8241,"lng":-65.2226,"direccion":"Plaza Independencia"},"destino":{"lat":-26.8083,"lng":-65.2176,"direccion":"Tribunales"},"motivo":"Audiencia","programado_para":null,"duracion_estimada_min":null,"chofer":{"id":2,"nombre":"Carlos Gómez","telefono":"3815550000"},"vehiculo":{"patente":"AB123CD","marca":"Toyota","modelo":"Corolla","color":"Blanco"},"solicitante":{"id":1,"nombre":"Ana Pérez","telefono":null},"aceptado_en":"2026-10-01T12:00:00+00:00","llego_en":"2026-10-01T12:05:00+00:00","iniciado_en":"2026-10-01T12:06:00+00:00","finalizado_en":"2026-10-01T12:20:00+00:00","cancelado_en":null,"pedido_en":"2026-10-01T11:58:00+00:00","cancelado_por":null,"motivo_cancelacion":null,"metros_recorridos":5300}''';
+
+// GET /api/viajes/1/recorrido -> 200
+const recorrido =
+    r'''{"puntos":[[-26.8241,-65.2226],[-26.8162,-65.2201],[-26.8083,-65.2176]],"disponible":true,"vencido":false,"retencion_dias":90}''';
+
+// GET /api/viajes/1/recorrido sin puntos registrados -> 200
+const recorridoNoDisponible = r'''{"puntos":[],"disponible":false,"vencido":false,"retencion_dias":90}''';
+
+// GET /api/viajes/1/recorrido de un viaje cuyo recorrido ya se purgó por la retención -> 200
+const recorridoVencido = r'''{"puntos":[],"disponible":false,"vencido":true,"retencion_dias":30}''';

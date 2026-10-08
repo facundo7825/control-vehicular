@@ -2,10 +2,11 @@
 
 namespace App\Http\Resources;
 
+use App\Models\Viaje;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
-/** @mixin \App\Models\Viaje */
+/** @mixin Viaje */
 class ViajeResource extends JsonResource
 {
     public function toArray(Request $request): array
@@ -35,6 +36,10 @@ class ViajeResource extends JsonResource
             'iniciado_en' => $this->iniciado_en?->toIso8601String(),
             'finalizado_en' => $this->finalizado_en?->toIso8601String(),
             'cancelado_en' => $this->cancelado_en?->toIso8601String(),
+            'pedido_en' => $this->created_at?->toIso8601String(),
+            'cancelado_por' => $this->cancelado_por,
+            'motivo_cancelacion' => $this->motivo_cancelacion,
+            'metros_recorridos' => $this->metros_recorridos,
         ];
     }
 }

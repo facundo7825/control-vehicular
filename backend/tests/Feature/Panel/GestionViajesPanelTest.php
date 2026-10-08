@@ -472,7 +472,7 @@ describe('lista', function () {
 
         expect($filas[1])->toBe([
             $viaje->id, 'Inmediato', 'Finalizado', 'Sí', 'Ana Pérez', 'Jueza', $chofer->nombre,
-            $chofer->turnoAbierto->vehiculo->patente, 'Talcahuano 550', '-34.609, -58.392', "'=HIPERVINCULO(\"x\")",
+            $chofer->turnoAbierto->vehiculo->patente, 'Talcahuano 550', 'Ubicación marcada en el mapa', "'=HIPERVINCULO(\"x\")",
             '01/10/2026 08:00', '', '01/10/2026 08:10', '', '', '01/10/2026 08:50', '', '', '',
         ]);
 

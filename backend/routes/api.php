@@ -3,6 +3,7 @@
 use App\Http\Controllers\AgendaController;
 use App\Http\Controllers\AsistenciaController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\ChoferViajesController;
 use App\Http\Controllers\ConfiguracionController;
 use App\Http\Controllers\EtaController;
 use App\Http\Controllers\LugaresController;
@@ -28,12 +29,14 @@ Route::middleware(['auth:sanctum', 'activo'])->group(function () {
     Route::get('/configuracion', ConfiguracionController::class);
     Route::get('/choferes', MapaController::class);
     Route::get('/lugares', LugaresController::class)->middleware('throttle:lugares');
+    Route::get('/lugares/inverso', [LugaresController::class, 'inverso'])->middleware('throttle:lugares');
     Route::get('/ruta', RutaController::class)->middleware('throttle:rutas');
     Route::get('/viajes/actual', [ViajeController::class, 'actual']);
     Route::get('/viajes/{viaje}', [ViajeController::class, 'show'])->whereNumber('viaje');
     Route::get('/viajes', [ViajeController::class, 'index']);
     Route::post('/push/token', PushController::class);
     Route::get('/viajes/{viaje}/eta', EtaController::class);
+    Route::get('/viajes/{viaje}/recorrido', [ViajeController::class, 'recorrido'])->whereNumber('viaje');
     Route::post('/viajes/{viaje}/cancelar', [ViajeController::class, 'cancelar']);
 
     Route::middleware('rol:solicitante,admin')->group(function () {
@@ -53,5 +56,6 @@ Route::middleware(['auth:sanctum', 'activo'])->group(function () {
         Route::post('/ofertas/{oferta}/rechazar', [OfertaController::class, 'rechazar']);
         Route::post('/viajes/{viaje}/estado', [ViajeController::class, 'avanzar']);
         Route::get('/agenda', AgendaController::class);
+        Route::get('/chofer/viajes', ChoferViajesController::class);
     });
 });

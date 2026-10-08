@@ -85,6 +85,21 @@ class ApiFalsa extends ApiVehiculos {
     return lugares;
   }
 
+  /// Dirección de cada punto para `direccionDe` (sin respuesta preparada: nula, como si el proveedor no la
+  /// tuviera) y los puntos consultados.
+  final direcciones = <Coordenada, String>{};
+  final consultasDireccion = <Coordenada>[];
+
+  /// Si hay uno para el punto, `direccionDe` espera a que el test lo complete antes de responder.
+  final demorarDireccion = <Coordenada, Completer<void>>{};
+
+  @override
+  Future<String?> direccionDe(Coordenada c) async {
+    consultasDireccion.add(c);
+    await demorarDireccion[c]?.future;
+    return direcciones[c];
+  }
+
   /// Respuesta de `obtenerRuta` (nula = sin recorrido) y los pedidos recibidos (origen, destino).
   Ruta? ruta;
   ErrorApi? errorRuta;

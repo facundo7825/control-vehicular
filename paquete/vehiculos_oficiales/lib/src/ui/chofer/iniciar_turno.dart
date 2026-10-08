@@ -6,6 +6,7 @@ import '../../chofer/turno.dart';
 import '../../ubicacion/ubicador.dart';
 import '../comunes/comunes.dart';
 import 'inicio_chofer.dart';
+import 'mis_viajes_chofer.dart';
 
 /// Spec 7, chofer 1: elegir el vehículo e iniciar el turno a mano, si el fichaje no lo abrió (no tiene
 /// vehículo habitual libre, o no fichó). Toda la lógica está en `TurnoNotifier`.
@@ -48,7 +49,11 @@ class _IniciarTurnoState extends ConsumerState<IniciarTurno> {
     final vehiculos = ref.watch(vehiculosDisponiblesProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Iniciar turno'), leading: const BotonCerrarModulo()),
+      appBar: AppBar(
+        title: const Text('Iniciar turno'),
+        leading: const BotonCerrarModulo(),
+        actions: const [BotonMisViajesChofer()],
+      ),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [

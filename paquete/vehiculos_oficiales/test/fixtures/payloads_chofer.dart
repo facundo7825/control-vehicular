@@ -68,3 +68,10 @@ const reservaConfirmada =
 
 // POST /api/ofertas/3/aceptar (reserva superpuesta) -> 422
 const reservaNoDisponible = r'''{"message":"La reserva ya no está disponible o se superpone con otra de tu agenda."}''';
+
+// GET /api/chofer/viajes -> 200: resumen de hoy (con turno abierto) y el viaje finalizado 1 de Ana Pérez.
+const viajesChofer =
+    r'''{"hoy":{"viajes":2,"metros":5300,"en_turno_desde":"2026-10-07T11:30:00+00:00"},"viajes":[{"id":1,"tipo":"inmediato","modo":"mas_cercano","estado":"finalizado","obligatorio":false,"origen":{"lat":-26.8241,"lng":-65.2226,"direccion":"Plaza Independencia"},"destino":{"lat":-26.8083,"lng":-65.2176,"direccion":"Tribunales"},"motivo":"Audiencia","programado_para":null,"duracion_estimada_min":null,"chofer":{"id":2,"nombre":"Carlos Gómez","telefono":"3815550000"},"vehiculo":{"patente":"AB123CD","marca":"Toyota","modelo":"Corolla","color":"Blanco"},"solicitante":{"id":1,"nombre":"Ana Pérez","telefono":null},"aceptado_en":"2026-10-01T12:00:00+00:00","llego_en":"2026-10-01T12:05:00+00:00","iniciado_en":"2026-10-01T12:06:00+00:00","finalizado_en":"2026-10-01T12:20:00+00:00","cancelado_en":null,"pedido_en":"2026-10-01T11:58:00+00:00","cancelado_por":null,"motivo_cancelacion":null,"metros_recorridos":5300}]}''';
+
+// GET /api/chofer/viajes -> 200: sin turno abierto ni viajes.
+const viajesChoferVacio = r'''{"hoy":{"viajes":0,"metros":0,"en_turno_desde":null},"viajes":[]}''';

@@ -131,7 +131,7 @@ class _PantallaReservaState extends ConsumerState<PantallaReserva> {
                 ListTile(
                   leading: const Icon(Icons.trip_origin),
                   title: const Text('Origen'),
-                  subtitle: Text(b.descripcion(PuntoPedido.origen)!),
+                  subtitle: textoConDetalle(b.descripcion(PuntoPedido.origen)!, b.detalleOrigen),
                 ),
                 ListTile(
                   leading: const Icon(Icons.place),

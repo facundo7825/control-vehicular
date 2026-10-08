@@ -121,6 +121,7 @@ class _Pasado extends ConsumerWidget {
       leading: Icon(viaje.tipo == TipoViaje.reserva ? Icons.event_available : Icons.local_taxi),
       title: Text([if (cuando != null) formatearFechaHora(cuando), viaje.destino.descripcion].join(' · ')),
       subtitle: Text(viaje.estado.texto),
+      onTap: () => context.push(Rutas.detalleViaje(viaje.id)),
       // Spec 5.4: si el chofer rechazó la reserva o no respondió, el solicitante elige otro.
       trailing: reservaSinChofer
           ? TextButton(

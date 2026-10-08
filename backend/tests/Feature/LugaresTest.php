@@ -89,6 +89,23 @@ it('Nominatim pide con los parámetros y el User-Agent de la política y mapea e
     });
 });
 
+it('Nominatim usa la dirección corta cuando viene el detalle de la dirección', function () {
+    Http::fake([NOMINATIM => Http::response([
+        ['name' => 'Catedral', 'display_name' => 'Catedral, 626, Rivadavia, Centro, San Fernando del Valle de Catamarca, Catamarca, Argentina',
+            'lat' => '-28.4685', 'lon' => '-65.7782',
+            'address' => ['road' => 'Rivadavia', 'house_number' => '626', 'suburb' => 'Centro', 'city' => 'San Fernando del Valle de Catamarca']],
+        ['name' => '', 'display_name' => '486, 9 de Julio, Centro, San Fernando del Valle de Catamarca, Catamarca, Argentina',
+            'lat' => '-28.47', 'lon' => '-65.78',
+            'address' => ['road' => '9 de Julio', 'house_number' => '486', 'suburb' => 'Centro', 'city' => 'San Fernando del Valle de Catamarca']],
+    ])]);
+    $esperas = [];
+
+    $r = nominatimSinEspera($esperas)->buscar('catedral', null, null);
+
+    expect($r[0])->toMatchArray(['nombre' => 'Catedral', 'direccion' => 'Catedral, Rivadavia 626, Centro']);
+    expect($r[1])->toMatchArray(['nombre' => '9 de Julio 486, Centro', 'direccion' => '9 de Julio 486, Centro']);
+});
+
 it('Nominatim no manda viewbox sin coordenadas', function () {
     Http::fake([NOMINATIM => Http::response([])]);
     $esperas = [];

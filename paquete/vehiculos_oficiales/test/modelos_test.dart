@@ -52,7 +52,7 @@ void main() {
     expect(v.programadoPara, DateTime.utc(2026, 10, 2, 13));
     expect(v.duracionEstimadaMin, 19);
     expect(v.origen.direccion, isNull);
-    expect(v.origen.descripcion, '-26.82410, -65.22260');
+    expect(v.origen.descripcion, 'Ubicación marcada en el mapa'); // nunca coordenadas a la vista
   });
 
   test('lee viajes/actual del solicitante y del chofer', () {
@@ -85,6 +85,65 @@ void main() {
     expect(m.proximas.single.id, 2);
     expect(m.historial.single.estado, EstadoViaje.sinChofer);
     expect(m.historial.single.estado.terminado, isTrue);
+  });
+
+  test('lee los datos del detalle: pedido, cancelación y metros recorridos', () {
+    final v = Viaje.fromJson(p.json(p.viajeFinalizado));
+
+    expect(v.pedidoEn, DateTime.utc(2026, 10, 1, 11, 58));
+    expect(v.metrosRecorridos, 5300);
+    expect(v.canceladoPor, isNull);
+    expect(v.motivoCancelacion, isNull);
+
+    final cancelado = Viaje.fromJson(
+      p.json(p.viajeFinalizado)
+        ..['estado'] = 'cancelado'
+        ..['cancelado_por'] = 'admin'
+        ..['motivo_cancelacion'] = 'Sin vehículos',
+    );
+    expect(cancelado.canceladoPor, CanceladoPor.admin);
+    expect(cancelado.motivoCancelacion, 'Sin vehículos');
+    expect(
+      Viaje.fromJson(p.json(p.viajeFinalizado)..['cancelado_por'] = 'solicitante').canceladoPor,
+      CanceladoPor.solicitante,
+    );
+    // Un valor nuevo que la app no conoce no rompe la lectura.
+    expect(Viaje.fromJson(p.json(p.viajeFinalizado)..['cancelado_por'] = 'sistema').canceladoPor, isNull);
+  });
+
+  test('un JSON de un backend viejo sin los campos del detalle se lee igual', () {
+    final v = Viaje.fromJson(p.json(p.viajeAceptado));
+
+    expect(v.pedidoEn, isNull);
+    expect(v.canceladoPor, isNull);
+    expect(v.motivoCancelacion, isNull);
+    expect(v.metrosRecorridos, isNull);
+  });
+
+  test('lee el recorrido real de un viaje', () {
+    final r = RecorridoReal.fromJson(p.json(p.recorrido));
+
+    expect(r.disponible, isTrue);
+    expect(r.puntos, const [
+      Coordenada(-26.8241, -65.2226),
+      Coordenada(-26.8162, -65.2201),
+      Coordenada(-26.8083, -65.2176),
+    ]);
+    final vacio = RecorridoReal.fromJson(p.json(p.recorridoNoDisponible));
+    expect(vacio.disponible, isFalse);
+    expect(vacio.puntos, isEmpty);
+    expect(vacio.vencido, isFalse);
+    expect(r.retencionDias, 90);
+    final vencido = RecorridoReal.fromJson(p.json(p.recorridoVencido));
+    expect(vencido.vencido, isTrue);
+    expect(vencido.retencionDias, 30);
+  });
+
+  test('un recorrido sin vencido ni retención (payload viejo) es no vencido y sin retención', () {
+    final r = RecorridoReal.fromJson({'puntos': <dynamic>[], 'disponible': false});
+
+    expect(r.vencido, isFalse);
+    expect(r.retencionDias, isNull);
   });
 
   test('lee los choferes del mapa y aplica eventos de ubicación y estado', () {

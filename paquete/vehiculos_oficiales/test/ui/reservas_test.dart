@@ -108,6 +108,31 @@ void main() {
     expect(cuerpo('POST', 'reservas').containsKey('chofer_id'), isFalse);
   });
 
+  testWidgets('la reserva muestra y manda las direcciones encontradas del origen y del destino', (tester) async {
+    e.http
+      ..responder('GET', 'lugares/inverso', 200, '{"direccion":"Sarmiento 520"}') // la ubicación, al abrir
+      ..responder('GET', 'lugares/inverso', 200, '{"direccion":"San Martín 100"}') // el destino tocado
+      ..responder('GET', 'reservas/disponibles', 200, p.reservasDisponibles)
+      ..responder('POST', 'reservas', 201, p.reservaCreada)
+      ..responder('GET', 'viajes', 200, _misViajes());
+
+    await abrir(tester);
+    await marcarOrigenYDestino(tester);
+    await tester.tap(find.text('Reservar para más tarde'));
+    await tester.pumpAndSettle();
+    expect(find.text('Tu ubicación actual'), findsOneWidget);
+    expect(find.text('Sarmiento 520'), findsOneWidget);
+    expect(find.text('San Martín 100'), findsOneWidget);
+
+    await tester.tap(find.text('Ver choferes disponibles'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Confirmar reserva'));
+    await tester.pumpAndSettle();
+
+    expect(cuerpo('POST', 'reservas')['origen_direccion'], 'Sarmiento 520');
+    expect(cuerpo('POST', 'reservas')['destino_direccion'], 'San Martín 100');
+  });
+
   testWidgets('sin la anticipación mínima se muestra el mensaje del backend', (tester) async {
     e.http.responder(
       'GET',

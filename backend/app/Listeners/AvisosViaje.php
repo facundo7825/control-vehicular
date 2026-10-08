@@ -38,6 +38,10 @@ class AvisosViaje implements ShouldQueue
 
     public function handleViajeActualizado(ViajeActualizado $e): void
     {
+        if ($e->soloDatos) {
+            return;
+        }
+
         $v = $e->viaje->loadMissing(['chofer', 'vehiculo', 'solicitante']);
         $datos = ['tipo' => 'viaje', 'viaje_id' => $v->id, 'estado' => $v->estado->value];
 

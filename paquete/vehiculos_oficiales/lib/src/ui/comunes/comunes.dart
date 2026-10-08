@@ -29,6 +29,12 @@ String? telefonoMarcable(String? telefono) {
 /// Fecha y hora en la zona del dispositivo, p. ej. "vie 2/10 10:00".
 String formatearFechaHora(DateTime d) => DateFormat('EEE d/M HH:mm', 'es').format(d.toLocal());
 
+/// Subtítulo de un punto del pedido: el texto y, si hay, un detalle debajo (p. ej. "Tu ubicación actual" y
+/// su dirección).
+Widget textoConDetalle(String texto, String? detalle) => detalle == null
+    ? Text(texto)
+    : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(texto), Text(detalle)]);
+
 String mensajeDeError(Object error) => error is ErrorApi ? error.mensaje : 'Ocurrió un error inesperado.';
 
 void mostrarError(BuildContext context, Object error) =>

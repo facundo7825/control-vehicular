@@ -126,6 +126,19 @@ void main() {
     },
   );
 
+  test('el recorrido real sale por GET viajes/{id}/recorrido; uno ilegible es ErrorServidor', () async {
+    http.responder('GET', 'viajes/7/recorrido', 200, p.recorrido);
+    http.responder('GET', 'viajes/8/recorrido', 200, '{"puntos":[[1]],"disponible":true}');
+
+    final r = await api.recorridoViaje(7);
+
+    expect(r.disponible, isTrue);
+    expect(r.puntos, hasLength(3));
+    expect(r.vencido, isFalse);
+    expect(r.retencionDias, 90);
+    await expectLater(api.recorridoViaje(8), throwsA(isA<ErrorServidor>()));
+  });
+
   test('sin red es SinConexion; un 500 o una respuesta que no es JSON es ErrorServidor', () async {
     http.sinRed('GET', 'choferes');
     http.responder('GET', 'viajes/actual', 500, '{"message":"Server Error"}');
@@ -196,6 +209,33 @@ void main() {
       expect(http.pedidos.last.uri.queryParameters, {'q': 'tribu'});
     },
   );
+
+  test('la dirección de un punto sale por GET lugares/inverso con lat y lng; lee {direccion}', () async {
+    http.responder('GET', 'lugares/inverso', 200, '{"direccion":"Sarmiento 520, San Fernando del Valle de Catamarca"}');
+
+    final d = await api.direccionDe(const Coordenada(-28.4696, -65.7795));
+
+    expect(d, 'Sarmiento 520, San Fernando del Valle de Catamarca');
+    expect(http.pedidos.single.uri.queryParameters, {'lat': '-28.4696', 'lng': '-65.7795'});
+  });
+
+  test('sin dirección, con error, sin red o con una respuesta rara, la dirección es nula (no lanza)', () async {
+    const c = Coordenada(-28.4696, -65.7795);
+    http
+      ..responder('GET', 'lugares/inverso', 200, '{"direccion":null}')
+      ..responder('GET', 'lugares/inverso', 200, '{"direccion":"   "}')
+      ..responder('GET', 'lugares/inverso', 422, p.validacion)
+      ..responder('GET', 'lugares/inverso', 429, '{"message":"Too Many Attempts."}')
+      ..responder('GET', 'lugares/inverso', 500, '{"message":"Server Error"}')
+      ..responder('GET', 'lugares/inverso', 200, '{"direccion":3}')
+      ..responder('GET', 'lugares/inverso', 200, '[]')
+      ..sinRed('GET', 'lugares/inverso');
+
+    for (var i = 0; i < 8; i++) {
+      expect(await api.direccionDe(c), isNull, reason: 'respuesta $i');
+    }
+    expect(http.pedidos, hasLength(8));
+  });
 
   test('la ruta sale por GET ruta con origen y destino; lee puntos y pasos', () async {
     http.responder('GET', 'ruta', 200, p.ruta);

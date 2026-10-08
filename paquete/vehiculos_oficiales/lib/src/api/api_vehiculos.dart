@@ -42,6 +42,11 @@ class ApiVehiculos {
   /// Detalle de un viaje. 403 "Este viaje no es tuyo." si no es su solicitante, su chofer actual ni un admin.
   Future<Viaje> viaje(int id) => _leer(() async => Viaje.fromJson(await cliente.getMapa('viajes/$id')));
 
+  /// Recorrido real de un viaje (los puntos GPS del chofer mientras estuvo en curso). Misma autorización
+  /// que [viaje].
+  Future<RecorridoReal> recorridoViaje(int viajeId) =>
+      _leer(() async => RecorridoReal.fromJson(await cliente.getMapa('viajes/$viajeId/recorrido')));
+
   Future<Eta> eta(int viajeId) => _leer(() async => Eta.fromJson(await cliente.getMapa('viajes/$viajeId/eta')));
 
   Future<Viaje> pedirViaje(PedidoViaje pedido) =>
@@ -70,6 +75,23 @@ class ApiVehiculos {
       ),
     ).map(LugarEncontrado.fromJson).toList(),
   );
+
+  /// Dirección legible de [punto] (`GET lugares/inverso`), p. ej. "Sarmiento 520, San Fernando del Valle
+  /// de Catamarca". Nula si el proveedor no la tiene o si algo falla (sin red, 422, 429, respuesta rara):
+  /// es solo para mostrar y el servidor la completa al crear el viaje, así que nunca lanza.
+  Future<String?> direccionDe(Coordenada punto) async {
+    try {
+      final j = leerMapa(await cliente.get('lugares/inverso', query: {'lat': punto.lat, 'lng': punto.lng}));
+      final direccion = (j['direccion'] as String?)?.trim();
+      return direccion == null || direccion.isEmpty ? null : direccion;
+    } catch (e) {
+      // Solo el tipo del error (nunca las coordenadas); los errores de la API ya son esperables.
+      if (kDebugMode && e is! ErrorApi) {
+        debugPrint('vehiculos_oficiales: no se pudo leer la dirección (${e.runtimeType}).');
+      }
+      return null;
+    }
+  }
 
   /// Recorrido en auto de [origen] a [destino], con indicaciones en español. Nulo si el proveedor no pudo
   /// armarlo (el backend responde `null`).
@@ -140,6 +162,10 @@ class ApiVehiculos {
   );
 
   Future<Agenda> agenda() => _leer(() async => Agenda.fromJson(await cliente.getMapa('agenda')));
+
+  /// "Mis viajes" del chofer: el resumen de hoy y sus viajes finalizados y cancelados. 403 si no es chofer.
+  Future<ViajesChofer> viajesChofer() =>
+      _leer(() async => ViajesChofer.fromJson(await cliente.getMapa('chofer/viajes')));
 
   /// Firma de un canal privado (`private-...`) para el socket [socketId]. Devuelve `auth`.
   Future<String> autorizarCanal({required String socketId, required String canal}) => _leer(() async {
