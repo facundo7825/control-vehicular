@@ -95,10 +95,7 @@ void main() {
 
     await tester.tap(find.byKey(const Key('tocar-mapa'))); // el origen ya está: se marca el destino
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Direcciones y motivo (opcional)'));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.widgetWithText(TextField, 'Dirección de destino'), 'Tribunales');
-    await tester.enterText(find.widgetWithText(TextField, 'Motivo'), 'Audiencia');
+    await tester.enterText(find.widgetWithText(TextField, 'Motivo (opcional)'), 'Audiencia');
     await tester.tap(find.text('Pedir el más cercano'));
     await esperar(tester);
 
@@ -108,7 +105,6 @@ void main() {
       'origen_lng': -65.2226,
       'destino_lat': puntoTocado.lat,
       'destino_lng': puntoTocado.lng,
-      'destino_direccion': 'Tribunales',
       'motivo': 'Audiencia',
     });
     expect(find.text('Buscando el chofer más cercano…'), findsOneWidget);
@@ -494,16 +490,13 @@ void main() {
     expect(find.text('Chofer asignado'), findsWidgets);
   });
 
-  testWidgets('las direcciones y el motivo tienen el límite del backend (255 caracteres)', (tester) async {
+  testWidgets('las direcciones no se repiten: solo queda el motivo, con el límite del backend', (tester) async {
     await abrir(tester);
-    await tester.tap(find.text('Direcciones y motivo (opcional)'));
-    await tester.pumpAndSettle();
 
-    final campos = ['Dirección de origen', 'Dirección de destino', 'Motivo'];
-    expect(
-      [for (final c in campos) tester.widget<TextField>(find.widgetWithText(TextField, c)).maxLength],
-      [255, 255, 255],
-    );
+    expect(find.text('Direcciones y motivo (opcional)'), findsNothing);
+    expect(find.widgetWithText(TextField, 'Dirección de origen'), findsNothing);
+    expect(find.widgetWithText(TextField, 'Dirección de destino'), findsNothing);
+    expect(tester.widget<TextField>(find.widgetWithText(TextField, 'Motivo (opcional)')).maxLength, 255);
   });
 
   testWidgets('después de volver al mapa, las novedades del mismo viaje no lo vuelven a abrir', (tester) async {

@@ -195,8 +195,6 @@ class _PanelPedido extends ConsumerStatefulWidget {
 }
 
 class _PanelPedidoState extends ConsumerState<_PanelPedido> {
-  final _dirOrigen = TextEditingController();
-  final _dirDestino = TextEditingController();
   final _motivo = TextEditingController();
   bool _enviando = false;
 
@@ -208,17 +206,12 @@ class _PanelPedidoState extends ConsumerState<_PanelPedido> {
 
   @override
   void dispose() {
-    _dirOrigen.dispose();
-    _dirDestino.dispose();
     _motivo.dispose();
     super.dispose();
   }
 
-  /// Los textos pueden cambiar desde afuera ("Elegir otro" los copia del viaje sin chofer; una sugerencia
-  /// elegida fija la dirección).
+  /// El motivo puede cambiar desde afuera ("Elegir otro" lo copia del viaje sin chofer).
   void _sincronizar(BorradorPedido b) {
-    if (_dirOrigen.text != b.direccionOrigen) _dirOrigen.text = b.direccionOrigen;
-    if (_dirDestino.text != b.direccionDestino) _dirDestino.text = b.direccionDestino;
     if (_motivo.text != b.motivo) _motivo.text = b.motivo;
   }
 
@@ -318,28 +311,15 @@ class _PanelPedidoState extends ConsumerState<_PanelPedido> {
                     selected: !buscandoOrigen,
                     onTap: () => _marcar(PuntoPedido.destino),
                   ),
-                  ExpansionTile(
-                    title: const Text('Direcciones y motivo (opcional)'),
-                    children: [
-                      TextField(
-                        controller: _dirOrigen,
-                        maxLength: largoMaximoDireccion, // límite del backend (ViajeController y ReservaController)
-                        decoration: const InputDecoration(labelText: 'Dirección de origen'),
-                        onChanged: (t) => notifier.direccion(PuntoPedido.origen, t),
-                      ),
-                      TextField(
-                        controller: _dirDestino,
-                        maxLength: largoMaximoDireccion,
-                        decoration: const InputDecoration(labelText: 'Dirección de destino'),
-                        onChanged: (t) => notifier.direccion(PuntoPedido.destino, t),
-                      ),
-                      TextField(
-                        controller: _motivo,
-                        maxLength: 255,
-                        decoration: const InputDecoration(labelText: 'Motivo'),
-                        onChanged: notifier.motivo,
-                      ),
-                    ],
+                  // Las direcciones ya se ven en Origen y Destino (salen del buscador o del mapa): acá solo el motivo.
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: TextField(
+                      controller: _motivo,
+                      maxLength: 255, // límite del backend (ViajeController y ReservaController)
+                      decoration: const InputDecoration(labelText: 'Motivo (opcional)'),
+                      onChanged: notifier.motivo,
+                    ),
                   ),
                   if (b.chofer != null)
                     Align(
