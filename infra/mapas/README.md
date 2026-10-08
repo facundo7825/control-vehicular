@@ -1,4 +1,4 @@
-# Servidor de mapas propio (Catamarca)
+# Servidor de mapas propio (Catamarca o todo el país)
 
 Tres servicios libres, con datos de OpenStreetMap, para no depender de Google ni de los servidores públicos:
 
@@ -38,6 +38,21 @@ curl -o tesela.png -w "%{http_code} %{content_type}\n" "http://127.0.0.1:8089/st
 
 Todo lo generado queda en `datos/` (ignorado por git; se puede borrar y regenerar) y en el volumen `mapas_nominatim-db`.
 
+### Todo el país (viajes a otras provincias)
+
+Por defecto los datos cubren solo Catamarca. Para recorridos, búsquedas y mapa de todo el país:
+
+```bash
+REGION=argentina ./preparar-datos.sh   # sin recorte: OSRM, teselas y Nominatim con el extracto completo (~32 min)
+# en .env: MAPAS_REGION=argentina
+docker compose up -d
+```
+
+Cada región deja sus archivos con su nombre (`datos/argentina.*`, `datos/catamarca.*`), así que se puede preparar
+`argentina` mientras el servidor sigue sirviendo `catamarca`. Necesita bastante más disco y memoria, y Nominatim tarda
+mucho más en importar; el backend no cambia. Recursos medidos y cómo pasar de una región a otra (Nominatim tiene que
+reimportar): sección "2 bis" de la guía.
+
 ### Windows
 
 - **Git Bash:** `./preparar-datos.sh` funciona tal cual con Docker Desktop iniciado (el script usa rutas `C:/...` y
@@ -48,7 +63,7 @@ Todo lo generado queda en `datos/` (ignorado por git; se puede borrar y regenera
 ## Actualizar los datos (mensual)
 
 ```bash
-./preparar-datos.sh --actualizar
+./preparar-datos.sh --actualizar                    # o: REGION=argentina ./preparar-datos.sh --actualizar
 ```
 
 Si dice "Sin cambios en Geofabrik", no hay nada más que hacer. Si el recorte cambió, el script muestra los comandos

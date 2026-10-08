@@ -140,9 +140,9 @@ class Reportes extends Page
         return app(ExportadorExcel::class)->descargarHojas("reportes-$desde-a-$hasta.xlsx", [
             [
                 'nombre' => 'Choferes',
-                'encabezados' => ['Chofer', 'Viajes finalizados', 'Viajes cancelados', 'Km recorridos', 'Horas de turno', 'Llegada promedio (min)'],
+                'encabezados' => ['Chofer', 'Viajes finalizados', 'Viajes cancelados', 'Km recorridos', 'Horas de turno', 'Horas en viajes largos', 'Llegada promedio (min)'],
                 'filas' => array_map(fn (array $f) => [
-                    $f['chofer'], $f['finalizados'], $f['cancelados'], $f['km'], $f['horas_turno'], $f['llegada_promedio_min'],
+                    $f['chofer'], $f['finalizados'], $f['cancelados'], $f['km'], $f['horas_turno'], $f['horas_largos'], $f['llegada_promedio_min'],
                 ], $datos['choferes']),
             ],
             [

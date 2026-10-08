@@ -2,7 +2,9 @@
 
 namespace App\Servicios;
 
+use App\Enums\EstadoViaje;
 use App\Enums\OrigenTurno;
+use App\Enums\TipoViaje;
 use App\Excepciones\AccionNoPermitida;
 use App\Excepciones\ReglaNegocio;
 use App\Models\Alerta;
@@ -11,12 +13,16 @@ use App\Models\UbicacionChofer;
 use App\Models\Usuario;
 use App\Models\Vehiculo;
 use App\Models\Viaje;
+use App\Support\HoraLocal;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 class ServicioTurnos
 {
-    public function __construct(private AvisoEstadoChofer $aviso) {}
+    public function __construct(
+        private AvisoEstadoChofer $aviso,
+        private Parametros $parametros,
+    ) {}
 
     public function iniciar(Usuario $chofer, int $vehiculoId, OrigenTurno $origen = OrigenTurno::Manual): Turno
     {
@@ -31,12 +37,15 @@ class ServicioTurnos
             if (! $vehiculo || ! $vehiculo->activo) {
                 throw new ReglaNegocio('El vehículo no existe o no está activo.');
             }
-            if (Turno::where('chofer_id', $chofer->id)->whereNull('fin')->exists()) {
+            // Lecturas actuales (con lock): si este iniciar corre dentro de una transacción que ya leyó antes (p. ej. un
+            // fichaje), su snapshot puede no ver un turno que otro abrió mientras se esperaba el lock del vehículo.
+            if (Turno::where('chofer_id', $chofer->id)->whereNull('fin')->lockForUpdate()->exists()) {
                 throw new ReglaNegocio('Ya tenés un turno abierto.');
             }
-            if (Turno::where('vehiculo_id', $vehiculo->id)->whereNull('fin')->exists()) {
+            if (Turno::where('vehiculo_id', $vehiculo->id)->whereNull('fin')->lockForUpdate()->exists()) {
                 throw new ReglaNegocio('El vehículo está en uso por otro chofer.');
             }
+            $this->rechazarSiEstaEnViajeLargo($vehiculo->id, $chofer->id);
 
             // Con el turno abierto (manual o por fichaje) deja de valer el aviso de "fichó sin vehículo".
             Alerta::pendientes()->where('tipo', Alerta::ASISTENCIA_SIN_VEHICULO)->where('chofer_id', $chofer->id)
@@ -79,9 +88,10 @@ class ServicioTurnos
             if (Viaje::activosDeChofer($chofer->id)->exists()) {
                 throw new ReglaNegocio('Terminá el viaje en curso antes de cambiar de vehículo.');
             }
-            if (Turno::where('vehiculo_id', $vehiculo->id)->whereNull('fin')->exists()) {
+            if (Turno::where('vehiculo_id', $vehiculo->id)->whereNull('fin')->lockForUpdate()->exists()) {
                 throw new ReglaNegocio('El vehículo está en uso por otro chofer.');
             }
+            $this->rechazarSiEstaEnViajeLargo($vehiculo->id, $chofer->id);
 
             $turno->update(['vehiculo_id' => $vehiculo->id]);
 
@@ -144,5 +154,35 @@ class ServicioTurnos
             ->whereNotIn('id', Turno::whereNull('fin')->select('vehiculo_id'))
             ->orderBy('patente')
             ->get();
+    }
+
+    /**
+     * Un vehículo que salió en un viaje largo de otro chofer (en camino, llegó o en curso) no se usa en otro turno
+     * hasta que vuelve; tampoco uno reservado para un viaje largo de otro chofer que sale pronto (dentro del bloqueo
+     * previo a las reservas, o con la salida ya pasada sin arrancar). El chofer de ese viaje sí puede usarlo.
+     *
+     * Lectura actual (FOR UPDATE, solo filas de ese vehículo): el vehículo ya está bloqueado, y quien le asigna un
+     * viaje largo lo bloquea también; tras esperar su lock, el snapshot de la transacción puede ser anterior.
+     */
+    private function rechazarSiEstaEnViajeLargo(int $vehiculoId, int $choferId): void
+    {
+        $largos = Viaje::where('vehiculo_id', $vehiculoId)
+            ->where('tipo', TipoViaje::Largo)
+            ->whereIn('estado', EstadoViaje::conChofer())
+            ->where('chofer_id', '!=', $choferId)
+            ->forceIndex('viajes_vehiculo_id_estado_index')
+            ->lockForUpdate()
+            ->get();
+
+        if ($largos->contains(fn (Viaje $v) => $v->estado !== EstadoViaje::Aceptado)) {
+            throw new ReglaNegocio('El vehículo está en un viaje largo.');
+        }
+
+        $limite = now()->addMinutes($this->parametros->entero('bloqueo_antes_reserva_min'));
+        $pronto = $largos->filter(fn (Viaje $v) => $v->programado_para->lte($limite))->sortBy('programado_para')->first();
+        if ($pronto) {
+            throw new ReglaNegocio('El vehículo está reservado para un viaje largo que sale a las '
+                .HoraLocal::formatear($pronto->programado_para, 'H:i').'.');
+        }
     }
 }

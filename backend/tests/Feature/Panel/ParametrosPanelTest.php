@@ -62,3 +62,25 @@ it('restablece el valor por defecto', function () {
     expect(Parametro::count())->toBe(0)
         ->and(app(Parametros::class)->entero('colchon_reservas_min'))->toBe(30);
 });
+
+it('el horario laboral acepta horas de 0 a 23, con el inicio antes del fin', function (string $clave, mixed $valor, bool $valido) {
+    $prueba = Livewire::test(ConfiguracionParametros::class)
+        ->callAction(TestAction::make('editar')->table($clave), data: ['valor' => $valor]);
+
+    if ($valido) {
+        $prueba->assertHasNoActionErrors();
+        expect(app(Parametros::class)->entero($clave))->toBe((int) $valor);
+    } else {
+        $prueba->assertHasActionErrors(['valor']);
+        expect(Parametro::count())->toBe(0);
+    }
+})->with([
+    'inicio a las 0' => ['horario_laboral_inicio', 0, true],
+    'inicio a las 6' => ['horario_laboral_inicio', 6, true],
+    'fin a las 23' => ['horario_laboral_fin', 23, true],
+    'fin a las 24' => ['horario_laboral_fin', 24, false],
+    'inicio negativo' => ['horario_laboral_inicio', -1, false],
+    'inicio igual al fin (18)' => ['horario_laboral_inicio', 18, false],
+    'fin antes del inicio (7)' => ['horario_laboral_fin', 6, false],
+    'fin igual al inicio (7)' => ['horario_laboral_fin', 7, false],
+]);

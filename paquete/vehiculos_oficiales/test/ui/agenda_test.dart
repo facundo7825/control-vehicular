@@ -1,6 +1,8 @@
 import 'dart:convert';
 
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:vehiculos_oficiales/src/chofer/turno.dart';
 import 'package:vehiculos_oficiales/src/tiempo_real/tiempo_real.dart';
 import 'package:vehiculos_oficiales/src/ui/chofer/agenda.dart';
 import 'package:vehiculos_oficiales/src/ui/chofer/viaje_chofer.dart';
@@ -141,5 +143,79 @@ void main() {
     expect(jsonDecode(e.http.pedidos.last.cuerpo), {'estado': 'en_camino'});
     expect(find.byType(ViajeChofer), findsOneWidget);
     expect(find.text('Llegué'), findsOneWidget);
+  });
+
+  testWidgets('un viaje largo se ve con su etiqueta, salida, regreso y pasajeros, y sin rechazar', (tester) async {
+    final largo = p.json(c.reservaConfirmada)
+      ..['id'] = 7
+      ..['tipo'] = 'largo'
+      ..['destino'] = {'lat': -28.46, 'lng': -65.78, 'direccion': 'Tinogasta'}
+      ..['regreso_estimado'] = '2026-10-04T21:30:00+00:00'
+      ..['pasajeros'] = 'Dr. Ruiz y dos asesores';
+    final agenda = p.json(c.agenda)..['reservas'] = [largo];
+    e = entornoChofer(agenda: jsonEncode(agenda));
+
+    await abrirAgenda(tester);
+
+    expect(find.textContaining('Viaje largo'), findsOneWidget);
+    expect(find.textContaining('Tinogasta'), findsOneWidget);
+    expect(find.textContaining('Regreso'), findsOneWidget);
+    expect(find.textContaining('Dr. Ruiz y dos asesores'), findsOneWidget);
+    expect(find.text('Voy en camino'), findsOneWidget);
+    expect(find.text('Rechazar'), findsOneWidget); // solo el de la solicitud; el largo no tiene
+  });
+
+  Map<String, dynamic> largoConfirmado() => p.json(c.reservaConfirmada)
+    ..['id'] = 7
+    ..['tipo'] = 'largo';
+
+  testWidgets('"Voy en camino" en un viaje largo refresca el turno: el vehículo es el del viaje', (tester) async {
+    final agenda = p.json(c.agenda)..['reservas'] = [largoConfirmado()];
+    e = entornoChofer(agenda: jsonEncode(agenda));
+    e.http
+      ..responder('GET', 'turnos/actual', 200, c.turnoConOtroVehiculo) // el 2.º pedido: el turno ya cambió
+      ..responder('POST', 'viajes/7/estado', 200, jsonEncode(largoConfirmado()..['estado'] = 'en_camino'));
+
+    await abrirAgenda(tester);
+    await tester.tap(find.text('Voy en camino'));
+    await esperar(tester);
+
+    expect(pedidosHechos(e).where((r) => r == 'GET turnos/actual'), hasLength(2));
+    final turno = ProviderScope.containerOf(tester.element(find.byType(ViajeChofer))).read(turnoProvider).value;
+    expect(turno!.vehiculo!.patente, 'AC456EF');
+  });
+
+  testWidgets('"Voy en camino" en un viaje largo sigue bien si el refresco del turno falla', (tester) async {
+    final agenda = p.json(c.agenda)..['reservas'] = [largoConfirmado()];
+    e = entornoChofer(agenda: jsonEncode(agenda));
+    e.http
+      ..sinRed('GET', 'turnos/actual')
+      ..responder('POST', 'viajes/7/estado', 200, jsonEncode(largoConfirmado()..['estado'] = 'en_camino'));
+
+    await abrirAgenda(tester);
+    await tester.tap(find.text('Voy en camino'));
+    await esperar(tester);
+
+    expect(find.byType(ViajeChofer), findsOneWidget);
+  });
+
+  testWidgets('"Voy en camino" en una reserva no refresca el turno', (tester) async {
+    e.http.responder('POST', 'viajes/2/estado', 200, jsonEncode(p.json(c.reservaConfirmada)..['estado'] = 'en_camino'));
+
+    await abrirAgenda(tester);
+    await tester.tap(find.text('Voy en camino'));
+    await esperar(tester);
+
+    expect(pedidosHechos(e).where((r) => r == 'GET turnos/actual'), hasLength(1));
+  });
+
+  testWidgets('un evento de un viaje largo recarga la agenda', (tester) async {
+    await abrirAgenda(tester);
+    final antes = consultasAgenda();
+
+    tr.emitir('chofer.2', Eventos.viajeActualizado, p.json(c.reservaConfirmada)..['tipo'] = 'largo');
+    await esperar(tester);
+
+    expect(consultasAgenda(), antes + 1);
   });
 }

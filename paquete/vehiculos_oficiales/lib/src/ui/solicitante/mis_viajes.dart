@@ -62,8 +62,19 @@ class _Titulo extends StatelessWidget {
 
 String _estadoReserva(Viaje v) => switch (v.estado) {
   EstadoViaje.buscando || EstadoViaje.ofrecido => 'Esperando confirmación del chofer',
-  EstadoViaje.aceptado => ['Confirmada', ?v.chofer?.nombre].where((t) => t.isNotEmpty).join(' · '),
+  EstadoViaje.aceptado => [
+    if (v.esLargo) v.tipo.etiqueta,
+    'Confirmada',
+    ?v.chofer?.nombre,
+    if (v.esLargo) ?v.vehiculo?.descripcion,
+  ].where((t) => t.isNotEmpty).join(' · '),
   _ => v.estado.texto,
+};
+
+IconData _iconoDe(Viaje v) => switch (v.tipo) {
+  TipoViaje.largo => Icons.luggage,
+  TipoViaje.reserva => Icons.event_available,
+  TipoViaje.inmediato => Icons.local_taxi,
 };
 
 class _Proxima extends ConsumerWidget {
@@ -94,10 +105,10 @@ class _Proxima extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return ListTile(
-      leading: const Icon(Icons.event),
+      leading: Icon(viaje.esLargo ? Icons.luggage : Icons.event),
       title: Text('${formatearFechaHora(viaje.programadoPara!)} · ${viaje.destino.descripcion}'),
       subtitle: Text(_estadoReserva(viaje)),
-      trailing: viaje.estado.cancelablePorSolicitante
+      trailing: viaje.cancelablePorSolicitante
           ? IconButton(
               icon: const Icon(Icons.cancel),
               tooltip: 'Cancelar reserva',
@@ -118,7 +129,7 @@ class _Pasado extends ConsumerWidget {
     final cuando = viaje.programadoPara ?? viaje.finalizadoEn ?? viaje.canceladoEn ?? viaje.aceptadoEn;
     final reservaSinChofer = viaje.tipo == TipoViaje.reserva && viaje.estado == EstadoViaje.sinChofer;
     return ListTile(
-      leading: Icon(viaje.tipo == TipoViaje.reserva ? Icons.event_available : Icons.local_taxi),
+      leading: Icon(_iconoDe(viaje)),
       title: Text([if (cuando != null) formatearFechaHora(cuando), viaje.destino.descripcion].join(' · ')),
       subtitle: Text(viaje.estado.texto),
       onTap: () => context.push(Rutas.detalleViaje(viaje.id)),

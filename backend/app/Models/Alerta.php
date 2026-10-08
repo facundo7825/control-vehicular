@@ -20,6 +20,9 @@ class Alerta extends Model
     /** El chofer fichó la entrada pero su vehículo habitual falta, está inactivo o en uso (ServicioAsistencia). */
     public const ASISTENCIA_SIN_VEHICULO = 'asistencia_sin_vehiculo';
 
+    /** Poco antes de un viaje largo, su vehículo está en el turno de otro chofer (AlertarReservaSinTurno). */
+    public const VEHICULO_VIAJE_LARGO_EN_USO = 'vehiculo_viaje_largo_en_uso';
+
     protected $table = 'alertas';
 
     protected $fillable = ['tipo', 'viaje_id', 'chofer_id', 'mensaje', 'resuelta_en'];

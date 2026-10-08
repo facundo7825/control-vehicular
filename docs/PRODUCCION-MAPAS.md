@@ -1,4 +1,4 @@
-# Mapas en producción sin servicios pagos (Catamarca)
+# Mapas en producción sin servicios pagos (Catamarca o todo el país)
 
 Todo lo de mapas del sistema funciona con software libre y datos de OpenStreetMap en un **servidor propio**: sin
 Google, sin cuotas y sin mandar ubicaciones a empresas. El servidor se entrega con Docker en
@@ -17,14 +17,18 @@ Google, sin cuotas y sin mandar ubicaciones a empresas. El servidor se entrega c
 | `nominatim` | Nominatim 5.3 + PostgreSQL 16 | 8088 | backend | Búsqueda de lugares y direcciones del destino (con servidor propio la app autocompleta) |
 | `teselas` | TileServer-GL 5.6 | 8089 | **celulares y navegadores** (vía proxy HTTPS) | Mapa de fondo en PNG de 256 px, dibujado desde teselas vectoriales OpenMapTiles con el estilo libre *Basic* |
 
-Datos: el extracto de Argentina de Geofabrik, recortado a Catamarca (bbox de la relación OSM 153545 más ~0,1° de
-margen: `-69.2,-30.22,-64.68,-25.07`). Fuera de ese recuadro no hay mapa, búsquedas ni rutas.
+Datos: el extracto de Argentina de Geofabrik, para una de dos **regiones** (ver la sección 2 bis):
+
+- `catamarca` (por defecto): recortado a la provincia (bbox de la relación OSM 153545 más ~0,1° de margen:
+  `-69.2,-30.22,-64.68,-25.07`). Fuera de ese recuadro no hay mapa, búsquedas ni rutas.
+- `argentina`: el extracto completo, sin recorte. Sirve para los **viajes largos a otras provincias** (recorrido y
+  duración Catamarca → Córdoba, búsqueda de destinos fuera de la provincia, mapa de todo el país).
 
 Además se puede sumar **Georef** (API del Estado, `apis.datos.gob.ar/georef`) como segundo buscador: resuelve
 intersecciones ("Sarmiento y Rivadavia") aunque en Catamarca no tiene alturas. Es un servicio público gratuito;
 `LUGARES_DRIVER=nominatim,georef` consulta los dos y une los resultados.
 
-## 2. Recursos estimados
+## 2. Recursos estimados (región `catamarca`)
 
 Medido el 2026-10-02 en la compu de desarrollo (Windows 11, Docker Desktop con WSL2: 16 hilos y 7,4 GB de RAM para
 Docker), con el extracto de Geofabrik de ese día:
@@ -42,6 +46,66 @@ Docker), con el extracto de Geofabrik de ese día:
 
 Después de la preparación se pueden borrar `datos/fuentes/*.zip` para ahorrar 1,4 GB, pero se vuelven a bajar en la
 próxima actualización.
+
+## 2 bis. Todo el país (región `argentina`)
+
+Con `catamarca` no hay recorrido, duración ni búsqueda fuera de la provincia, y el mapa de fondo termina en el límite.
+Para los **viajes largos a otras provincias** se prepara la región `argentina`: OSRM y Nominatim usan el extracto
+completo de Geofabrik, sin recorte, y las teselas cubren el país (`-73.6,-55.1,-53.6,-21.7`).
+
+```bash
+cd infra/mapas
+REGION=argentina ./preparar-datos.sh       # OSRM y teselas de todo el país (~32 minutos)
+# en .env: MAPAS_REGION=argentina
+docker compose up -d                       # la primera vez Nominatim importa el país (~64 minutos)
+```
+
+- **Recomendación para producción:** `argentina` si el organismo hace viajes a otras provincias (lo normal con viajes
+  largos); `catamarca` solo si todos los viajes quedan dentro de la provincia y el servidor es chico.
+- **El backend no cambia:** usa las mismas URLs y la misma configuración de la sección 4. Nominatim ya busca en todo el
+  país (`countrycodes=ar`) y prioriza lo cercano al punto de partida, así que con `argentina` encuentra destinos de
+  otras provincias sin tocar nada. `LUGARES_PROVINCIA` solo acota a Georef (el buscador complementario).
+- Cada región deja sus archivos con su nombre (`datos/argentina.osm.pbf`, `datos/osrm/argentina.osrm.*`,
+  `datos/teselas/argentina.mbtiles`) y comparten el extracto y las fuentes de Planetiler. Se puede preparar
+  `argentina` con el servidor sirviendo `catamarca` y cambiar recién cuando esté lista.
+
+### Recursos medidos
+
+Medido el 2026-10-07 en la misma compu de desarrollo (16 hilos, 7,4 GB de RAM para Docker, con el servidor de
+`catamarca` andando al lado), con el extracto de Geofabrik del 2026-10-02 y las fuentes de Planetiler ya bajadas:
+
+| | `catamarca` | `argentina` | Para el servidor con `argentina` |
+|---|---|---|---|
+| **RAM en uso** (`docker stats`) | OSRM 110 MB · Nominatim ~0,5 GB · TileServer-GL 0,2–0,3 GB | OSRM 2,4 GB · Nominatim 0,9 GB recién arrancado (crece con la cache de PostgreSQL) · TileServer-GL 0,2 GB recién arrancado | **8 GB** de RAM total si el backend corre en la misma máquina |
+| **RAM al preparar** (pico) | Planetiler ~0,8 GB · importación de Nominatim 1,1 GB | `osrm-extract` 5,0 GB · `osrm-partition` 1,8 GB · `osrm-customize` 3,5 GB · Planetiler 3,9 GB (`-Xmx3g`) · importación de Nominatim 4,4 GB | **6 GB libres** durante la preparación (los pasos van de a uno) |
+| **Disco: datos** | ~2,1 GB | extracto 412 MB · copia `argentina.osm.pbf` 412 MB · OSRM 3,2 GB · `argentina.mbtiles` 838 MB · fuentes de Planetiler 1,4 GB (compartidas) | ~6,3 GB (más los temporales de Planetiler mientras corre) |
+| **Disco: base de Nominatim** | 1,4 GB | 14,4 GB | |
+| **Total de disco** (con las imágenes, 4,3 GB) | 10 GB | ~25 GB | **40 GB** para tener margen en las actualizaciones |
+| **Tiempo de preparación** | ~15 min | Copia del extracto 2 s · OSRM 12 min 36 s (extract 7 min 52 s, partition 3 min 33 s, customize 1 min 11 s) · Planetiler 18 min 57 s (7 min de Natural Earth, 3 min 40 s de rutas y lugares) · total del script **31 min 37 s** · importación de Nominatim **63 min 48 s** | ~1 h 45 min la primera vez desde cero (más imágenes, descarga y fuentes de Planetiler); una segunda corrida sin cambios tarda 2 s |
+| **Respuesta** | | Recorrido Catamarca → Córdoba en 0,13 s · tesela nueva 0,1–1,3 s · búsqueda 0,25–0,5 s | |
+
+Los límites de memoria por defecto de `docker-compose.yml` ya alcanzan para `argentina` (`OSRM_MEMORIA` 4g,
+`NOMINATIM_MEMORIA` 5g, `TESELAS_MEMORIA` 1g); con `catamarca` son solo topes y no ocupan más. Planetiler usa
+`-Xmx3g` con `argentina` (`PLANETILER_RAM` para cambiarlo). Mientras Nominatim importa por primera vez
+(`docker compose logs -f nominatim`) la búsqueda no responde, pero OSRM y las teselas ya funcionan.
+
+### Cambiar de región
+
+Con los datos de la región nueva ya preparados:
+
+```bash
+cd infra/mapas
+# 1. En .env: MAPAS_REGION=argentina (o catamarca)
+# 2. Nominatim tiene que reimportar: su base es de la región anterior.
+docker compose rm -sf nominatim
+docker volume rm mapas_nominatim-db
+docker compose up -d                       # OSRM y teselas toman la región nueva en segundos
+sudo find /var/cache/nginx/teselas -type f -delete     # vaciar la cache de teselas del proxy
+```
+
+Sin borrar el volumen, Nominatim sigue con la base de la región anterior (no reimporta solo). El backend no se toca.
+Después se pueden borrar los archivos de la región que ya no se usa (`datos/catamarca.*`, `datos/osrm/catamarca.*`,
+`datos/teselas/catamarca.mbtiles`).
 
 ## 3. Instalación en un servidor Linux con Docker
 
@@ -68,12 +132,16 @@ docker compose ps                                    # esperar (healthy) en los 
   `docker compose ps` muestra `(healthy)` o `(unhealthy)`.
 - Variables de `docker compose`, en `infra/mapas/.env` (ignorado por git; plantilla en `.env.example`):
   `NOMINATIM_CLAVE_DB` (**obligatoria**: clave interna de PostgreSQL; sin ella `docker compose` no arranca),
+  `MAPAS_REGION` (`catamarca` por defecto, o `argentina`: la región preparada, ver la sección 2 bis),
   `MAPAS_ESCUCHA` (IP donde escuchan los puertos; por defecto `127.0.0.1`), `OSRM_PUERTO` (5001),
   `NOMINATIM_PUERTO` (8088), `TESELAS_PUERTO` (8089), `NOMINATIM_WORKERS` (2) y los límites de memoria
-  `OSRM_MEMORIA` (1g), `NOMINATIM_MEMORIA` (3g) y `TESELAS_MEMORIA` (1g). Los límites tienen margen sobre lo medido
-  (sección 2); si se agranda la zona (otra `MAPAS_BBOX`), subirlos, sobre todo el de Nominatim durante la importación.
-- Variables opcionales de `preparar-datos.sh`: `MAPAS_BBOX` (otro recuadro), `MAPAS_PBF_URL` (otro extracto; tiene que
-  tener su `.md5` al lado, como en Geofabrik) y `PLANETILER_RAM` (memoria de Java para Planetiler; por defecto `2g`).
+  `OSRM_MEMORIA` (4g), `NOMINATIM_MEMORIA` (5g) y `TESELAS_MEMORIA` (1g). Los límites tienen margen sobre lo medido
+  con `argentina` (sección 2 bis); si se usa otro extracto más grande (`MAPAS_PBF_URL`), subirlos, sobre todo el de
+  Nominatim durante la importación.
+- Variables opcionales de `preparar-datos.sh`: `REGION` (`catamarca` por defecto, o `argentina`), `MAPAS_BBOX` (otro
+  recuadro: con `catamarca` es el recorte, con `argentina` solo acota las teselas), `MAPAS_PBF_URL` (otro extracto;
+  tiene que tener su `.md5` al lado, como en Geofabrik) y `PLANETILER_RAM` (memoria de Java para Planetiler; por
+  defecto `2g` con `catamarca` y `3g` con `argentina`).
 
 **Windows (para probar):** con Docker Desktop iniciado, el script corre igual desde **Git Bash** (usa rutas `C:/...` y
 `MSYS_NO_PATHCONV=1` para los montajes) o desde **WSL2** (más rápido si el repo está en `~/`, no en `/mnt/c`). En
@@ -212,6 +280,17 @@ curl -s -o /dev/null -w "%{http_code} %{content_type}\n" "http://127.0.0.1:8089/
 curl -s -o /dev/null -w "%{http_code} %{content_type}\n" "https://mapas.ejemplo.gob.ar/styles/basico/14/5198/9543.png"
 ```
 
+Con la región `argentina`, además, algo fuera de la provincia (Catamarca → Córdoba capital):
+
+```bash
+# OSRM: medido el 2026-10-07, "distance":440616.6 (441 km) y "duration":19524.9 (5 h 25 min)
+curl -s "http://127.0.0.1:5001/route/v1/driving/-65.779,-28.469;-64.183,-31.417?overview=false"
+# Nominatim: un lugar de Córdoba (Patio Olmos, Av. Vélez Sarsfield 361)
+curl -s "http://127.0.0.1:8088/search?q=Patio+Olmos&format=json&limit=1&countrycodes=ar"
+# Teselas: el centro de Córdoba, "200 image/png"
+curl -s -o /dev/null -w "%{http_code} %{content_type}\n" "http://127.0.0.1:8089/styles/basico/14/5270/9699.png"
+```
+
 Y desde el backend, con la configuración ya cargada:
 
 ```bash
@@ -225,6 +304,7 @@ OpenStreetMap cambia todos los días y Geofabrik publica el extracto de Argentin
 ```bash
 cd /opt/control-vehiculos/infra/mapas
 ./preparar-datos.sh --actualizar          # baja el extracto solo si es más nuevo y rehace recorte, OSRM y teselas
+# con todo el país: REGION=argentina ./preparar-datos.sh --actualizar   (~32 minutos si hay extracto nuevo)
 ```
 
 **Si dice "Sin cambios en Geofabrik", termina ahí**: no hay que reiniciar nada ni reimportar Nominatim. Si el recorte
@@ -240,8 +320,8 @@ docker compose up -d
 
 - Mientras OSRM y TileServer-GL reinician (unos segundos) no hay recorridos ni teselas nuevas: el backend lo tolera
   (corta un minuto y sigue sin dato) y las teselas ya cacheadas en la app siguen viéndose.
-- Mientras Nominatim reimporta (2–3 minutos con Catamarca) la búsqueda no responde; el backend lo tolera y, si está
-  configurado, sigue contestando Georef.
+- Mientras Nominatim reimporta (2–3 minutos con `catamarca`, ~1 hora con `argentina`) la búsqueda no responde; el
+  backend lo tolera y, si está configurado, sigue contestando Georef.
 - Sin vaciar la cache de nginx, las teselas viejas se siguen sirviendo hasta 7 días (`proxy_cache_valid`).
 - Conviene hacerlo de noche (por ejemplo con `cron` el primer domingo del mes).
 

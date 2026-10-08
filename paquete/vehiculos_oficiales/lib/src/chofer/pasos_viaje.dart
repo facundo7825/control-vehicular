@@ -11,10 +11,11 @@ extension ViajeDelChofer on Viaje {
     _ => null,
   };
 
-  /// Mismas reglas que `ServicioViaje::cancelarPorChofer`: nunca un obligatorio; un inmediato hasta que
-  /// empieza (`llego`); una reserva solo antes de salir (`aceptado`).
+  /// Mismas reglas que `ServicioViaje::cancelarPorChofer`: nunca un obligatorio ni un viaje largo (lo asignó el
+  /// encargado); un inmediato hasta que empieza (`llego`); una reserva solo antes de salir (`aceptado`).
   bool get cancelablePorChofer =>
       !obligatorio &&
+      !esLargo &&
       (estado == EstadoViaje.aceptado ||
           (tipo == TipoViaje.inmediato && (estado == EstadoViaje.enCamino || estado == EstadoViaje.llego)));
 

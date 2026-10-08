@@ -3,7 +3,9 @@
 namespace App\Filament\Pages;
 
 use App\Models\Parametro;
+use App\Servicios\Parametros;
 use BackedEnum;
+use Closure;
 use Filament\Actions\Action;
 use Filament\Forms\Components\TextInput;
 use Filament\Notifications\Notification;
@@ -53,6 +55,8 @@ class ConfiguracionParametros extends Page implements HasTable
         'gps_turno_seg' => 'Intervalo de GPS en turno (segundos)',
         'gps_viaje_seg' => 'Intervalo de GPS en viaje (segundos)',
         'retencion_recorrido_dias' => 'Días que se guarda el recorrido de un viaje',
+        'horario_laboral_inicio' => 'Hora de inicio del horario laboral (0 a 23)',
+        'horario_laboral_fin' => 'Hora de fin del horario laboral (0 a 23)',
     ];
 
     public function content(Schema $schema): Schema
@@ -79,13 +83,14 @@ class ConfiguracionParametros extends Page implements HasTable
                     ->icon(Heroicon::OutlinedPencilSquare)
                     ->modalHeading(fn (array $record): string => $record['descripcion'])
                     ->fillForm(fn (array $record): array => ['valor' => $record['actual']])
-                    ->schema([
+                    ->schema(fn (array $record): array => [
                         TextInput::make('valor')
                             ->label('Valor')
                             ->required()
                             ->integer()
-                            ->minValue(1)
-                            ->maxValue(100000),
+                            ->minValue(self::esHora($record['clave']) ? 0 : 1)
+                            ->maxValue(self::esHora($record['clave']) ? 23 : 100000)
+                            ->rules(self::esHora($record['clave']) ? [fn (): Closure => $this->reglaHorario($record['clave'])] : []),
                     ])
                     ->action(function (array $record, array $data): void {
                         Parametro::updateOrCreate(['clave' => $record['clave']], ['valor' => (string) (int) $data['valor']]);
@@ -104,6 +109,28 @@ class ConfiguracionParametros extends Page implements HasTable
                         Notification::make()->success()->title('Se restableció el valor por defecto')->send();
                     }),
             ]);
+    }
+
+    private const HORARIO_LABORAL = ['horario_laboral_inicio', 'horario_laboral_fin'];
+
+    private static function esHora(string $clave): bool
+    {
+        return in_array($clave, self::HORARIO_LABORAL, true);
+    }
+
+    /** El inicio del horario laboral tiene que ser anterior al fin (contra el valor actual del otro). */
+    private function reglaHorario(string $clave): Closure
+    {
+        return function (string $attribute, mixed $valor, Closure $fail) use ($clave): void {
+            $parametros = app(Parametros::class);
+            $valor = (int) $valor;
+            if ($clave === 'horario_laboral_inicio' && $valor >= $parametros->entero('horario_laboral_fin')) {
+                $fail('El inicio del horario laboral tiene que ser anterior al fin ('.$parametros->entero('horario_laboral_fin').').');
+            }
+            if ($clave === 'horario_laboral_fin' && $valor <= $parametros->entero('horario_laboral_inicio')) {
+                $fail('El fin del horario laboral tiene que ser posterior al inicio ('.$parametros->entero('horario_laboral_inicio').').');
+            }
+        };
     }
 
     /** @return array<string, array{clave: string, descripcion: string, por_defecto: int, actual: int, personalizado: bool}> */

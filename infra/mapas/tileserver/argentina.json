@@ -1,0 +1,29 @@
+{
+  "options": {
+    "paths": {
+      "root": "/usr/src/app/node_modules/tileserver-gl-styles",
+      "fonts": "fonts",
+      "styles": "styles",
+      "mbtiles": "/data"
+    },
+    "maxScaleFactor": 2,
+    "maxSize": 2048,
+    "serveStaticMaps": false
+  },
+  "styles": {
+    "basico": {
+      "style": "basic-preview/style.json",
+      "serve_rendered": true,
+      "serve_data": false,
+      "tilejson": {
+        "bounds": [-73.6, -55.1, -53.6, -21.7],
+        "attribution": "© OpenMapTiles © OpenStreetMap contributors"
+      }
+    }
+  },
+  "data": {
+    "v3": {
+      "mbtiles": "argentina.mbtiles"
+    }
+  }
+}

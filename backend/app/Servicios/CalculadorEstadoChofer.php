@@ -108,10 +108,10 @@ class CalculadorEstadoChofer
         return now()->subMinutes($this->parametros->entero('sin_senal_min'));
     }
 
-    /** Reservas aceptadas que empiezan dentro del bloqueo previo (spec 4.1: "reservado pronto"). */
+    /** Reservas y viajes largos aceptados que empiezan dentro del bloqueo previo (spec 4.1: "reservado pronto"). */
     private function reservasProximas(): Builder
     {
-        return Viaje::where('tipo', TipoViaje::Reserva)
+        return Viaje::whereIn('tipo', TipoViaje::agendados())
             ->where('estado', EstadoViaje::Aceptado)
             ->whereBetween('programado_para', [
                 now(), now()->addMinutes($this->parametros->entero('bloqueo_antes_reserva_min')),

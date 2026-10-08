@@ -2,12 +2,13 @@
 
 namespace App\Jobs;
 
+use App\Enums\TipoViaje;
 use App\Models\Viaje;
 use App\Notificaciones\Notificador;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 
-/** Recordatorio de una reserva al solicitante y al chofer (spec 5.4 paso 5). */
+/** Recordatorio de una reserva o un viaje largo al solicitante y al chofer (spec 5.4 paso 5). */
 class RecordarReserva implements ShouldQueue
 {
     use Queueable;
@@ -26,9 +27,12 @@ class RecordarReserva implements ShouldQueue
         $cuando = $viaje->horaProgramadaLocal();
         $datos = ['tipo' => 'recordatorio_reserva', 'viaje_id' => $viaje->id];
 
-        $push->enviar($viaje->solicitante, 'Recordatorio de reserva',
-            "Tu viaje reservado es el $cuando con {$viaje->chofer->nombre}.", $datos);
-        $push->enviar($viaje->chofer, 'Recordatorio de reserva',
-            "Tenés una reserva el $cuando desde ".($viaje->origen_direccion ?? 'el punto marcado en el mapa').'.', $datos);
+        $largo = $viaje->tipo === TipoViaje::Largo;
+        $titulo = $largo ? 'Recordatorio de viaje largo' : 'Recordatorio de reserva';
+
+        $push->enviar($viaje->solicitante, $titulo,
+            ($largo ? 'Tu viaje largo sale el' : 'Tu viaje reservado es el')." $cuando con {$viaje->chofer->nombre}.", $datos);
+        $push->enviar($viaje->chofer, $titulo,
+            ($largo ? 'Tenés un viaje largo el' : 'Tenés una reserva el')." $cuando desde ".($viaje->origen_direccion ?? 'el punto marcado en el mapa').'.', $datos);
     }
 }

@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
-# Prepara los datos del servidor de mapas propio (OSRM, Nominatim y teselas) para la provincia de Catamarca.
+# Prepara los datos del servidor de mapas propio (OSRM, Nominatim y teselas) para una región: la provincia de
+# Catamarca (por defecto) o todo el país.
 #
-#   ./preparar-datos.sh               # deja todo listo; si ya está hecho, no repite nada (idempotente)
-#   ./preparar-datos.sh --actualizar  # baja el extracto de Geofabrik si hay uno más nuevo y rehace lo que cambió
+#   ./preparar-datos.sh                          # Catamarca; si ya está hecho, no repite nada (idempotente)
+#   REGION=argentina ./preparar-datos.sh         # todo el país (viajes a otras provincias)
+#   ./preparar-datos.sh --actualizar             # baja el extracto de Geofabrik si hay uno más nuevo y rehace lo que cambió
 #
 # Pasos (cada uno se salta si su resultado ya existe y es más nuevo que su entrada):
-#   1. Descarga argentina-latest.osm.pbf de Geofabrik y verifica su MD5.
-#   2. Recorta Catamarca con osmium (bbox de la provincia + margen).
+#   1. Descarga argentina-latest.osm.pbf de Geofabrik y verifica su MD5 (lo comparten las dos regiones).
+#   2. Arma datos/<región>.osm.pbf: con catamarca recorta la provincia con osmium (bbox + margen); con argentina es
+#      una copia del extracto completo, sin recorte.
 #   3. Prepara OSRM: osrm-extract (perfil car), osrm-partition y osrm-customize (algoritmo MLD).
-#   4. Genera catamarca.mbtiles (teselas vectoriales OpenMapTiles) con Planetiler, acotado al recorte.
-# Nominatim importa catamarca.osm.pbf solo, la primera vez que arranca `docker compose up -d`.
+#   4. Genera <región>.mbtiles (teselas vectoriales OpenMapTiles) con Planetiler, acotado a los límites de la región.
+# Nominatim importa <región>.osm.pbf solo, la primera vez que arranca `docker compose up -d` (con MAPAS_REGION en .env).
+#
+# Los archivos de cada región llevan su nombre (datos/catamarca.*, datos/argentina.*): preparar una no toca la otra,
+# así que se puede preparar argentina mientras el servidor sigue sirviendo catamarca.
 #
 # Si se corta a mitad de camino (Ctrl+C, un corte de luz), basta con volver a correrlo: cada paso escribe en un
 # archivo temporal y solo lo pone en su lugar cuando terminó bien.
@@ -22,18 +28,33 @@ IMAGEN_OSRM="ghcr.io/project-osrm/osrm-backend:v6.0.0"
 IMAGEN_PLANETILER="ghcr.io/onthegomap/planetiler:0.10.2"
 IMAGEN_OSMIUM="control-vehiculos/osmium:1.14"
 
-# --- Zona ---
-# Límite de la provincia de Catamarca en OpenStreetMap (relación 153545): lon -69.095 … -64.781, lat -30.120 … -25.169.
-# Se agrega un margen de ~0,1° para que las rutas que entran y salen de la provincia sigan funcionando.
-BBOX="${MAPAS_BBOX:--69.2,-30.22,-64.68,-25.07}"
+# --- Región ---
+REGION="${REGION:-catamarca}"
+case "$REGION" in
+    catamarca)
+        # Límite de la provincia en OpenStreetMap (relación 153545): lon -69.095 … -64.781, lat -30.120 … -25.169.
+        # Se agrega un margen de ~0,1° para que las rutas que entran y salen de la provincia sigan funcionando.
+        BBOX="${MAPAS_BBOX:--69.2,-30.22,-64.68,-25.07}"
+        RECORTAR=1
+        RAM_PLANETILER="${PLANETILER_RAM:-2g}"
+        ;;
+    argentina)
+        # Límite del país en OpenStreetMap (relación 286393): lon -73.56 … -53.64, lat -55.06 … -21.78, con margen.
+        # Solo acota las teselas: OSRM y Nominatim usan el extracto completo de Geofabrik.
+        BBOX="${MAPAS_BBOX:--73.6,-55.1,-53.6,-21.7}"
+        RECORTAR=0
+        RAM_PLANETILER="${PLANETILER_RAM:-3g}"
+        ;;
+    *) echo "REGION desconocida: $REGION (usar catamarca o argentina)" >&2; exit 2 ;;
+esac
 PBF_URL="${MAPAS_PBF_URL:-https://download.geofabrik.de/south-america/argentina-latest.osm.pbf}"
-NOMBRE="catamarca"
+NOMBRE="$REGION"
 
 ACTUALIZAR=0
 for arg in "$@"; do
     case "$arg" in
         --actualizar) ACTUALIZAR=1 ;;
-        -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,23p' "$0"; exit 0 ;;
         *) echo "Opción desconocida: $arg" >&2; exit 2 ;;
     esac
 done
@@ -65,8 +86,11 @@ al_dia() { [ -s "$1" ] && [ "$1" -nt "$2" ]; }
 docker info >/dev/null 2>&1 || falla "Docker no responde. ¿Está iniciado (Docker Desktop / dockerd)?"
 
 # Restos de una corrida que se cortó: nunca se usan, se rehacen.
+#    (Cada región tiene su carpeta de temporales de Planetiler, así no se pisan.)
+TMP="$DATOS/tmp/$NOMBRE"
+mkdir -p "$TMP"
 rm -f "$DATOS/$NOMBRE.tmp.osm.pbf" "$DATOS/teselas/$NOMBRE.tmp.mbtiles"*
-rm -rf "${DATOS:?}/tmp/"*
+rm -rf "${TMP:?}/"*
 
 # 1. Extracto de Argentina, verificado con el MD5 que publica Geofabrik.
 ARGENTINA="$DATOS/fuentes/argentina-latest.osm.pbf"
@@ -120,6 +144,13 @@ RECORTE="$DATOS/$NOMBRE.osm.pbf"
 RECORTE_NUEVO=0
 if al_dia "$RECORTE" "$ARGENTINA"; then
     paso "Recorte $NOMBRE.osm.pbf al día"
+elif [ "$RECORTAR" = 0 ]; then
+    # Todo el país: sin recorte, una copia del extracto (no un enlace: tiene que quedar con fecha propia para que
+    # el paso se salte en la próxima corrida y se rehaga cuando --actualizar baje uno nuevo).
+    paso "Copiando el extracto completo como $NOMBRE.osm.pbf (sin recorte)"
+    cp "$ARGENTINA" "$DATOS/$NOMBRE.tmp.osm.pbf"
+    mv "$DATOS/$NOMBRE.tmp.osm.pbf" "$RECORTE"
+    RECORTE_NUEVO=1
 else
     paso "Construyendo la imagen de osmium"
     dk build -q -t "$IMAGEN_OSMIUM" "$AQUI_DOCKER/osmium" >/dev/null
@@ -157,23 +188,25 @@ if al_dia "$TESELAS" "$RECORTE"; then
     paso "Teselas $NOMBRE.mbtiles al día"
 else
     paso "Planetiler: generando $NOMBRE.mbtiles"
-    dk run --rm "${COMO_YO[@]}" -e JAVA_TOOL_OPTIONS="-Xmx${PLANETILER_RAM:-2g}" -v "$DATOS_DOCKER:/data" \
+    dk run --rm "${COMO_YO[@]}" -e JAVA_TOOL_OPTIONS="-Xmx$RAM_PLANETILER" -v "$DATOS_DOCKER:/data" \
         "$IMAGEN_PLANETILER" \
         --osm-path="/data/$NOMBRE.osm.pbf" \
         --output="/data/teselas/$NOMBRE.tmp.mbtiles" --force \
         --bounds="$BBOX" \
-        --download --download-dir=/data/fuentes --tmpdir=/data/tmp \
+        --download --download-dir=/data/fuentes --tmpdir="/data/tmp/$NOMBRE" \
         --languages=es,en \
         --nodemap-type=sparsearray --storage=mmap
     mv "$DATOS/teselas/$NOMBRE.tmp.mbtiles" "$TESELAS"
-    rm -rf "${DATOS:?}/tmp/"*
+    rm -rf "${TMP:?}/"*
 fi
 
-paso "Listo. Tamaños:"
-du -sh "$ARGENTINA" "$RECORTE" "$DATOS/osrm" "$TESELAS" 2>/dev/null || true
+paso "Listo ($NOMBRE). Tamaños:"
+du -sh "$ARGENTINA" "$RECORTE" "$TESELAS" 2>/dev/null || true
+printf '%s\t%s\n' "$(du -ch "$DATOS/osrm/$NOMBRE".* 2>/dev/null | tail -n 1 | cut -f 1)" "$DATOS/osrm/$NOMBRE.osrm.*"
 echo
-echo "Siguiente paso: docker compose up -d  (antes, copiar .env.example a .env y poner NOMINATIM_CLAVE_DB)."
-echo "La primera vez Nominatim importa $NOMBRE.osm.pbf (unos minutos): docker compose logs -f nominatim"
+echo "Siguiente paso: docker compose up -d  (antes, copiar .env.example a .env y poner NOMINATIM_CLAVE_DB$( \
+    [ "$NOMBRE" = catamarca ] || echo " y MAPAS_REGION=$NOMBRE"))."
+echo "La primera vez Nominatim importa $NOMBRE.osm.pbf: docker compose logs -f nominatim"
 if [ "$RECORTE_NUEVO" = 1 ] && [ "$ACTUALIZAR" = 1 ]; then
     echo
     echo "El recorte cambió. Si el servidor ya estaba andando, aplicar los datos nuevos con:"

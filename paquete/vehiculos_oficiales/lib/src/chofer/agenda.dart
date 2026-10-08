@@ -10,6 +10,7 @@ import '../sesion/sesion.dart';
 import '../tiempo_real/tiempo_real.dart';
 import '../tiempo_real/tiempo_real_provider.dart';
 import '../viaje/viaje_actual.dart';
+import 'turno.dart';
 
 /// Avisos push que cambian la agenda (AvisosViaje, AvisosReserva y los jobs de reservas).
 const _avisosDeAgenda = {'oferta_reserva', 'recordatorio_reserva', 'alerta_reserva', 'viaje'};
@@ -26,7 +27,7 @@ class AgendaNotifier extends AsyncNotifier<Agenda> {
       if (_avisosDeAgenda.contains(a.tipo)) ref.invalidateSelf();
     });
     final canal = ref.watch(tiempoRealProvider).canal(Canales.chofer(usuario.id)).listen((e) {
-      if (_esDeReserva(e.datos)) ref.invalidateSelf();
+      if (_esDeAgenda(e.datos)) ref.invalidateSelf();
     });
     ref.onDispose(() {
       unawaited(avisos.cancel());
@@ -37,10 +38,10 @@ class AgendaNotifier extends AsyncNotifier<Agenda> {
 
   /// `viaje.actualizado` trae el viaje; `oferta.creada`, `{oferta_id, vence_en, viaje}`. Se mira solo el
   /// tipo, sin leer el resto: un evento raro no puede romper nada.
-  static bool _esDeReserva(Json datos) {
+  static bool _esDeAgenda(Json datos) {
     final viaje = datos['viaje'];
     final tipo = viaje is Map ? viaje['tipo'] : datos['tipo'];
-    return tipo == TipoViaje.reserva.name;
+    return tipo == TipoViaje.reserva.name || tipo == TipoViaje.largo.name;
   }
 
   /// Acepta una solicitud de reserva. 422 si ya no está disponible o se superpone con otra: la agenda se
@@ -49,8 +50,19 @@ class AgendaNotifier extends AsyncNotifier<Agenda> {
 
   Future<void> rechazar(Oferta solicitud) => _responder(() => ref.read(apiProvider).rechazarOferta(solicitud.id));
 
-  /// "Voy en camino" hacia una reserva confirmada (spec 5.4, paso 7): la reserva pasa a ser el viaje actual.
-  Future<void> salir(Viaje reserva) => ref.read(viajeActualProvider.notifier).salirHaciaReserva(reserva);
+  /// "Voy en camino" hacia una reserva confirmada o un viaje largo (spec 5.4, paso 7): pasa a ser el viaje
+  /// actual. En un largo el backend cambia el vehículo del turno al del viaje: se vuelve a leer el turno (sigue
+  /// siendo el mismo, el GPS no se toca) para que el mapa muestre ese vehículo. El refresco no puede fallar
+  /// la salida, que ya se hizo.
+  Future<void> salir(Viaje reserva) async {
+    await ref.read(viajeActualProvider.notifier).salirHaciaReserva(reserva);
+    if (!reserva.esLargo || !ref.mounted) return;
+    try {
+      await ref.read(turnoProvider.notifier).refrescar();
+    } catch (_) {
+      // Mejor esfuerzo: el próximo aviso o sondeo del turno lo corrige.
+    }
+  }
 
   Future<void> _responder(Future<Object?> Function() pedido) async {
     try {

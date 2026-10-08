@@ -11,7 +11,10 @@ use App\Models\Viaje;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
-/** Agenda del chofer: reservas confirmadas y solicitudes de reserva por responder (spec 7, chofer 5). */
+/**
+ * Agenda del chofer: reservas confirmadas y viajes largos asignados (en `reservas`, se distinguen por `tipo`) y
+ * solicitudes de reserva por responder (spec 7, chofer 5).
+ */
 class AgendaController extends Controller
 {
     public function __invoke(Request $request): JsonResponse
@@ -19,7 +22,7 @@ class AgendaController extends Controller
         $choferId = $request->user()->id;
 
         $reservas = Viaje::where('chofer_id', $choferId)
-            ->where('tipo', TipoViaje::Reserva)
+            ->whereIn('tipo', TipoViaje::agendados())
             ->where('estado', EstadoViaje::Aceptado)
             ->with(['chofer', 'vehiculo', 'solicitante'])
             ->orderBy('programado_para')

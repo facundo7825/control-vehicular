@@ -138,6 +138,12 @@ class AvisosViaje implements ShouldQueue
     /** Cancelación o reasignación hecha desde el panel (spec 5.6). */
     private function avisarAccionDelAdmin(Viaje $v, ?int $choferAnteriorId, array $datos): void
     {
+        if ($v->tipo === TipoViaje::Largo) {
+            $this->avisarViajeLargo($v, $choferAnteriorId, $datos);
+
+            return;
+        }
+
         $esReserva = $v->tipo === TipoViaje::Reserva;
         $cuando = $v->horaProgramadaLocal();
         $cual = $esReserva ? "la reserva del $cuando" : 'el viaje';
@@ -161,5 +167,31 @@ class AvisosViaje implements ShouldQueue
             $esReserva ? "Un administrador te asignó una reserva el $cuando." : 'Un administrador te asignó un viaje.', $datos);
         $this->push->enviar($v->solicitante, $esReserva ? "Reserva confirmada para $cuando" : 'Tu auto está confirmado',
             "Ahora te lleva {$v->chofer->nombre}.", $datos);
+    }
+
+    /** Viaje largo: el encargado lo crea (asignado), le cambia el chofer o el vehículo, o lo cancela. */
+    private function avisarViajeLargo(Viaje $v, ?int $choferAnteriorId, array $datos): void
+    {
+        $cuando = $v->horaProgramadaLocal();
+
+        if ($v->estado === EstadoViaje::Cancelado) {
+            $this->push->enviar($v->solicitante, 'Viaje largo cancelado',
+                "Un administrador canceló el viaje largo del $cuando. Motivo: {$v->motivo_cancelacion}", $datos);
+            if ($v->chofer) {
+                $this->push->enviar($v->chofer, 'Viaje largo cancelado', "Un administrador canceló el viaje largo del $cuando.", $datos);
+            }
+
+            return;
+        }
+
+        if ($choferAnteriorId && $anterior = Usuario::find($choferAnteriorId)) {
+            $this->push->enviar($anterior, 'Viaje largo reasignado',
+                "Un administrador le asignó el viaje largo del $cuando a otro chofer.", $datos);
+        }
+        $destino = $v->destino_direccion ?? 'destino marcado en el mapa';
+        $vehiculo = "{$v->vehiculo?->marca} {$v->vehiculo?->modelo} ({$v->vehiculo?->patente})";
+        $this->push->enviar($v->chofer, 'Viaje largo asignado', "Salida el $cuando hacia $destino en $vehiculo.", $datos);
+        $this->push->enviar($v->solicitante, "Viaje largo confirmado para $cuando",
+            "Te lleva {$v->chofer->nombre} en $vehiculo.", $datos);
     }
 }

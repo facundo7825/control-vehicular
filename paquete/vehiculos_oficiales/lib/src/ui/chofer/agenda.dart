@@ -147,11 +147,23 @@ class TarjetaReserva extends ConsumerWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           ListTile(
-            leading: const Icon(Icons.event_available),
+            leading: Icon(reserva.esLargo ? Icons.luggage : Icons.event_available),
             title: Text(
-              [?titulo, formatearFechaHora(reserva.programadoPara!), reserva.destino.descripcion].join(' · '),
+              [
+                ?titulo,
+                if (reserva.esLargo) reserva.tipo.etiqueta,
+                formatearFechaHora(reserva.programadoPara!),
+                reserva.destino.descripcion,
+              ].join(' · '),
             ),
-            subtitle: Text('${reserva.solicitante.nombre} · Desde ${reserva.origen.descripcion}'),
+            subtitle: Text(
+              [
+                reserva.solicitante.nombre,
+                'Desde ${reserva.origen.descripcion}',
+                if (reserva.regresoEstimado case final regreso?) 'Regreso ${formatearFechaHora(regreso)}',
+                if (reserva.pasajeros case final pasajeros? when pasajeros.isNotEmpty) 'Pasajeros: $pasajeros',
+              ].join(' · '),
+            ),
           ),
           OverflowBar(
             alignment: MainAxisAlignment.end,

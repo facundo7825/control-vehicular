@@ -48,13 +48,14 @@ class ReportesPanel
 
     /**
      * @return list<array{chofer_id: int, chofer: string, finalizados: int, cancelados: int, km: float,
-     *                    horas_turno: float, llegada_promedio_min: float|null}>
+     *                    horas_turno: float, horas_largos: float, llegada_promedio_min: float|null}>
      */
     public function porChofer(string $desde, string $hasta): array
     {
         [$inicio, $fin] = $this->limites($desde, $hasta);
 
-        $finalizados = $this->finalizados($inicio, $fin)->get(['id', 'chofer_id', 'metros_recorridos']);
+        $finalizados = $this->finalizados($inicio, $fin)
+            ->get(['id', 'chofer_id', 'tipo', 'metros_recorridos', 'programado_para', 'iniciado_en', 'finalizado_en']);
         $cancelados = Viaje::where('estado', EstadoViaje::Cancelado)
             ->whereNotNull('chofer_id')
             ->where('cancelado_en', '>=', $inicio)
@@ -85,6 +86,7 @@ class ReportesPanel
                 'cancelados' => (int) $cancelados->get($chofer->id, 0),
                 'km' => $this->sumarKm($porChofer->get($chofer->id, collect())),
                 'horas_turno' => round($horas->get($chofer->id, 0) / 3600, 1),
+                'horas_largos' => $this->horasEnViajesLargos($porChofer->get($chofer->id, collect())),
                 'llegada_promedio_min' => $llegadas->get($chofer->id),
             ])
             ->values()
@@ -135,6 +137,21 @@ class ReportesPanel
     private function sumarKm(Collection $viajes): float
     {
         return round($viajes->sum(fn (Viaje $v) => $v->metros_recorridos ?? 0) / 1000, 2);
+    }
+
+    /**
+     * Horas reales (del inicio, o la salida programada, al fin; ver HorarioLaboral) de los viajes largos
+     * finalizados en el rango. Cada viaje cuenta entero en el día en que terminó.
+     *
+     * @param  Collection<int, Viaje>  $viajes
+     */
+    private function horasEnViajesLargos(Collection $viajes): float
+    {
+        $horario = app(HorarioLaboral::class);
+
+        return round($viajes
+            ->filter(fn (Viaje $v) => $v->tipo === TipoViaje::Largo)
+            ->sum(fn (Viaje $v) => $horario->duracionRealMin($v) ?? 0) / 60, 1);
     }
 
     /**
