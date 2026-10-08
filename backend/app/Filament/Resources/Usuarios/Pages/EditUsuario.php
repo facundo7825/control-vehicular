@@ -82,6 +82,9 @@ class EditUsuario extends EditRecord
 
             return $data;
         }
+        if (UsuarioResource::rolDelPj($usuario)) {
+            $data['rol'] = $usuario->rol;
+        }
 
         $rol = $data['rol'] instanceof RolUsuario ? $data['rol'] : RolUsuario::from($data['rol']);
         $dejaDeManejar = $usuario->esChofer() && ($rol !== RolUsuario::Chofer || ! $data['activo']);

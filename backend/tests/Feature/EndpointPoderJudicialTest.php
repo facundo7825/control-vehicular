@@ -56,3 +56,26 @@ it('sin el campo de dependencia configurado, no la informa', function () {
 
     expect((new EndpointPoderJudicial)->validar('tok')->dependencia)->toBeNull();
 });
+
+it('lee si es chofer desde el campo de rol configurado', function (mixed $valor, ?bool $esperado) {
+    config(['vehiculos.identidad.campos.rol' => 'data.perfil', 'vehiculos.identidad.valores_chofer' => ['chofer', 'Conductor']]);
+    Http::fake(['pj.test/*' => Http::response(['data' => ['legajo' => 1, 'nombre_completo' => 'Ana', 'perfil' => $valor]])]);
+
+    expect((new EndpointPoderJudicial)->validar('tok')->esChofer)->toBe($esperado);
+})->with([
+    'texto' => ['Chofer', true],
+    'otro valor de la lista, con tildes y espacios' => [' CONDUCTÓR ', true],
+    'otro rol' => ['Administrativo', false],
+    'lista de roles' => [['empleado', 'chofer'], true],
+    'lista sin chofer' => [['empleado'], false],
+    'booleano' => [true, true],
+    'booleano falso' => [false, false],
+    'no viene' => [null, null],
+]);
+
+it('sin el campo de rol configurado, no informa si es chofer', function () {
+    config(['vehiculos.identidad.campos.rol' => '']);
+    Http::fake(['pj.test/*' => Http::response(['data' => ['legajo' => 1, 'nombre_completo' => 'Ana', 'perfil' => 'chofer']])]);
+
+    expect((new EndpointPoderJudicial)->validar('tok')->esChofer)->toBeNull();
+});

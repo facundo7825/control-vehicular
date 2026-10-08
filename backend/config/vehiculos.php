@@ -14,7 +14,15 @@ return [
             'telefono' => env('IDENTIDAD_CAMPO_TELEFONO', 'telefono'),
             // Opcional. Vacío: la dependencia de cada persona la carga el encargado en el panel.
             'dependencia' => env('IDENTIDAD_CAMPO_DEPENDENCIA'),
+            // Opcional. Vacío: el rol (chofer o solicitante) lo carga el encargado en el panel.
+            'rol' => env('IDENTIDAD_CAMPO_ROL'),
         ],
+        // Valores del campo de rol que significan "chofer", separados por coma (sin distinguir mayúsculas ni
+        // tildes). Un campo booleano (true) también cuenta como chofer.
+        'valores_chofer' => array_values(array_filter(array_map(
+            'trim',
+            explode(',', (string) env('IDENTIDAD_VALORES_CHOFER', 'chofer')),
+        ))),
     ],
 
     'mapas' => [

@@ -1,10 +1,13 @@
 <?php
 
+use App\Enums\RolUsuario;
 use App\Identidad\DatosIdentidad;
 use App\Identidad\IdentidadNoDisponible;
 use App\Identidad\ProveedorIdentidad;
 use App\Models\Dependencia;
+use App\Models\Turno;
 use App\Models\Usuario;
+use App\Models\Vehiculo;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -166,4 +169,50 @@ it('si la dependencia no se puede crear ni encontrar, inicia sesión igual sin c
     Log::shouldHaveReceived('warning')
         ->withArgs(fn (string $mensaje, array $contexto) => ($contexto['excepcion'] ?? null) === UniqueConstraintViolationException::class)
         ->once();
+});
+
+function identidadConRol(?bool $esChofer): void
+{
+    app()->instance(ProveedorIdentidad::class, new class($esChofer) implements ProveedorIdentidad
+    {
+        public function __construct(private ?bool $esChofer) {}
+
+        public function validar(string $tokenExterno): ?DatosIdentidad
+        {
+            return new DatosIdentidad('321', 'Ana Pérez', 'Agente', esChofer: $this->esChofer);
+        }
+    });
+}
+
+it('el rol que informa el PJ define si es chofer o solicitante en cada ingreso', function () {
+    identidadConRol(true);
+    $this->postJson('/api/auth/intercambio', ['token_externo' => 'x'])->assertJsonPath('usuario.rol', 'chofer');
+
+    identidadConRol(false);
+    $this->postJson('/api/auth/intercambio', ['token_externo' => 'x'])->assertJsonPath('usuario.rol', 'solicitante');
+});
+
+it('si el PJ no informa el rol, conserva el cargado en el panel', function () {
+    Usuario::factory()->chofer()->create(['id_externo' => '321']);
+    identidadConRol(null);
+
+    $this->postJson('/api/auth/intercambio', ['token_externo' => 'x'])->assertJsonPath('usuario.rol', 'chofer');
+});
+
+it('el rol del PJ no le quita el rol a un administrador', function () {
+    Usuario::factory()->create(['id_externo' => '321', 'rol' => RolUsuario::Admin]);
+    identidadConRol(false);
+
+    $this->postJson('/api/auth/intercambio', ['token_externo' => 'x'])->assertJsonPath('usuario.rol', 'admin');
+});
+
+it('a un chofer con el turno abierto el PJ no le quita el rol hasta que lo cierre', function () {
+    $chofer = Usuario::factory()->chofer()->create(['id_externo' => '321']);
+    Turno::create(['chofer_id' => $chofer->id, 'vehiculo_id' => Vehiculo::factory()->create()->id, 'inicio' => now()]);
+    identidadConRol(false);
+
+    $this->postJson('/api/auth/intercambio', ['token_externo' => 'x'])->assertJsonPath('usuario.rol', 'chofer');
+
+    Turno::where('chofer_id', $chofer->id)->update(['fin' => now()]);
+    $this->postJson('/api/auth/intercambio', ['token_externo' => 'x'])->assertJsonPath('usuario.rol', 'solicitante');
 });

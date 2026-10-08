@@ -11,5 +11,7 @@ final readonly class DatosIdentidad
         public ?string $telefono = null,
         // Solo si se configuró IDENTIDAD_CAMPO_DEPENDENCIA; null: no la informa.
         public ?string $dependencia = null,
+        // Solo si se configuró IDENTIDAD_CAMPO_ROL; null: no lo informa.
+        public ?bool $esChofer = null,
     ) {}
 }

@@ -102,6 +102,13 @@ class Usuario extends Authenticatable implements FilamentUser, HasName
         });
     }
 
+    /** IDENTIDAD_CAMPO_ROL configurado: si es chofer o solicitante lo define el PJ en cada ingreso. */
+    public static function rolVieneDelPj(): bool
+    {
+        return config('vehiculos.identidad.driver') === 'poder_judicial'
+            && filled(config('vehiculos.identidad.campos.rol'));
+    }
+
     public function esAdmin(): bool
     {
         return $this->rol === RolUsuario::Admin;

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\RolUsuario;
 use App\Identidad\IdentidadNoDisponible;
 use App\Identidad\ProveedorIdentidad;
 use App\Models\Dependencia;
@@ -36,6 +37,8 @@ class AuthController extends Controller
             ], fn ($v) => $v !== null),
         )->refresh();
 
+        self::aplicarRolDelPj($usuario, $id->esChofer);
+
         if (! $usuario->activo) {
             return response()->json(['message' => 'Usuario deshabilitado.'], 403);
         }
@@ -47,6 +50,28 @@ class AuthController extends Controller
             'token' => $token,
             'usuario' => self::datosUsuario($usuario),
         ]);
+    }
+
+    /**
+     * Si el PJ informa el rol, define si la persona es chofer o solicitante. Un administrador del panel no se
+     * toca, y a un chofer con el turno abierto o viajes asignados se le cambia recién en un ingreso posterior
+     * (como en el panel: primero se cierra su turno y se reasignan sus viajes).
+     */
+    private static function aplicarRolDelPj(Usuario $usuario, ?bool $esChofer): void
+    {
+        if ($esChofer === null || $usuario->esAdmin()) {
+            return;
+        }
+
+        $rol = $esChofer ? RolUsuario::Chofer : RolUsuario::Solicitante;
+        if ($usuario->rol === $rol) {
+            return;
+        }
+        if ($usuario->esChofer() && $usuario->tieneTrabajoDeChofer()) {
+            return;
+        }
+
+        $usuario->update(['rol' => $rol]);
     }
 
     public function yo(Request $request): JsonResponse
