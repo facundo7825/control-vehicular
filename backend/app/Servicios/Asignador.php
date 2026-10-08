@@ -2,6 +2,7 @@
 
 namespace App\Servicios;
 
+use App\Enums\CriterioOferta;
 use App\Enums\EstadoChofer;
 use App\Enums\EstadoViaje;
 use App\Enums\TipoViaje;
@@ -22,6 +23,57 @@ class Asignador
         private DisponibilidadReservas $disponibilidad,
         private AvisosReserva $avisosReserva,
     ) {}
+
+    /**
+     * Orden de ofrecimiento de un viaje inmediato: el chofer asignado al solicitante, los choferes de su
+     * dependencia y el resto; cada grupo, por cercanía (se consulta el servicio de mapas una sola vez).
+     *
+     * @param  Collection<int, Usuario>  $candidatos  con la relación `ubicacion` cargada
+     * @return Collection<int, array{chofer: Usuario, criterio: CriterioOferta}>
+     */
+    public function ordenar(Viaje $viaje, Collection $candidatos): Collection
+    {
+        return $this->agruparPorCriterio(
+            $viaje->solicitante()->with('dependencia')->first(),
+            $this->ordenarPorCercania($viaje, $candidatos),
+            CriterioOferta::Cercania,
+        );
+    }
+
+    /**
+     * Separa los choferes, ya ordenados, en grupos (asignado, dependencia, resto) sin cambiar el orden
+     * dentro de cada grupo. El chofer asignado cuenta solo si sigue siendo chofer y está activo; la
+     * dependencia, solo si está activa, y de ella solo los choferes activos.
+     *
+     * @param  Collection<int, Usuario>  $choferes
+     * @param  CriterioOferta  $resto  criterio de los que no son del solicitante (lo que decidió su orden)
+     * @return Collection<int, array{chofer: Usuario, criterio: CriterioOferta}>
+     */
+    public function agruparPorCriterio(?Usuario $solicitante, Collection $choferes, CriterioOferta $resto): Collection
+    {
+        $dependencia = $solicitante?->dependencia;
+        $deLaDependencia = $dependencia?->activa
+            ? $dependencia->choferes()->pluck('usuarios.id')->flip()
+            : collect();
+
+        $criterio = fn (Usuario $c): CriterioOferta => match (true) {
+            ! $c->esChofer() || ! $c->activo => $resto,
+            $c->id === (int) $solicitante?->chofer_asignado_id => CriterioOferta::ChoferAsignado,
+            $deLaDependencia->has($c->id) => CriterioOferta::Dependencia,
+            default => $resto,
+        };
+        $grupo = fn (CriterioOferta $c): int => match ($c) {
+            CriterioOferta::ChoferAsignado => 0,
+            CriterioOferta::Dependencia => 1,
+            default => 2,
+        };
+
+        // sortBy es estable: dentro de cada grupo se conserva el orden recibido.
+        return $choferes
+            ->map(fn (Usuario $c) => ['chofer' => $c, 'criterio' => $criterio($c)])
+            ->sortBy(fn (array $f) => $grupo($f['criterio']))
+            ->values();
+    }
 
     /**
      * @param  Collection<int, Usuario>  $candidatos  con la relación `ubicacion` cargada
@@ -56,9 +108,13 @@ class Asignador
     {
         $asignado = DB::transaction(function () use ($viaje, $chofer) {
             $bloqueado = Viaje::whereKey($viaje->id)->lockForUpdate()->firstOrFail();
-            Usuario::whereKey($chofer->id)->lockForUpdate()->first();
+            $c = Usuario::whereKey($chofer->id)->lockForUpdate()->first();
 
             if (! in_array($bloqueado->estado, [EstadoViaje::Buscando, EstadoViaje::Ofrecido], true)) {
+                return false;
+            }
+            // Leído bajo el bloqueo: si lo desactivaron después de elegirlo, ya no recibe el viaje.
+            if (! $c?->activo) {
                 return false;
             }
             if ($this->estados->estado($chofer) !== EstadoChofer::Libre) {

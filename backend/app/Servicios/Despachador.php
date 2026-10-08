@@ -2,11 +2,13 @@
 
 namespace App\Servicios;
 
+use App\Enums\CriterioOferta;
 use App\Enums\EstadoChofer;
 use App\Enums\EstadoViaje;
 use App\Enums\ModoViaje;
 use App\Enums\ResultadoOferta;
 use App\Enums\TipoViaje;
+use App\Events\OfertaCreada;
 use App\Excepciones\ReglaNegocio;
 use App\Jobs\VencerOferta;
 use App\Models\OfertaViaje;
@@ -46,10 +48,10 @@ class Despachador
             return;
         }
 
-        foreach ($this->asignador->ordenarPorCercania($viaje, $this->candidatos($viaje)) as $chofer) {
+        foreach ($this->asignador->ordenar($viaje, $this->candidatos($viaje)) as ['chofer' => $chofer, 'criterio' => $criterio]) {
             $listo = $viaje->obligatorio
                 ? $this->asignador->asignar($viaje, $chofer)
-                : $this->ofrecer($viaje, $chofer);
+                : $this->ofrecer($viaje, $chofer, $criterio);
 
             if ($listo) {
                 return;
@@ -64,7 +66,7 @@ class Despachador
     {
         $listo = $viaje->obligatorio
             ? $this->asignador->asignar($viaje, $chofer)
-            : $this->ofrecer($viaje, $chofer);
+            : $this->ofrecer($viaje, $chofer, CriterioOferta::ElegidoPorSolicitante);
 
         if (! $listo) {
             $this->maquina->intentar($viaje, EstadoViaje::SinChofer, desde: self::SIN_ASIGNAR);
@@ -72,9 +74,9 @@ class Despachador
     }
 
     /** Ofrece una reserva a un chofer, esté o no en turno, si la franja sigue libre en su agenda. */
-    public function ofrecerReserva(Viaje $viaje, Usuario $chofer): bool
+    public function ofrecerReserva(Viaje $viaje, Usuario $chofer, ?CriterioOferta $criterio = null): bool
     {
-        $oferta = DB::transaction(function () use ($viaje, $chofer) {
+        $oferta = DB::transaction(function () use ($viaje, $chofer, $criterio) {
             $v = Viaje::whereKey($viaje->id)->lockForUpdate()->firstOrFail();
             $c = Usuario::whereKey($chofer->id)->lockForUpdate()->first();
 
@@ -98,6 +100,7 @@ class Despachador
                 'viaje_id' => $v->id,
                 'chofer_id' => $c->id,
                 'resultado' => ResultadoOferta::Pendiente,
+                'criterio' => $criterio,
                 'ofrecido_en' => now(),
                 'vence_en' => $this->venceOfertaReserva($v->programado_para),
             ]);
@@ -108,7 +111,7 @@ class Despachador
         }
 
         VencerOferta::dispatch($oferta->id)->delay($oferta->vence_en)->afterCommit();
-        \App\Events\OfertaCreada::dispatch($oferta);
+        OfertaCreada::dispatch($oferta);
 
         return true;
     }
@@ -198,13 +201,15 @@ class Despachador
         }
     }
 
-    private function ofrecer(Viaje $viaje, Usuario $chofer): bool
+    private function ofrecer(Viaje $viaje, Usuario $chofer, ?CriterioOferta $criterio = null): bool
     {
-        $oferta = DB::transaction(function () use ($viaje, $chofer) {
+        $oferta = DB::transaction(function () use ($viaje, $chofer, $criterio) {
             $v = Viaje::whereKey($viaje->id)->lockForUpdate()->firstOrFail();
-            Usuario::whereKey($chofer->id)->lockForUpdate()->first();
+            $c = Usuario::whereKey($chofer->id)->lockForUpdate()->first();
 
+            // El chofer se lee bajo el bloqueo: si lo desactivaron después de elegirlo, no se le ofrece.
             if ($v->estado !== EstadoViaje::Buscando
+                || ! $c?->activo
                 || $this->estados->estado($chofer) !== EstadoChofer::Libre
                 || $this->tieneOfertaPendiente($chofer->id)) {
                 return null;
@@ -216,6 +221,7 @@ class Despachador
                 'viaje_id' => $v->id,
                 'chofer_id' => $chofer->id,
                 'resultado' => ResultadoOferta::Pendiente,
+                'criterio' => $criterio,
                 'ofrecido_en' => now(),
                 'vence_en' => now()->addSeconds($this->parametros->entero('oferta_segundos')),
             ]);
@@ -226,7 +232,7 @@ class Despachador
         }
 
         VencerOferta::dispatch($oferta->id)->delay($oferta->vence_en)->afterCommit();
-        \App\Events\OfertaCreada::dispatch($oferta);
+        OfertaCreada::dispatch($oferta);
 
         return true;
     }
@@ -245,13 +251,20 @@ class Despachador
         return $vence->lt($minimo) ? $minimo : $vence;
     }
 
-    /** @return Collection<int, Usuario> */
+    /**
+     * Choferes libres a los que todavía no se les ofreció. Un chofer desactivado con el turno abierto sigue
+     * en el mapa, pero no recibe viajes.
+     *
+     * @return Collection<int, Usuario>
+     */
     private function candidatos(Viaje $viaje): Collection
     {
         $yaOfrecidos = OfertaViaje::where('viaje_id', $viaje->id)->pluck('chofer_id');
 
         return $this->estados->libres()
-            ->reject(fn (Usuario $c) => $yaOfrecidos->contains($c->id) || $this->tieneOfertaPendiente($c->id))
+            ->reject(fn (Usuario $c) => ! $c->activo
+                || $yaOfrecidos->contains($c->id)
+                || $this->tieneOfertaPendiente($c->id))
             ->values();
     }
 

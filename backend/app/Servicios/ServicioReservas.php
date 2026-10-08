@@ -2,6 +2,7 @@
 
 namespace App\Servicios;
 
+use App\Enums\CriterioOferta;
 use App\Enums\EstadoViaje;
 use App\Enums\ModoViaje;
 use App\Enums\RolUsuario;
@@ -71,7 +72,7 @@ class ServicioReservas
     {
         [$inicio, $duracion] = $this->franja($datos);
         $modo = ModoViaje::from($datos['modo']);
-        $candidatos = $this->candidatos($modo, isset($datos['chofer_id']) ? (int) $datos['chofer_id'] : null, $inicio, $duracion);
+        $candidatos = $this->candidatos($solicitante, $modo, isset($datos['chofer_id']) ? (int) $datos['chofer_id'] : null, $inicio, $duracion);
         $obligatorio = CargoPrioritario::esObligatorio($solicitante->cargo);
 
         // Antes de la transacción: la consulta de las direcciones que faltan no retiene ningún lock.
@@ -97,10 +98,10 @@ class ServicioReservas
                 'estado' => EstadoViaje::Buscando,
             ]);
 
-            foreach ($candidatos as $chofer) {
+            foreach ($candidatos as ['chofer' => $chofer, 'criterio' => $criterio]) {
                 $listo = $obligatorio
                     ? $this->asignador->asignarReserva($viaje, $chofer)
-                    : $this->despachador->ofrecerReserva($viaje, $chofer);
+                    : $this->despachador->ofrecerReserva($viaje, $chofer, $criterio);
 
                 if ($listo) {
                     return $viaje;
@@ -117,8 +118,13 @@ class ServicioReservas
         return $viaje->refresh()->load(['chofer', 'vehiculo', 'solicitante']);
     }
 
-    /** @return Collection<int, Usuario> */
-    private function candidatos(ModoViaje $modo, ?int $choferId, Carbon $inicio, int $duracion): Collection
+    /**
+     * Con cualquiera disponible van primero el chofer asignado al solicitante y los de su dependencia;
+     * dentro de cada grupo, el orden de choferesDisponibles (menos reservas en el día).
+     *
+     * @return Collection<int, array{chofer: Usuario, criterio: CriterioOferta}>
+     */
+    private function candidatos(Usuario $solicitante, ModoViaje $modo, ?int $choferId, Carbon $inicio, int $duracion): Collection
     {
         if ($modo === ModoViaje::Especifico) {
             $chofer = Usuario::where('rol', RolUsuario::Chofer)->where('activo', true)->find($choferId)
@@ -127,7 +133,7 @@ class ServicioReservas
                 throw new ReglaNegocio('El chofer elegido no está disponible en ese horario.');
             }
 
-            return collect([$chofer]);
+            return collect([['chofer' => $chofer, 'criterio' => CriterioOferta::ElegidoPorSolicitante]]);
         }
 
         $choferes = $this->disponibilidad->choferesDisponibles($inicio, $duracion)->pluck('chofer');
@@ -135,6 +141,6 @@ class ServicioReservas
             throw new ReglaNegocio('No hay choferes disponibles en ese horario.');
         }
 
-        return $choferes;
+        return $this->asignador->agruparPorCriterio($solicitante->loadMissing('dependencia'), $choferes, resto: CriterioOferta::Disponibilidad);
     }
 }

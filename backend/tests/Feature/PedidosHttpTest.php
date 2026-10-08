@@ -136,3 +136,16 @@ it('lista los choferes en turno para el mapa', function () {
         ->assertJsonPath('0.lat', -34.601)
         ->assertJsonPath('0.vehiculo.patente', $libre->turnoAbierto->vehiculo->patente);
 });
+
+it('rechaza pedir un viaje a un chofer desactivado', function () {
+    $chofer = choferEnTurno();
+    $chofer->update(['activo' => false]);
+
+    $this->actingAs(Usuario::factory()->create())
+        ->postJson('/api/viajes', datosPedido(['modo' => 'especifico', 'chofer_id' => $chofer->id]))
+        ->assertStatus(422)
+        ->assertJsonPath('message', 'El chofer elegido no existe.');
+
+    expect(Viaje::count())->toBe(0)
+        ->and(OfertaViaje::count())->toBe(0);
+});

@@ -6,6 +6,7 @@ use App\Enums\RolUsuario;
 use App\Filament\Resources\Usuarios\Pages\EditUsuario;
 use App\Filament\Resources\Usuarios\Pages\ListUsuarios;
 use App\Filament\Resources\Usuarios\RelationManagers\TurnosRelationManager;
+use App\Models\Dependencia;
 use App\Models\Usuario;
 use App\Models\Vehiculo;
 use App\Servicios\CalculadorEstadoChofer;
@@ -25,10 +26,12 @@ use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Validation\Rule;
 
 /**
  * Usuarios y choferes (spec 8.3). Nombre, cargo e id externo vienen del PJ y no se editan acá;
- * el admin solo cambia el rol y si está activo. Los usuarios se crean al entrar por la app.
+ * el admin cambia el rol, si está activo, el vehículo habitual (choferes), la dependencia y el chofer asignado
+ * (el resto) y las dependencias que atiende (choferes). Los usuarios se crean al entrar por la app.
  */
 class UsuarioResource extends Resource
 {
@@ -48,6 +51,7 @@ class UsuarioResource extends Resource
     {
         // Un admin no puede quitarse el rol ni desactivarse (EditUsuario lo refuerza al guardar).
         $esUnoMismo = fn (?Usuario $record): bool => $record?->is(Filament::auth()->user()) ?? false;
+        $esChofer = fn (Get $get): bool => in_array($get('rol'), [RolUsuario::Chofer, RolUsuario::Chofer->value], true);
 
         return $schema
             ->components([
@@ -66,7 +70,41 @@ class UsuarioResource extends Resource
                     ->options(fn (?Usuario $record): array => self::vehiculosHabituales($record))
                     ->searchable()
                     ->nullable()
-                    ->visible(fn (Get $get): bool => in_array($get('rol'), [RolUsuario::Chofer, RolUsuario::Chofer->value], true)),
+                    ->visible($esChofer),
+                Select::make('dependenciasQueAtiende')
+                    ->label('Dependencias que atiende')
+                    ->helperText('Los viajes de esas dependencias se le ofrecen antes que al resto de los choferes.')
+                    ->relationship(
+                        'dependenciasQueAtiende',
+                        'nombre',
+                        // Activas, más las que ya atiende aunque se hayan desactivado.
+                        modifyQueryUsing: fn (Builder $query, ?Usuario $record) => $query
+                            ->where(fn (Builder $q) => $q->where('dependencias.activa', true)
+                                ->when($record, fn (Builder $q) => $q->orWhereIn(
+                                    'dependencias.id',
+                                    $record->dependenciasQueAtiende()->select('dependencias.id'),
+                                ))),
+                    )
+                    ->multiple()
+                    ->preload()
+                    ->searchable()
+                    ->visible($esChofer),
+                Select::make('dependencia_id')
+                    ->label('Dependencia')
+                    ->helperText(Dependencia::vieneDelPj() ? 'Viene del sistema del PJ.' : null)
+                    ->options(fn (?Usuario $record): array => self::dependencias($record))
+                    ->disabled(Dependencia::vieneDelPj())
+                    ->searchable()
+                    ->nullable()
+                    ->hidden($esChofer),
+                Select::make('chofer_asignado_id')
+                    ->label('Chofer asignado')
+                    ->helperText('Recibe primero los viajes que pide esta persona.')
+                    ->options(fn (?Usuario $record): array => self::choferes($record))
+                    ->rules([Rule::exists('usuarios', 'id')->where('rol', RolUsuario::Chofer->value)])
+                    ->searchable()
+                    ->nullable()
+                    ->hidden($esChofer),
                 Toggle::make('activo')
                     ->helperText('Un usuario inactivo no puede entrar a la app ni al panel.')
                     ->disabled($esUnoMismo),
@@ -89,6 +127,35 @@ class UsuarioResource extends Resource
             ->all();
     }
 
+    /**
+     * Dependencias activas, más la actual aunque se haya desactivado.
+     *
+     * @return array<int, string>
+     */
+    private static function dependencias(?Usuario $usuario): array
+    {
+        return Dependencia::query()
+            ->where(fn (Builder $q) => $q->where('activa', true)->orWhere('id', $usuario?->dependencia_id))
+            ->orderBy('nombre')
+            ->pluck('nombre', 'id')
+            ->all();
+    }
+
+    /**
+     * Choferes activos, más el asignado actual aunque se haya desactivado.
+     *
+     * @return array<int, string>
+     */
+    private static function choferes(?Usuario $usuario): array
+    {
+        return Usuario::query()
+            ->where('rol', RolUsuario::Chofer)
+            ->where(fn (Builder $q) => $q->where('activo', true)->orWhere('id', $usuario?->chofer_asignado_id))
+            ->orderBy('nombre')
+            ->pluck('nombre', 'id')
+            ->all();
+    }
+
     public static function table(Table $table): Table
     {
         return $table
@@ -103,6 +170,8 @@ class UsuarioResource extends Resource
                         ? app(CalculadorEstadoChofer::class)->estado($record)
                         : null),
                 IconColumn::make('activo')->boolean(),
+                TextColumn::make('dependencia.nombre')->label('Dependencia')->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('choferAsignado.nombre')->label('Chofer asignado')->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('id_externo')->label('Id externo')->toggleable(isToggledHiddenByDefault: true),
             ])
             ->defaultSort('nombre')

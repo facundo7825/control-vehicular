@@ -7,6 +7,7 @@ use App\Enums\RolUsuario;
 use App\Filament\Resources\Usuarios\Pages\EditUsuario;
 use App\Filament\Resources\Usuarios\Pages\ListUsuarios;
 use App\Filament\Resources\Usuarios\RelationManagers\TurnosRelationManager;
+use App\Models\Dependencia;
 use App\Models\EventoAsistencia;
 use App\Models\Turno;
 use App\Models\Usuario;
@@ -256,4 +257,102 @@ it('ofrece el vehículo habitual actual aunque se haya desactivado', function ()
     expect($opciones)->toHaveKey($inactivo->id)
         ->and($opciones[$inactivo->id])->toBe('ZZ999ZZ — Ford Ka')
         ->and($opciones)->not->toHaveKey($otroInactivo->id);
+});
+
+it('carga la dependencia y el chofer asignado de un solicitante', function () {
+    $solicitante = Usuario::factory()->create();
+    $dependencia = Dependencia::create(['nombre' => 'Fuero Penal']);
+    $chofer = Usuario::factory()->chofer()->create();
+
+    Livewire::test(EditUsuario::class, ['record' => $solicitante->getRouteKey()])
+        ->assertFormFieldVisible('dependencia_id')
+        ->assertFormFieldEnabled('dependencia_id')
+        ->assertFormFieldVisible('chofer_asignado_id')
+        ->assertFormFieldHidden('dependenciasQueAtiende')
+        ->fillForm(['dependencia_id' => $dependencia->id, 'chofer_asignado_id' => $chofer->id])
+        ->call('save')
+        ->assertHasNoFormErrors();
+
+    expect($solicitante->fresh())
+        ->dependencia_id->toBe($dependencia->id)
+        ->chofer_asignado_id->toBe($chofer->id);
+});
+
+it('ofrece dependencias activas y choferes activos, más los actuales', function () {
+    $activa = Dependencia::create(['nombre' => 'Civil']);
+    $inactiva = Dependencia::create(['nombre' => 'Vieja', 'activa' => false]);
+    $actual = Dependencia::create(['nombre' => 'Cerrada', 'activa' => false]);
+    $chofer = Usuario::factory()->chofer()->create();
+    $choferInactivo = Usuario::factory()->chofer()->create(['activo' => false]);
+    $choferActual = Usuario::factory()->chofer()->create(['activo' => false]);
+    $otroSolicitante = Usuario::factory()->create();
+    $solicitante = Usuario::factory()->create(['dependencia_id' => $actual->id, 'chofer_asignado_id' => $choferActual->id]);
+
+    $form = Livewire::test(EditUsuario::class, ['record' => $solicitante->getRouteKey()])->instance()->form;
+
+    expect($form->getComponent('dependencia_id')->getOptions())
+        ->toHaveKeys([$activa->id, $actual->id])->not->toHaveKey($inactiva->id)
+        ->and($form->getComponent('chofer_asignado_id')->getOptions())
+        ->toHaveKeys([$chofer->id, $choferActual->id])
+        ->not->toHaveKey($choferInactivo->id)
+        ->not->toHaveKey($otroSolicitante->id);
+});
+
+it('el chofer asignado tiene que ser un chofer', function () {
+    $solicitante = Usuario::factory()->create();
+    $otro = Usuario::factory()->create();
+
+    Livewire::test(EditUsuario::class, ['record' => $solicitante->getRouteKey()])
+        ->fillForm(['chofer_asignado_id' => $otro->id])
+        ->call('save')
+        ->assertHasFormErrors(['chofer_asignado_id']);
+
+    expect($solicitante->fresh()->chofer_asignado_id)->toBeNull();
+});
+
+it('carga las dependencias que atiende un chofer', function () {
+    $chofer = Usuario::factory()->chofer()->create();
+    $penal = Dependencia::create(['nombre' => 'Penal']);
+    $civil = Dependencia::create(['nombre' => 'Civil']);
+    $inactiva = Dependencia::create(['nombre' => 'Vieja', 'activa' => false]);
+
+    $pagina = Livewire::test(EditUsuario::class, ['record' => $chofer->getRouteKey()])
+        ->assertFormFieldVisible('dependenciasQueAtiende')
+        ->assertFormFieldHidden('dependencia_id')
+        ->assertFormFieldHidden('chofer_asignado_id');
+
+    expect($pagina->instance()->form->getComponent('dependenciasQueAtiende')->getOptions())
+        ->toHaveKeys([$penal->id, $civil->id])->not->toHaveKey($inactiva->id);
+
+    $pagina->fillForm(['dependenciasQueAtiende' => [$penal->id, $civil->id]])
+        ->call('save')
+        ->assertHasNoFormErrors();
+
+    expect($chofer->dependenciasQueAtiende()->pluck('dependencias.id')->sort()->values()->all())
+        ->toBe([$penal->id, $civil->id]);
+});
+
+it('si la dependencia viene del PJ, no se edita en el panel', function () {
+    config(['vehiculos.identidad.driver' => 'poder_judicial', 'vehiculos.identidad.campos.dependencia' => 'data.oficina']);
+    $dependencia = Dependencia::create(['nombre' => 'Penal']);
+    $solicitante = Usuario::factory()->create(['dependencia_id' => $dependencia->id]);
+    $otra = Dependencia::create(['nombre' => 'Civil']);
+
+    Livewire::test(EditUsuario::class, ['record' => $solicitante->getRouteKey()])
+        ->assertFormFieldDisabled('dependencia_id')
+        ->assertSee('Viene del sistema del PJ')
+        ->fillForm(['dependencia_id' => $otra->id])
+        ->call('save');
+
+    expect($solicitante->fresh()->dependencia_id)->toBe($dependencia->id);
+});
+
+it('muestra la dependencia y el chofer asignado como columnas opcionales', function () {
+    $dependencia = Dependencia::create(['nombre' => 'Penal']);
+    $chofer = Usuario::factory()->chofer()->create(['nombre' => 'Carlos Chofer']);
+    $solicitante = Usuario::factory()->create(['dependencia_id' => $dependencia->id, 'chofer_asignado_id' => $chofer->id]);
+
+    Livewire::test(ListUsuarios::class)
+        ->assertTableColumnStateSet('dependencia.nombre', 'Penal', $solicitante)
+        ->assertTableColumnStateSet('choferAsignado.nombre', 'Carlos Chofer', $solicitante);
 });

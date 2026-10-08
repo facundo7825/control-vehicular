@@ -39,6 +39,18 @@ class EndpointPoderJudicial implements ProveedorIdentidad
             (string) data_get($json, $campos['nombre'], ''),
             data_get($json, $campos['cargo']),
             data_get($json, $campos['telefono']),
+            self::dependencia($json, $campos['dependencia'] ?? null),
         );
+    }
+
+    private static function dependencia(mixed $json, ?string $campo): ?string
+    {
+        if (blank($campo)) {
+            return null;
+        }
+
+        $valor = data_get($json, $campo);
+
+        return is_scalar($valor) && trim((string) $valor) !== '' ? trim((string) $valor) : null;
     }
 }

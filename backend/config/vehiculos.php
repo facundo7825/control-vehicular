@@ -12,6 +12,8 @@ return [
             'nombre' => env('IDENTIDAD_CAMPO_NOMBRE', 'nombre'),
             'cargo' => env('IDENTIDAD_CAMPO_CARGO', 'cargo'),
             'telefono' => env('IDENTIDAD_CAMPO_TELEFONO', 'telefono'),
+            // Opcional. Vacío: la dependencia de cada persona la carga el encargado en el panel.
+            'dependencia' => env('IDENTIDAD_CAMPO_DEPENDENCIA'),
         ],
     ],
 

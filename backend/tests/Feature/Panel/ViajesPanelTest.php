@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\CriterioOferta;
 use App\Enums\EstadoViaje;
 use App\Enums\ResultadoOferta;
 use App\Enums\TipoViaje;
@@ -173,4 +174,25 @@ it('rechaza al chofer elegido si dejó de estar libre antes de confirmar', funct
     // El select valida contra las opciones vigentes; si igual pasara, el servicio lo rechaza con bloqueo.
     $pagina->callMountedAction()->assertHasActionErrors(['chofer_id']);
     expect($viaje->fresh()->estado)->toBe(EstadoViaje::SinChofer);
+});
+
+it('las ofertas del viaje muestran con qué criterio se ofreció', function () {
+    $viaje = Viaje::factory()->create(['estado' => EstadoViaje::Ofrecido]);
+    $ofertas = collect([
+        CriterioOferta::ChoferAsignado, CriterioOferta::Dependencia, CriterioOferta::Cercania,
+        CriterioOferta::ElegidoPorSolicitante, CriterioOferta::Disponibilidad, null,
+    ])->map(fn ($criterio) => OfertaViaje::create([
+        'viaje_id' => $viaje->id, 'chofer_id' => Usuario::factory()->chofer()->create()->id,
+        'resultado' => ResultadoOferta::Rechazada, 'criterio' => $criterio,
+        'ofrecido_en' => now()->subMinute(), 'vence_en' => now(), 'respondido_en' => now(),
+    ]));
+
+    Livewire::test(OfertasRelationManager::class, ['ownerRecord' => $viaje, 'pageClass' => ViewViaje::class])
+        ->assertTableColumnExists('criterio')
+        ->assertTableColumnStateSet('criterio', CriterioOferta::ChoferAsignado, $ofertas[0])
+        ->assertSee('Chofer asignado')
+        ->assertSee('Su dependencia')
+        ->assertSee('Cercanía')
+        ->assertSee('Elegido por el solicitante')
+        ->assertSee('Disponibilidad');
 });
