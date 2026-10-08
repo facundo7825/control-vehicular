@@ -356,3 +356,20 @@ it('muestra la dependencia y el chofer asignado como columnas opcionales', funct
         ->assertTableColumnStateSet('dependencia.nombre', 'Penal', $solicitante)
         ->assertTableColumnStateSet('choferAsignado.nombre', 'Carlos Chofer', $solicitante);
 });
+
+it('si el rol viene del PJ, no se edita en el panel salvo para los administradores', function () {
+    config(['vehiculos.identidad.driver' => 'poder_judicial', 'vehiculos.identidad.campos.rol' => 'data.perfil']);
+    $persona = Usuario::factory()->create(['id_externo' => '555']);
+
+    Livewire::test(EditUsuario::class, ['record' => $persona->getRouteKey()])
+        ->assertFormFieldDisabled('rol')
+        ->assertSee('Viene del sistema del PJ')
+        ->fillForm(['rol' => RolUsuario::Chofer])
+        ->call('save');
+
+    expect($persona->fresh()->rol)->toBe(RolUsuario::Solicitante);
+
+    $otroAdmin = Usuario::factory()->create(['id_externo' => '556', 'rol' => RolUsuario::Admin]);
+    Livewire::test(EditUsuario::class, ['record' => $otroAdmin->getRouteKey()])
+        ->assertFormFieldEnabled('rol');
+});

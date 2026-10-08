@@ -63,7 +63,8 @@ class UsuarioResource extends Resource
                     ->options(RolUsuario::class)
                     ->required()
                     ->live()
-                    ->disabled($esUnoMismo),
+                    ->helperText(fn (?Usuario $record): ?string => self::rolDelPj($record) ? 'Viene del sistema del PJ.' : null)
+                    ->disabled(fn (?Usuario $record): bool => $esUnoMismo($record) || self::rolDelPj($record)),
                 Select::make('vehiculo_habitual_id')
                     ->label('Vehículo habitual')
                     ->helperText('Con el que se abre el turno al fichar la entrada.')
@@ -109,6 +110,15 @@ class UsuarioResource extends Resource
                     ->helperText('Un usuario inactivo no puede entrar a la app ni al panel.')
                     ->disabled($esUnoMismo),
             ]);
+    }
+
+    /**
+     * Con IDENTIDAD_CAMPO_ROL, el rol de las personas del PJ (chofer o solicitante) lo define el PJ al ingresar.
+     * Los administradores del panel se siguen editando acá.
+     */
+    public static function rolDelPj(?Usuario $usuario): bool
+    {
+        return Usuario::rolVieneDelPj() && filled($usuario?->id_externo) && ! $usuario->esAdmin();
     }
 
     /**

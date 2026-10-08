@@ -4,6 +4,7 @@ namespace App\Identidad;
 
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 
 class EndpointPoderJudicial implements ProveedorIdentidad
 {
@@ -40,7 +41,34 @@ class EndpointPoderJudicial implements ProveedorIdentidad
             data_get($json, $campos['cargo']),
             data_get($json, $campos['telefono']),
             self::dependencia($json, $campos['dependencia'] ?? null),
+            self::esChofer($json, $campos['rol'] ?? null),
         );
+    }
+
+    /**
+     * El campo puede ser un texto ("Chofer"), una lista de roles (["empleado", "chofer"]) o un booleano.
+     * null: no está configurado o no vino en la respuesta (el rol queda como está).
+     */
+    private static function esChofer(mixed $json, ?string $campo): ?bool
+    {
+        if (blank($campo)) {
+            return null;
+        }
+
+        $valor = data_get($json, $campo);
+
+        if ($valor === null) {
+            return null;
+        }
+        if (is_bool($valor)) {
+            return $valor;
+        }
+
+        $normalizar = fn (mixed $v): string => is_scalar($v) ? mb_strtolower(trim(Str::ascii((string) $v))) : '';
+        $chofer = array_map($normalizar, config('vehiculos.identidad.valores_chofer'));
+        $valores = array_map($normalizar, is_array($valor) ? $valor : [$valor]);
+
+        return array_intersect($valores, $chofer) !== [];
     }
 
     private static function dependencia(mixed $json, ?string $campo): ?string
